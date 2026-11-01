@@ -1,0 +1,10 @@
+{
+  "_default": "Стандарт",
+  "_help": "FeedRateCut - скорость реза, мм/с; WireMinPower - мощность S при прямой проволоке (374 мм); WireMaxPower - потолок S; Kerf - толщина реза, мм. Добавляйте свои пенопласты по образцу.",
+  "Стандарт": {
+    "FeedRateCut": 7,
+    "WireMinPower": 500,
+    "WireMaxPower": 1000,
+    "Kerf": 1.0
+  }
+}

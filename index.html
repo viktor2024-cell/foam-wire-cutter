@@ -1,0 +1,2550 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+<title>Струнная резка</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: инструмент на один экран - 3D-вид слева, панель приборов справа, лента времени под видом */
+:root {
+  --bg: #e9edf1;          /* фон страницы: холодная сталь */
+  --panel: #f7f9fb;
+  --fg: #18212b;
+  --muted: #5b6876;
+  --line: #c9d2db;
+  --view: #dfe5eb;        /* фон 3D */
+  --wire: #d4661a;        /* горячая проволока, след реза */
+  --foam: #8fb6d6;        /* пенопласт */
+  --crit: #c22f2f;
+  --warn: #a8700c;
+  --info: #356aa3;
+  --ok: #2f7d4f;
+  --font-ui: "Barlow", "Segoe UI", system-ui, sans-serif;
+  --font-num: "JetBrains Mono", Consolas, "Courier New", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11161b; --panel: #171e25; --fg: #e2e8ee; --muted: #8a98a6; --line: #2a343e;
+    --view: #0d1216; --wire: #f08c3a; --foam: #5f86a6; --crit: #ef6060; --warn: #e0a640; --info: #6ea3dc; --ok: #5cbf86;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11161b; --panel: #171e25; --fg: #e2e8ee; --muted: #8a98a6; --line: #2a343e;
+  --view: #0d1216; --wire: #f08c3a; --foam: #5f86a6; --crit: #ef6060; --warn: #e0a640; --info: #6ea3dc; --ok: #5cbf86;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+[hidden] { display: none !important; }   /* локальная копия открывается без обёртки артефакта */
+body {
+  margin: 0;
+  background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: 14px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 12px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px;
+}
+* { box-sizing: border-box; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; }
+h1 { font-size: 19px; font-weight: 600; margin: 0; letter-spacing: 0.01em; text-wrap: balance; }
+.file-name { font-family: var(--font-num); font-size: 12.5px; color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+.spacer { flex: 1; }
+button, .btn, select, input {
+  font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+}
+button, .btn { padding: 6px 12px; cursor: pointer; font-weight: 500; }
+button:hover, .btn:hover { border-color: var(--muted); }
+button:focus-visible, .btn:focus-within, select:focus-visible, input:focus-visible { outline: 2px solid var(--wire); outline-offset: 1px; }
+button.primary { background: var(--wire); border-color: var(--wire); color: #fff; }
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; margin-left: -1px; }
+.seg button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.seg button:last-child { border-radius: 0 6px 6px 0; }
+.seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.btn input[type=file] { display: none; }
+
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 12px; }
+.stage { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+#view { position: relative; flex: 1; min-height: 300px; background: var(--view); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+#view canvas { display: block; width: 100%; height: 100%; }
+#drop { position: absolute; inset: 0; display: grid; place-items: center; background: color-mix(in srgb, var(--view) 80%, transparent);
+  font-size: 18px; font-weight: 600; border: 2px dashed var(--wire); border-radius: 8px; }
+.legend { position: absolute; left: 10px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); pointer-events: none; }
+.legend i { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 5px; border-radius: 2px; }
+
+.transport { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.transport input[type=range] { flex: 1 1 200px; accent-color: var(--wire); }
+.clock { font-family: var(--font-num); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+aside { min-width: 0; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+section.box { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+section.box h2 { font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0; }
+.op { font-size: 15px; font-weight: 600; }
+.readout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; }
+.readout div { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px dotted var(--line); padding-block: 2px; }
+.readout span { color: var(--muted); }
+.readout b { font-family: var(--font-num); font-weight: 500; font-variant-numeric: tabular-nums; }
+.state { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; font-weight: 600; }
+.state.on { background: color-mix(in srgb, var(--wire) 22%, transparent); color: var(--wire); }
+.state.off { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); }
+.fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.fields label { display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; color: var(--muted); }
+.fields input { width: 100%; padding: 4px 6px; font-family: var(--font-num); font-size: 13px; }
+.check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.summary { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { padding: 2px 9px; border-radius: 99px; font-size: 12.5px; font-weight: 600; border: 1px solid currentColor; }
+.chip.crit { color: var(--crit); } .chip.warn { color: var(--warn); } .chip.info { color: var(--info); } .chip.ok { color: var(--ok); }
+ul.warns { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow: auto; }
+ul.warns li { display: grid; grid-template-columns: 4px minmax(0, 1fr); gap: 8px; cursor: pointer; padding: 4px 6px 4px 0; border-radius: 4px; }
+ul.warns li:hover { background: color-mix(in srgb, var(--muted) 12%, transparent); }
+ul.warns li::before { content: ""; border-radius: 2px; background: var(--info); }
+ul.warns li.crit::before { background: var(--crit); } ul.warns li.warn::before { background: var(--warn); }
+ul.warns small { color: var(--muted); font-family: var(--font-num); }
+pre.code { margin: 0; font-family: var(--font-num); font-size: 12px; line-height: 1.5; overflow-x: auto; white-space: pre; }
+pre.code .cur { background: color-mix(in srgb, var(--wire) 22%, transparent); display: block; }
+pre.code .ln { color: var(--muted); display: inline-block; min-width: 4.5ch; }
+.note { font-size: 12px; color: var(--muted); }
+.temp { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; }
+.temp input[type=range] { accent-color: var(--wire); width: 100%; }
+.tval { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.tval input { width: 5.5em; padding: 4px 6px; font-family: var(--font-num); font-size: 13px; }
+.row { display: flex; flex-wrap: wrap; gap: 6px; }
+.row button { padding: 5px 10px; font-size: 13px; }
+.delta-up { color: var(--wire); font-weight: 600; } .delta-down { color: var(--info); font-weight: 600; }
+.tabs button { font-weight: 600; letter-spacing: 0.03em; }
+#panelGen { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-content: start; }
+#panelGen .gn-result { grid-column: 1 / -1; }
+.fields select { width: 100%; padding: 4px 6px; font-family: var(--font-num); font-size: 13px; }
+@media (max-width: 860px) { #panelGen { grid-template-columns: minmax(0, 1fr); } }
+button:disabled, input:disabled { opacity: 0.5; cursor: default; }
+button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
+.state.crit { background: color-mix(in srgb, var(--crit) 20%, transparent); color: var(--crit); }
+.state.ready { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
+.mline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mline button { padding: 5px 10px; font-size: 13px; }
+.note.crit { color: var(--crit); font-weight: 600; }
+#gCmd { width: 100%; padding: 4px 6px; font-family: var(--font-num); font-size: 13px; }
+#gLog { margin: 0; font-family: var(--font-num); font-size: 11.5px; line-height: 1.45; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9em; overflow: auto; }
+
+@media (max-width: 860px) {
+  body { height: auto; }
+  main { grid-template-columns: minmax(0, 1fr); }
+  #view { min-height: 360px; flex: none; height: 60vh; }
+  aside { overflow: visible; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+
+<header>
+  <h1>Струнная резка</h1>
+  <div class="seg tabs" role="group" aria-label="Вкладки">
+    <button id="tabGen" aria-pressed="true">ГЕНЕРАТОР GCODE</button>
+    <button id="tabCut" aria-pressed="false">РЕЗКА</button>
+  </div>
+  <span class="file-name cut-only" id="fileName">пример: W2_auto.gcode</span>
+  <span class="spacer"></span>
+  <label class="btn cut-only" for="fileInput">Открыть .gcode<input type="file" id="fileInput" accept=".gcode,.nc,.ngc,.tap,.txt"></label>
+  <div class="seg cut-only" role="group" aria-label="Вид">
+    <button id="v3d" aria-pressed="true">3D</button>
+    <button id="vside" aria-pressed="false">Вдоль струны</button>
+    <button id="vtop" aria-pressed="false">Сверху</button>
+  </div>
+</header>
+
+<div id="panelGen">
+  <section class="box">
+    <h2>Модель</h2>
+    <div class="mline">
+      <label class="btn" for="gnInput">Открыть STEP<input type="file" id="gnInput" accept=".stp,.step"></label>
+      <span class="file-name" id="gnFile">файл не выбран</span>
+    </div>
+    <div class="note">Твёрдое тело с профилями в двух плоскостях, размах вдоль оси Y модели. Файл можно перетащить в это окно.</div>
+  </section>
+  <section class="box">
+    <h2>Заготовка</h2>
+    <div class="fields">
+      <label>Длина<input id="gnL" type="number" step="1" value="340"></label>
+      <label>Ширина<input id="gnW" type="number" step="1" value="230"></label>
+      <label>Толщина<input id="gnH" type="number" step="1" value="50"></label>
+      <label>Низ Z<input id="gnZ" type="number" step="1" value="10"></label>
+    </div>
+    <div class="note">Длина — вдоль размаха детали, ширина — вдоль хорды.</div>
+  </section>
+  <section class="box">
+    <h2>Рез</h2>
+    <div class="fields">
+      <label>Скорость мм/с<input id="gnFeed" type="number" step="0.5" value="7"></label>
+      <label>Мощность S<input id="gnMinS" type="number" step="10" value="500"></label>
+      <label>Макс. S<input id="gnMaxS" type="number" step="10" value="1000"></label>
+      <label>Толщина реза<input id="gnKerf" type="number" step="0.1" value="1"></label>
+    </div>
+    <label class="check"><input type="checkbox" id="gnComp" checked> Менять мощность по длине струны</label>
+  </section>
+  <section class="box">
+    <h2>Перемещения</h2>
+    <div class="fields">
+      <label>Над заготовкой<input id="gnClear" type="number" step="1" value="20"></label>
+      <label>Отвод торца<input id="gnRetract" type="number" step="1" value="30"></label>
+      <label>Вынос входа<input id="gnLead" type="number" step="1" value="5"></label>
+      <label>Сторона входа<select id="gnSide"><option value="+">+Y</option><option value="-">−Y</option></select></label>
+    </div>
+  </section>
+  <section class="box gn-result">
+    <div class="row">
+      <button id="gnGo" class="primary" disabled>Создать G-code</button>
+      <button id="gnMirror" disabled>Зеркало</button>
+      <button id="gnPair" disabled>Пара: зеркало над обычной</button>
+    </div>
+    <div class="file-name" id="gnOut"></div>
+    <div class="note" id="gnStatus"></div>
+    <ul class="warns" id="gnWarn"></ul>
+    <div class="row" id="gnDone" hidden>
+      <button id="gnToCut" class="primary">Открыть в РЕЗКЕ</button>
+      <button id="gnSave">Сохранить .gcode</button>
+    </div>
+  </section>
+</div>
+
+<main id="panelCut" hidden>
+  <div class="stage">
+    <div id="view">
+      <div id="drop" hidden>Отпустите файл .gcode</div>
+      <div class="legend">
+        <span><i style="background:var(--wire)"></i>струна и след реза</span>
+        <span><i style="background:var(--foam)"></i>заготовка</span>
+        <span><i style="background:var(--muted)"></i>пути кареток на башнях</span>
+      </div>
+    </div>
+    <div class="transport">
+      <button id="play" class="primary">Пуск</button>
+      <select id="speed" aria-label="Скорость воспроизведения">
+        <option value="1">×1</option><option value="5">×5</option><option value="20" selected>×20</option><option value="100">×100</option>
+      </select>
+      <input type="range" id="timeline" min="0" max="10000" value="0" aria-label="Время программы">
+      <span class="clock" id="clock">0:00 / 0:00</span>
+    </div>
+    <section class="box">
+      <h2>Программа</h2>
+      <pre class="code" id="code"></pre>
+    </section>
+  </div>
+
+  <aside>
+    <section class="box">
+      <h2>Станок</h2>
+      <div class="mline">
+        <button id="gConn" class="primary">Подключить</button>
+        <span class="state off" id="gState">нет связи</span>
+      </div>
+      <div class="row">
+        <button id="gHome">Хоминг</button>
+        <button id="gUnlock">Разблокировать</button>
+      </div>
+      <label class="check"><input type="checkbox" id="gDry" checked> Холостой прогон, без струны</label>
+      <label class="check"><input type="checkbox" id="gHoldOff" checked> Гасить струну на паузе</label>
+      <div class="row">
+        <button id="gStart" class="primary">Старт</button>
+        <button id="gPause">Пауза</button>
+        <button id="gStop" class="stop">Стоп</button>
+      </div>
+      <div class="note" id="gProg"></div>
+      <div class="note" id="gMsg"></div>
+      <input id="gCmd" type="text" placeholder="Команда, например $$" aria-label="Команда для контроллера" spellcheck="false" autocomplete="off">
+      <pre id="gLog"></pre>
+      <div class="note">«Стоп» программный. Аварийно останавливайте станок кнопкой или выключателем питания.</div>
+    </section>
+
+    <section class="box">
+      <h2>Сейчас</h2>
+      <div class="op" id="op">—</div>
+      <div class="readout">
+        <div><span>Лев. Y</span><b id="rYL">0.00</b></div>
+        <div><span>Прав. Y</span><b id="rYR">0.00</b></div>
+        <div><span>Лев. Z</span><b id="rZL">0.00</b></div>
+        <div><span>Прав. Z</span><b id="rZR">0.00</b></div>
+        <div><span>Стол B</span><b id="rB">0.00°</b></div>
+        <div><span>Струна</span><b id="rLen">374.0</b></div>
+        <div><span>Подача</span><b id="rF">—</b></div>
+        <div><span>Мощность</span><b id="rS">—</b></div>
+      </div>
+      <div><span class="state off" id="wireState">струна выкл</span></div>
+    </section>
+
+    <section class="box">
+      <h2>Температура струны</h2>
+      <div class="temp">
+        <input type="range" id="tRange" min="100" max="1000" step="10" value="500" aria-label="Мощность S">
+        <label class="tval">S<input type="number" id="tVal" min="0" step="10" value="500"></label>
+        <label class="tval">макс<input type="number" id="tMax" min="0" step="10" value="1000"></label>
+      </div>
+      <div class="note" id="tInfo">—</div>
+      <div class="row">
+        <button id="tApply" class="primary">Применить</button>
+        <button id="tReset">Исходная</button>
+        <button id="tSave">Сохранить .gcode</button>
+        <button id="tCopy">Копировать G-code</button>
+      </div>
+      <div class="note" id="tNote"></div>
+    </section>
+
+    <section class="box">
+      <h2>Проверка программы</h2>
+      <div class="summary" id="summary"></div>
+      <ul class="warns" id="warns"></ul>
+      <div class="note" id="stats"></div>
+    </section>
+
+    <section class="box">
+      <h2>Заготовка и станок</h2>
+      <div class="fields">
+        <label>Длина<input id="sL" type="number" step="1" value="340"></label>
+        <label>Ширина<input id="sW" type="number" step="1" value="230"></label>
+        <label>Толщина<input id="sH" type="number" step="1" value="50"></label>
+        <label>Низ Z<input id="sZ" type="number" step="1" value="10"></label>
+        <label>Башни<input id="mFW" type="number" step="1" value="374"></label>
+        <label>Ход Y<input id="mHT" type="number" step="1" value="490"></label>
+        <label>Ход Z<input id="mVT" type="number" step="1" value="235"></label>
+        <label>Порог °<input id="mAng" type="number" step="5" value="60"></label>
+      </div>
+      <label class="check"><input type="checkbox" id="invB"> Стол вращается по часовой при +B</label>
+      <label class="check"><input type="checkbox" id="laser"> Лазерный режим GRBL ($32=1)</label>
+      <div class="note">Длина заготовки — вдоль каретки при B=0, ширина — вдоль струны. Если в программе есть строка «; STOCK», размеры берутся из неё.</div>
+    </section>
+  </aside>
+</main>
+
+<script type="text/plain" id="sample">; FM_step2gcode: W2.stp
+; STOCK L=340 W=230 H=50 Z0=10
+; CUT F=7 mm/s S=500..1000 kerf=1
+; *** START BLOCK ***
+$H
+G21 G90 G94
+G92 X249.00 Y238.00 Z245.00 A236.00 B-7.30
+G00 X240.00 Y235.00 Z240.00 A235.00 F840.0
+G00 B0.00 F1800.0
+M03 S500.00
+;
+; *** TRIM BLOCK: L=340 W=230 H=50, LongAxis=Y ***
+; - Trim Y=-150.50 at angle 0
+G00 X-150.50 Y80.00 Z-150.50 A80.00 F840.0
+G01 X-150.50 Y10.00 Z-150.50 A10.00 F420.0
+G01 X-180.50 Y10.00 Z-180.50 A10.00 F420.0
+G01 X-180.50 Y80.00 Z-180.50 A80.00 F420.0
+; - Trim Y=150.50 at angle 0
+G00 X150.50 Y80.00 Z150.50 A80.00 F840.0
+G01 X150.50 Y10.00 Z150.50 A10.00 F420.0
+G01 X180.50 Y10.00 Z180.50 A10.00 F420.0
+G01 X180.50 Y80.00 Z180.50 A80.00 F420.0
+;
+; - Rotation 90
+G00 X240.00 Y80.00 Z240.00 A80.00 F840.0
+G00 B90.00 F1800.0
+;
+; *** HOLE: 81 points, kerf 1.00 ***
+G00 X-21.05 Y80.00 Z-21.05 A80.00 F840.0
+G01 X-21.05 Y38.96 Z-21.05 A38.96 F420.0
+G01 X-21.63 Y38.93 Z-21.63 A38.93 F420.0
+G01 X-22.23 Y38.85 Z-22.23 A38.85 F420.0
+G01 X-22.84 Y38.71 Z-22.84 A38.71 F420.0
+G01 X-23.44 Y38.50 Z-23.44 A38.50 F420.0
+G01 X-24.03 Y38.23 Z-24.03 A38.23 F420.0
+G01 X-24.61 Y37.90 Z-24.61 A37.90 F420.0
+G01 X-25.15 Y37.50 Z-25.15 A37.50 F420.0
+G01 X-25.65 Y37.05 Z-25.65 A37.05 F420.0
+G01 X-26.10 Y36.55 Z-26.10 A36.55 F420.0
+G01 X-26.49 Y36.01 Z-26.49 A36.01 F420.0
+G01 X-26.82 Y35.44 Z-26.82 A35.44 F420.0
+G01 X-27.09 Y34.85 Z-27.09 A34.85 F420.0
+G01 X-27.30 Y34.25 Z-27.30 A34.25 F420.0
+G01 X-27.44 Y33.64 Z-27.44 A33.64 F420.0
+G01 X-27.52 Y33.04 Z-27.52 A33.04 F420.0
+G01 X-27.55 Y32.46 Z-27.55 A32.46 F420.0
+G01 X-27.53 Y32.02 Z-27.53 A32.02 F420.0
+G01 X-27.49 Y31.57 Z-27.49 A31.57 F420.0
+G01 X-27.41 Y31.12 Z-27.41 A31.12 F420.0
+G01 X-27.30 Y30.67 Z-27.30 A30.67 F420.0
+G01 X-27.15 Y30.21 Z-27.15 A30.21 F420.0
+G01 X-26.97 Y29.77 Z-26.97 A29.77 F420.0
+G01 X-26.75 Y29.33 Z-26.75 A29.33 F420.0
+G01 X-26.49 Y28.90 Z-26.49 A28.90 F420.0
+G01 X-26.20 Y28.49 Z-26.20 A28.49 F420.0
+G01 X-25.88 Y28.10 Z-25.88 A28.10 F420.0
+G01 X-25.52 Y27.74 Z-25.52 A27.74 F420.0
+G01 X-25.15 Y27.41 Z-25.15 A27.41 F420.0
+G01 X-24.74 Y27.11 Z-24.74 A27.11 F420.0
+G01 X-24.32 Y26.84 Z-24.32 A26.84 F420.0
+G01 X-23.89 Y26.61 Z-23.89 A26.61 F420.0
+G01 X-23.44 Y26.41 Z-23.44 A26.41 F420.0
+G01 X-22.99 Y26.25 Z-22.99 A26.25 F420.0
+G01 X-22.53 Y26.13 Z-22.53 A26.13 F420.0
+G01 X-22.08 Y26.04 Z-22.08 A26.04 F420.0
+G01 X-21.63 Y25.98 Z-21.63 A25.98 F420.0
+G01 X-21.19 Y25.96 Z-21.19 A25.96 F420.0
+G01 X-20.76 Y25.96 Z-20.76 A25.96 F420.0
+G01 X-20.32 Y26.00 Z-20.32 A26.00 F420.0
+G01 X-19.87 Y26.06 Z-19.87 A26.06 F420.0
+G01 X-19.41 Y26.17 Z-19.41 A26.17 F420.0
+G01 X-18.96 Y26.30 Z-18.96 A26.30 F420.0
+G01 X-18.51 Y26.47 Z-18.51 A26.47 F420.0
+G01 X-18.06 Y26.68 Z-18.06 A26.68 F420.0
+G01 X-17.63 Y26.93 Z-17.63 A26.93 F420.0
+G01 X-17.22 Y27.21 Z-17.22 A27.21 F420.0
+G01 X-16.82 Y27.52 Z-16.82 A27.52 F420.0
+G01 X-16.45 Y27.86 Z-16.45 A27.86 F420.0
+G01 X-16.11 Y28.23 Z-16.11 A28.23 F420.0
+G01 X-15.80 Y28.63 Z-15.80 A28.63 F420.0
+G01 X-15.52 Y29.04 Z-15.52 A29.04 F420.0
+G01 X-15.28 Y29.47 Z-15.28 A29.47 F420.0
+G01 X-15.07 Y29.91 Z-15.07 A29.91 F420.0
+G01 X-14.89 Y30.37 Z-14.89 A30.37 F420.0
+G01 X-14.76 Y30.82 Z-14.76 A30.82 F420.0
+G01 X-14.66 Y31.27 Z-14.66 A31.27 F420.0
+G01 X-14.59 Y31.72 Z-14.59 A31.72 F420.0
+G01 X-14.56 Y32.17 Z-14.56 A32.17 F420.0
+G01 X-14.55 Y32.60 Z-14.55 A32.60 F420.0
+G01 X-14.58 Y33.04 Z-14.58 A33.04 F420.0
+G01 X-14.63 Y33.49 Z-14.63 A33.49 F420.0
+G01 X-14.72 Y33.94 Z-14.72 A33.94 F420.0
+G01 X-14.85 Y34.40 Z-14.85 A34.40 F420.0
+G01 X-15.01 Y34.85 Z-15.01 A34.85 F420.0
+G01 X-15.20 Y35.30 Z-15.20 A35.30 F420.0
+G01 X-15.43 Y35.73 Z-15.43 A35.73 F420.0
+G01 X-15.70 Y36.15 Z-15.70 A36.15 F420.0
+G01 X-16.00 Y36.55 Z-16.00 A36.55 F420.0
+G01 X-16.34 Y36.93 Z-16.34 A36.93 F420.0
+G01 X-16.70 Y37.28 Z-16.70 A37.28 F420.0
+G01 X-17.08 Y37.61 Z-17.08 A37.61 F420.0
+G01 X-17.49 Y37.90 Z-17.49 A37.90 F420.0
+G01 X-17.92 Y38.15 Z-17.92 A38.15 F420.0
+G01 X-18.36 Y38.37 Z-18.36 A38.37 F420.0
+G01 X-18.81 Y38.56 Z-18.81 A38.56 F420.0
+G01 X-19.26 Y38.71 Z-19.26 A38.71 F420.0
+G01 X-19.72 Y38.82 Z-19.72 A38.82 F420.0
+G01 X-20.17 Y38.90 Z-20.17 A38.90 F420.0
+G01 X-20.61 Y38.94 Z-20.61 A38.94 F420.0
+G01 X-21.05 Y38.96 Z-21.05 A38.96 F420.0
+G01 X-21.05 Y80.00 Z-21.05 A80.00 F420.0
+;
+; *** PROFILE: 529 points, kerf 1.00, lead-in from Y=120.0 ***
+G00 X120.00 Y80.00 Z120.00 A80.00 F840.0
+G01 X120.00 Y32.87 Z120.00 A33.03 F420.0
+G01 X90.48 Y32.87 Z103.10 A33.03 F420.0
+G01 X90.48 Y33.14 Z103.10 A33.36 F420.0
+G01 X90.48 Y33.40 Z103.10 A33.68 F420.0
+G01 X90.48 Y33.66 Z103.10 A34.01 F420.0
+G01 X90.48 Y33.93 Z103.10 A34.34 F420.0
+G01 X90.45 Y34.10 Z103.07 A34.51 F420.0
+G01 X90.36 Y34.26 Z102.98 A34.66 F420.0
+G01 X90.22 Y34.37 Z102.85 A34.77 F420.0
+G01 X90.05 Y34.42 Z102.69 A34.83 F420.0
+G01 X89.51 Y34.50 Z102.07 A34.94 F420.0
+G01 X88.97 Y34.57 Z101.44 A35.05 F420.0
+G01 X88.42 Y34.65 Z100.80 A35.16 F420.0
+G01 X87.86 Y34.72 Z100.16 A35.28 F420.0
+G01 X87.30 Y34.80 Z99.50 A35.39 F420.0
+G01 X86.73 Y34.88 Z98.84 A35.51 F420.0
+G01 X86.15 Y34.95 Z98.18 A35.62 F420.0
+G01 X85.57 Y35.03 Z97.50 A35.74 F420.0
+G01 X84.99 Y35.11 Z96.82 A35.86 F420.0
+G01 X84.40 Y35.19 Z96.13 A35.97 F420.0
+G01 X83.80 Y35.26 Z95.44 A36.09 F420.0
+G01 X83.20 Y35.34 Z94.74 A36.21 F420.0
+G01 X82.59 Y35.42 Z94.03 A36.33 F420.0
+G01 X81.98 Y35.50 Z93.32 A36.45 F420.0
+G01 X81.37 Y35.58 Z92.60 A36.57 F420.0
+G01 X80.75 Y35.66 Z91.87 A36.69 F420.0
+G01 X80.13 Y35.74 Z91.14 A36.81 F420.0
+G01 X79.50 Y35.82 Z90.41 A36.93 F420.0
+G01 X78.87 Y35.90 Z89.66 A37.05 F420.0
+G01 X78.24 Y35.98 Z88.92 A37.17 F420.0
+G01 X77.60 Y36.05 Z88.17 A37.29 F420.0
+G01 X76.95 Y36.13 Z87.41 A37.42 F420.0
+G01 X76.31 Y36.21 Z86.65 A37.54 F420.0
+G01 X75.65 Y36.29 Z85.88 A37.66 F420.0
+G01 X75.00 Y36.37 Z85.11 A37.78 F420.0
+G01 X74.34 Y36.45 Z84.33 A37.90 F420.0
+G01 X73.68 Y36.53 Z83.55 A38.03 F420.0
+G01 X73.02 Y36.61 Z82.77 A38.15 F420.0
+G01 X72.35 Y36.69 Z81.98 A38.27 F420.0
+G01 X71.68 Y36.77 Z81.18 A38.39 F420.0
+G01 X71.00 Y36.84 Z80.39 A38.51 F420.0
+G01 X70.32 Y36.92 Z79.58 A38.64 F420.0
+G01 X69.64 Y37.00 Z78.78 A38.76 F420.0
+G01 X68.96 Y37.08 Z77.97 A38.88 F420.0
+G01 X68.27 Y37.16 Z77.16 A39.00 F420.0
+G01 X67.58 Y37.23 Z76.34 A39.12 F420.0
+G01 X66.89 Y37.31 Z75.52 A39.24 F420.0
+G01 X66.19 Y37.39 Z74.69 A39.36 F420.0
+G01 X65.49 Y37.46 Z73.86 A39.48 F420.0
+G01 X64.79 Y37.54 Z73.03 A39.60 F420.0
+G01 X64.09 Y37.62 Z72.20 A39.72 F420.0
+G01 X63.38 Y37.69 Z71.36 A39.84 F420.0
+G01 X62.67 Y37.77 Z70.51 A39.96 F420.0
+G01 X61.96 Y37.84 Z69.67 A40.08 F420.0
+G01 X61.25 Y37.92 Z68.82 A40.20 F420.0
+G01 X60.53 Y37.99 Z67.97 A40.32 F420.0
+G01 X59.81 Y38.07 Z67.11 A40.44 F420.0
+G01 X59.09 Y38.14 Z66.26 A40.55 F420.0
+G01 X58.37 Y38.21 Z65.40 A40.67 F420.0
+G01 X57.64 Y38.29 Z64.53 A40.79 F420.0
+G01 X56.91 Y38.36 Z63.67 A40.90 F420.0
+G01 X56.18 Y38.43 Z62.80 A41.02 F420.0
+G01 X55.45 Y38.50 Z61.93 A41.14 F420.0
+G01 X54.72 Y38.57 Z61.05 A41.25 F420.0
+G01 X53.98 Y38.64 Z60.17 A41.36 F420.0
+G01 X53.24 Y38.71 Z59.29 A41.48 F420.0
+G01 X52.50 Y38.78 Z58.41 A41.59 F420.0
+G01 X51.76 Y38.85 Z57.53 A41.70 F420.0
+G01 X51.02 Y38.92 Z56.64 A41.82 F420.0
+G01 X50.27 Y38.99 Z55.75 A41.93 F420.0
+G01 X49.52 Y39.06 Z54.86 A42.04 F420.0
+G01 X48.77 Y39.13 Z53.97 A42.15 F420.0
+G01 X48.02 Y39.19 Z53.07 A42.26 F420.0
+G01 X47.27 Y39.26 Z52.17 A42.37 F420.0
+G01 X46.52 Y39.33 Z51.27 A42.47 F420.0
+G01 X45.76 Y39.39 Z50.37 A42.58 F420.0
+G01 X45.00 Y39.46 Z49.46 A42.69 F420.0
+G01 X44.25 Y39.52 Z48.56 A42.79 F420.0
+G01 X43.48 Y39.58 Z47.65 A42.90 F420.0
+G01 X42.72 Y39.65 Z46.74 A43.01 F420.0
+G01 X41.96 Y39.71 Z45.83 A43.11 F420.0
+G01 X41.20 Y39.77 Z44.91 A43.21 F420.0
+G01 X40.43 Y39.83 Z44.00 A43.31 F420.0
+G01 X39.66 Y39.89 Z43.08 A43.42 F420.0
+G01 X38.89 Y39.95 Z42.16 A43.52 F420.0
+G01 X38.13 Y40.01 Z41.24 A43.62 F420.0
+G01 X37.35 Y40.07 Z40.32 A43.72 F420.0
+G01 X36.58 Y40.13 Z39.40 A43.82 F420.0
+G01 X35.81 Y40.19 Z38.47 A43.91 F420.0
+G01 X35.04 Y40.24 Z37.55 A44.01 F420.0
+G01 X34.26 Y40.30 Z36.62 A44.11 F420.0
+G01 X33.48 Y40.36 Z35.69 A44.20 F420.0
+G01 X32.71 Y40.41 Z34.76 A44.29 F420.0
+G01 X31.93 Y40.47 Z33.83 A44.39 F420.0
+G01 X31.15 Y40.52 Z32.89 A44.48 F420.0
+G01 X30.37 Y40.57 Z31.96 A44.57 F420.0
+G01 X29.59 Y40.62 Z31.02 A44.66 F420.0
+G01 X28.81 Y40.67 Z30.09 A44.75 F420.0
+G01 X28.02 Y40.72 Z29.15 A44.84 F420.0
+G01 X27.24 Y40.77 Z28.21 A44.93 F420.0
+G01 X26.46 Y40.82 Z27.27 A45.01 F420.0
+G01 X25.67 Y40.87 Z26.33 A45.10 F420.0
+G01 X24.89 Y40.92 Z25.39 A45.18 F420.0
+G01 X24.10 Y40.97 Z24.45 A45.27 F420.0
+G01 X23.31 Y41.01 Z23.50 A45.35 F420.0
+G01 X22.53 Y41.06 Z22.56 A45.43 F420.0
+G01 X21.74 Y41.10 Z21.61 A45.51 F420.0
+G01 X20.95 Y41.15 Z20.67 A45.59 F420.0
+G01 X20.16 Y41.19 Z19.72 A45.67 F420.0
+G01 X19.37 Y41.23 Z18.77 A45.75 F420.0
+G01 X18.58 Y41.27 Z17.83 A45.82 F420.0
+G01 X17.79 Y41.31 Z16.88 A45.90 F420.0
+G01 X17.00 Y41.35 Z15.93 A45.97 F420.0
+G01 X16.21 Y41.39 Z14.98 A46.04 F420.0
+G01 X15.42 Y41.43 Z14.03 A46.12 F420.0
+G01 X14.63 Y41.46 Z13.08 A46.19 F420.0
+G01 X13.84 Y41.50 Z12.13 A46.26 F420.0
+G01 X13.04 Y41.53 Z11.18 A46.32 F420.0
+G01 X12.25 Y41.57 Z10.23 A46.39 F420.0
+G01 X11.46 Y41.60 Z9.28 A46.46 F420.0
+G01 X10.67 Y41.63 Z8.32 A46.52 F420.0
+G01 X9.88 Y41.67 Z7.37 A46.58 F420.0
+G01 X9.08 Y41.70 Z6.42 A46.64 F420.0
+G01 X8.29 Y41.73 Z5.47 A46.70 F420.0
+G01 X7.50 Y41.75 Z4.51 A46.76 F420.0
+G01 X6.70 Y41.78 Z3.56 A46.82 F420.0
+G01 X5.91 Y41.81 Z2.61 A46.88 F420.0
+G01 X5.12 Y41.83 Z1.66 A46.93 F420.0
+G01 X4.33 Y41.86 Z0.70 A46.99 F420.0
+G01 X3.53 Y41.88 Z-0.25 A47.04 F420.0
+G01 X2.74 Y41.91 Z-1.20 A47.09 F420.0
+G01 X1.95 Y41.93 Z-2.15 A47.14 F420.0
+G01 X1.16 Y41.95 Z-3.10 A47.19 F420.0
+G01 X0.37 Y41.97 Z-4.06 A47.24 F420.0
+G01 X-0.42 Y41.99 Z-5.01 A47.28 F420.0
+G01 X-1.21 Y42.00 Z-5.96 A47.32 F420.0
+G01 X-2.01 Y42.02 Z-6.91 A47.37 F420.0
+G01 X-2.80 Y42.04 Z-7.86 A47.41 F420.0
+G01 X-3.59 Y42.05 Z-8.81 A47.45 F420.0
+G01 X-4.37 Y42.06 Z-9.76 A47.49 F420.0
+G01 X-5.16 Y42.08 Z-10.71 A47.52 F420.0
+G01 X-5.95 Y42.09 Z-11.65 A47.56 F420.0
+G01 X-6.74 Y42.10 Z-12.60 A47.59 F420.0
+G01 X-7.53 Y42.11 Z-13.55 A47.62 F420.0
+G01 X-8.31 Y42.11 Z-14.50 A47.65 F420.0
+G01 X-9.10 Y42.12 Z-15.44 A47.68 F420.0
+G01 X-9.89 Y42.13 Z-16.39 A47.71 F420.0
+G01 X-10.67 Y42.13 Z-17.34 A47.73 F420.0
+G01 X-11.46 Y42.13 Z-18.28 A47.76 F420.0
+G01 X-12.24 Y42.13 Z-19.23 A47.78 F420.0
+G01 X-13.03 Y42.13 Z-20.17 A47.80 F420.0
+G01 X-13.81 Y42.13 Z-21.12 A47.81 F420.0
+G01 X-14.60 Y42.12 Z-22.06 A47.83 F420.0
+G01 X-15.38 Y42.12 Z-23.00 A47.84 F420.0
+G01 X-16.16 Y42.11 Z-23.94 A47.85 F420.0
+G01 X-16.94 Y42.10 Z-24.88 A47.86 F420.0
+G01 X-17.72 Y42.09 Z-25.82 A47.86 F420.0
+G01 X-18.50 Y42.08 Z-26.76 A47.87 F420.0
+G01 X-19.28 Y42.06 Z-27.70 A47.87 F420.0
+G01 X-20.05 Y42.05 Z-28.63 A47.86 F420.0
+G01 X-20.83 Y42.03 Z-29.57 A47.86 F420.0
+G01 X-21.60 Y42.01 Z-30.50 A47.85 F420.0
+G01 X-22.37 Y41.99 Z-31.43 A47.85 F420.0
+G01 X-23.15 Y41.97 Z-32.36 A47.83 F420.0
+G01 X-23.92 Y41.94 Z-33.29 A47.82 F420.0
+G01 X-24.69 Y41.92 Z-34.22 A47.81 F420.0
+G01 X-25.45 Y41.89 Z-35.14 A47.79 F420.0
+G01 X-26.22 Y41.86 Z-36.06 A47.77 F420.0
+G01 X-26.98 Y41.83 Z-36.99 A47.74 F420.0
+G01 X-27.75 Y41.79 Z-37.91 A47.72 F420.0
+G01 X-28.51 Y41.76 Z-38.82 A47.69 F420.0
+G01 X-29.27 Y41.72 Z-39.74 A47.66 F420.0
+G01 X-30.03 Y41.68 Z-40.66 A47.63 F420.0
+G01 X-30.78 Y41.64 Z-41.57 A47.59 F420.0
+G01 X-31.54 Y41.60 Z-42.48 A47.55 F420.0
+G01 X-32.29 Y41.56 Z-43.39 A47.51 F420.0
+G01 X-33.04 Y41.51 Z-44.29 A47.47 F420.0
+G01 X-33.79 Y41.46 Z-45.20 A47.42 F420.0
+G01 X-34.54 Y41.41 Z-46.10 A47.38 F420.0
+G01 X-35.29 Y41.36 Z-47.00 A47.33 F420.0
+G01 X-36.03 Y41.31 Z-47.89 A47.27 F420.0
+G01 X-36.77 Y41.26 Z-48.79 A47.22 F420.0
+G01 X-37.51 Y41.20 Z-49.68 A47.16 F420.0
+G01 X-38.25 Y41.14 Z-50.57 A47.10 F420.0
+G01 X-38.99 Y41.08 Z-51.46 A47.04 F420.0
+G01 X-39.72 Y41.02 Z-52.34 A46.97 F420.0
+G01 X-40.45 Y40.95 Z-53.22 A46.90 F420.0
+G01 X-41.18 Y40.89 Z-54.10 A46.83 F420.0
+G01 X-41.91 Y40.82 Z-54.98 A46.76 F420.0
+G01 X-42.63 Y40.75 Z-55.85 A46.68 F420.0
+G01 X-43.35 Y40.68 Z-56.72 A46.60 F420.0
+G01 X-44.07 Y40.61 Z-57.59 A46.52 F420.0
+G01 X-44.79 Y40.53 Z-58.45 A46.43 F420.0
+G01 X-45.50 Y40.45 Z-59.31 A46.35 F420.0
+G01 X-46.21 Y40.38 Z-60.17 A46.26 F420.0
+G01 X-46.92 Y40.29 Z-61.02 A46.16 F420.0
+G01 X-47.63 Y40.21 Z-61.88 A46.07 F420.0
+G01 X-48.33 Y40.13 Z-62.72 A45.97 F420.0
+G01 X-49.03 Y40.04 Z-63.57 A45.87 F420.0
+G01 X-49.73 Y39.95 Z-64.41 A45.76 F420.0
+G01 X-50.42 Y39.86 Z-65.24 A45.66 F420.0
+G01 X-51.12 Y39.77 Z-66.08 A45.55 F420.0
+G01 X-51.80 Y39.68 Z-66.91 A45.44 F420.0
+G01 X-52.49 Y39.58 Z-67.73 A45.32 F420.0
+G01 X-53.17 Y39.48 Z-68.55 A45.20 F420.0
+G01 X-53.85 Y39.38 Z-69.37 A45.08 F420.0
+G01 X-54.52 Y39.28 Z-70.18 A44.96 F420.0
+G01 X-55.20 Y39.18 Z-70.99 A44.83 F420.0
+G01 X-55.86 Y39.07 Z-71.79 A44.70 F420.0
+G01 X-56.53 Y38.96 Z-72.59 A44.57 F420.0
+G01 X-57.19 Y38.85 Z-73.39 A44.44 F420.0
+G01 X-57.85 Y38.74 Z-74.18 A44.30 F420.0
+G01 X-58.50 Y38.63 Z-74.97 A44.16 F420.0
+G01 X-59.15 Y38.51 Z-75.75 A44.02 F420.0
+G01 X-59.79 Y38.39 Z-76.52 A43.87 F420.0
+G01 X-60.44 Y38.27 Z-77.29 A43.72 F420.0
+G01 X-61.07 Y38.15 Z-78.06 A43.57 F420.0
+G01 X-61.71 Y38.03 Z-78.82 A43.41 F420.0
+G01 X-62.33 Y37.90 Z-79.57 A43.25 F420.0
+G01 X-62.96 Y37.78 Z-80.32 A43.09 F420.0
+G01 X-63.58 Y37.65 Z-81.07 A42.93 F420.0
+G01 X-64.19 Y37.51 Z-81.81 A42.76 F420.0
+G01 X-64.80 Y37.38 Z-82.54 A42.59 F420.0
+G01 X-65.41 Y37.24 Z-83.26 A42.41 F420.0
+G01 X-66.01 Y37.11 Z-83.98 A42.24 F420.0
+G01 X-66.60 Y36.97 Z-84.70 A42.06 F420.0
+G01 X-67.19 Y36.82 Z-85.40 A41.87 F420.0
+G01 X-67.78 Y36.68 Z-86.10 A41.68 F420.0
+G01 X-68.36 Y36.53 Z-86.80 A41.49 F420.0
+G01 X-68.93 Y36.38 Z-87.48 A41.30 F420.0
+G01 X-69.50 Y36.23 Z-88.16 A41.10 F420.0
+G01 X-70.06 Y36.08 Z-88.83 A40.90 F420.0
+G01 X-70.61 Y35.92 Z-89.49 A40.70 F420.0
+G01 X-71.16 Y35.76 Z-90.15 A40.49 F420.0
+G01 X-71.70 Y35.60 Z-90.80 A40.28 F420.0
+G01 X-72.24 Y35.44 Z-91.44 A40.06 F420.0
+G01 X-72.77 Y35.28 Z-92.07 A39.85 F420.0
+G01 X-73.29 Y35.11 Z-92.69 A39.62 F420.0
+G01 X-73.81 Y34.94 Z-93.30 A39.40 F420.0
+G01 X-74.32 Y34.77 Z-93.91 A39.17 F420.0
+G01 X-74.82 Y34.59 Z-94.50 A38.93 F420.0
+G01 X-75.31 Y34.41 Z-95.08 A38.69 F420.0
+G01 X-75.79 Y34.23 Z-95.65 A38.45 F420.0
+G01 X-76.27 Y34.05 Z-96.22 A38.20 F420.0
+G01 X-76.73 Y33.86 Z-96.77 A37.95 F420.0
+G01 X-77.19 Y33.67 Z-97.31 A37.69 F420.0
+G01 X-77.64 Y33.47 Z-97.83 A37.43 F420.0
+G01 X-78.08 Y33.28 Z-98.35 A37.16 F420.0
+G01 X-78.50 Y33.07 Z-98.85 A36.88 F420.0
+G01 X-78.92 Y32.87 Z-99.33 A36.60 F420.0
+G01 X-79.32 Y32.66 Z-99.80 A36.32 F420.0
+G01 X-79.72 Y32.44 Z-100.26 A36.02 F420.0
+G01 X-80.10 Y32.22 Z-100.69 A35.72 F420.0
+G01 X-80.46 Y32.00 Z-101.11 A35.41 F420.0
+G01 X-80.82 Y31.77 Z-101.52 A35.09 F420.0
+G01 X-81.15 Y31.53 Z-101.90 A34.76 F420.0
+G01 X-81.47 Y31.28 Z-102.25 A34.43 F420.0
+G01 X-81.77 Y31.03 Z-102.59 A34.08 F420.0
+G01 X-82.05 Y30.76 Z-102.89 A33.71 F420.0
+G01 X-82.31 Y30.49 Z-103.17 A33.34 F420.0
+G01 X-82.55 Y30.19 Z-103.41 A32.94 F420.0
+G01 X-82.75 Y29.88 Z-103.61 A32.54 F420.0
+G01 X-82.91 Y29.55 Z-103.77 A32.11 F420.0
+G01 X-83.03 Y29.20 Z-103.88 A31.68 F420.0
+G01 X-83.10 Y28.83 Z-103.92 A31.23 F420.0
+G01 X-83.09 Y28.44 Z-103.91 A30.77 F420.0
+G01 X-83.01 Y28.07 Z-103.83 A30.33 F420.0
+G01 X-82.86 Y27.73 Z-103.69 A29.90 F420.0
+G01 X-82.66 Y27.42 Z-103.50 A29.50 F420.0
+G01 X-82.43 Y27.14 Z-103.26 A29.12 F420.0
+G01 X-82.16 Y26.88 Z-102.98 A28.77 F420.0
+G01 X-81.87 Y26.66 Z-102.67 A28.44 F420.0
+G01 X-81.56 Y26.45 Z-102.32 A28.13 F420.0
+G01 X-81.23 Y26.26 Z-101.95 A27.84 F420.0
+G01 X-80.88 Y26.08 Z-101.56 A27.57 F420.0
+G01 X-80.52 Y25.92 Z-101.15 A27.31 F420.0
+G01 X-80.14 Y25.77 Z-100.72 A27.07 F420.0
+G01 X-79.75 Y25.62 Z-100.27 A26.84 F420.0
+G01 X-79.35 Y25.49 Z-99.80 A26.62 F420.0
+G01 X-78.93 Y25.36 Z-99.32 A26.42 F420.0
+G01 X-78.51 Y25.24 Z-98.82 A26.22 F420.0
+G01 X-78.07 Y25.13 Z-98.31 A26.03 F420.0
+G01 X-77.63 Y25.03 Z-97.79 A25.86 F420.0
+G01 X-77.17 Y24.93 Z-97.25 A25.69 F420.0
+G01 X-76.71 Y24.83 Z-96.70 A25.52 F420.0
+G01 X-76.24 Y24.74 Z-96.14 A25.37 F420.0
+G01 X-75.76 Y24.66 Z-95.58 A25.22 F420.0
+G01 X-75.27 Y24.58 Z-95.00 A25.08 F420.0
+G01 X-74.77 Y24.50 Z-94.41 A24.94 F420.0
+G01 X-74.27 Y24.43 Z-93.81 A24.81 F420.0
+G01 X-73.76 Y24.36 Z-93.20 A24.69 F420.0
+G01 X-73.24 Y24.30 Z-92.58 A24.57 F420.0
+G01 X-72.71 Y24.24 Z-91.96 A24.46 F420.0
+G01 X-72.18 Y24.18 Z-91.32 A24.35 F420.0
+G01 X-71.64 Y24.13 Z-90.68 A24.24 F420.0
+G01 X-71.10 Y24.08 Z-90.03 A24.14 F420.0
+G01 X-70.55 Y24.03 Z-89.38 A24.05 F420.0
+G01 X-69.99 Y23.99 Z-88.71 A23.96 F420.0
+G01 X-69.43 Y23.94 Z-88.04 A23.87 F420.0
+G01 X-68.87 Y23.90 Z-87.37 A23.78 F420.0
+G01 X-68.29 Y23.87 Z-86.68 A23.70 F420.0
+G01 X-67.72 Y23.83 Z-85.99 A23.63 F420.0
+G01 X-67.13 Y23.80 Z-85.30 A23.55 F420.0
+G01 X-66.55 Y23.77 Z-84.59 A23.48 F420.0
+G01 X-65.96 Y23.74 Z-83.88 A23.42 F420.0
+G01 X-65.36 Y23.72 Z-83.17 A23.35 F420.0
+G01 X-64.76 Y23.70 Z-82.45 A23.29 F420.0
+G01 X-64.15 Y23.67 Z-81.72 A23.24 F420.0
+G01 X-63.54 Y23.66 Z-80.99 A23.18 F420.0
+G01 X-62.93 Y23.64 Z-80.26 A23.13 F420.0
+G01 X-62.31 Y23.62 Z-79.51 A23.08 F420.0
+G01 X-61.69 Y23.61 Z-78.77 A23.04 F420.0
+G01 X-61.06 Y23.60 Z-78.02 A23.00 F420.0
+G01 X-60.43 Y23.59 Z-77.26 A22.95 F420.0
+G01 X-59.79 Y23.58 Z-76.50 A22.92 F420.0
+G01 X-59.16 Y23.58 Z-75.73 A22.88 F420.0
+G01 X-58.51 Y23.57 Z-74.96 A22.85 F420.0
+G01 X-57.87 Y23.57 Z-74.19 A22.82 F420.0
+G01 X-57.22 Y23.57 Z-73.41 A22.79 F420.0
+G01 X-56.57 Y23.57 Z-72.63 A22.76 F420.0
+G01 X-55.91 Y23.57 Z-71.84 A22.74 F420.0
+G01 X-55.25 Y23.57 Z-71.05 A22.72 F420.0
+G01 X-54.59 Y23.57 Z-70.25 A22.70 F420.0
+G01 X-53.93 Y23.58 Z-69.45 A22.68 F420.0
+G01 X-53.26 Y23.59 Z-68.65 A22.66 F420.0
+G01 X-52.59 Y23.59 Z-67.85 A22.65 F420.0
+G01 X-51.91 Y23.60 Z-67.04 A22.64 F420.0
+G01 X-51.23 Y23.61 Z-66.22 A22.62 F420.0
+G01 X-50.55 Y23.63 Z-65.40 A22.62 F420.0
+G01 X-49.87 Y23.64 Z-64.58 A22.61 F420.0
+G01 X-49.18 Y23.65 Z-63.76 A22.60 F420.0
+G01 X-48.50 Y23.67 Z-62.93 A22.60 F420.0
+G01 X-47.80 Y23.68 Z-62.10 A22.60 F420.0
+G01 X-47.11 Y23.70 Z-61.27 A22.60 F420.0
+G01 X-46.41 Y23.72 Z-60.43 A22.60 F420.0
+G01 X-45.72 Y23.74 Z-59.59 A22.60 F420.0
+G01 X-45.01 Y23.76 Z-58.75 A22.61 F420.0
+G01 X-44.31 Y23.78 Z-57.90 A22.61 F420.0
+G01 X-43.60 Y23.80 Z-57.06 A22.62 F420.0
+G01 X-42.90 Y23.82 Z-56.20 A22.63 F420.0
+G01 X-42.19 Y23.84 Z-55.35 A22.64 F420.0
+G01 X-41.47 Y23.87 Z-54.49 A22.65 F420.0
+G01 X-40.76 Y23.89 Z-53.63 A22.66 F420.0
+G01 X-40.04 Y23.92 Z-52.77 A22.67 F420.0
+G01 X-39.32 Y23.94 Z-51.91 A22.69 F420.0
+G01 X-38.60 Y23.97 Z-51.04 A22.70 F420.0
+G01 X-37.88 Y24.00 Z-50.17 A22.72 F420.0
+G01 X-37.15 Y24.03 Z-49.30 A22.74 F420.0
+G01 X-36.42 Y24.05 Z-48.43 A22.76 F420.0
+G01 X-35.70 Y24.08 Z-47.55 A22.77 F420.0
+G01 X-34.96 Y24.11 Z-46.67 A22.80 F420.0
+G01 X-34.23 Y24.14 Z-45.79 A22.82 F420.0
+G01 X-33.50 Y24.18 Z-44.91 A22.84 F420.0
+G01 X-32.76 Y24.21 Z-44.02 A22.86 F420.0
+G01 X-32.02 Y24.24 Z-43.14 A22.89 F420.0
+G01 X-31.28 Y24.27 Z-42.25 A22.91 F420.0
+G01 X-30.54 Y24.30 Z-41.36 A22.94 F420.0
+G01 X-29.80 Y24.34 Z-40.46 A22.97 F420.0
+G01 X-29.05 Y24.37 Z-39.57 A23.00 F420.0
+G01 X-28.31 Y24.41 Z-38.67 A23.02 F420.0
+G01 X-27.56 Y24.44 Z-37.77 A23.05 F420.0
+G01 X-26.81 Y24.48 Z-36.87 A23.08 F420.0
+G01 X-26.06 Y24.51 Z-35.97 A23.11 F420.0
+G01 X-25.31 Y24.55 Z-35.07 A23.15 F420.0
+G01 X-24.56 Y24.58 Z-34.16 A23.18 F420.0
+G01 X-23.80 Y24.62 Z-33.26 A23.21 F420.0
+G01 X-23.05 Y24.66 Z-32.35 A23.24 F420.0
+G01 X-22.29 Y24.69 Z-31.44 A23.28 F420.0
+G01 X-21.53 Y24.73 Z-30.53 A23.31 F420.0
+G01 X-20.77 Y24.77 Z-29.61 A23.35 F420.0
+G01 X-20.01 Y24.81 Z-28.70 A23.38 F420.0
+G01 X-19.25 Y24.84 Z-27.79 A23.42 F420.0
+G01 X-18.49 Y24.88 Z-26.87 A23.45 F420.0
+G01 X-17.73 Y24.92 Z-25.95 A23.49 F420.0
+G01 X-16.96 Y24.96 Z-25.03 A23.53 F420.0
+G01 X-16.20 Y24.99 Z-24.11 A23.56 F420.0
+G01 X-15.43 Y25.03 Z-23.19 A23.60 F420.0
+G01 X-14.66 Y25.07 Z-22.27 A23.64 F420.0
+G01 X-13.89 Y25.11 Z-21.35 A23.68 F420.0
+G01 X-13.12 Y25.15 Z-20.42 A23.71 F420.0
+G01 X-12.35 Y25.19 Z-19.49 A23.75 F420.0
+G01 X-11.58 Y25.22 Z-18.57 A23.79 F420.0
+G01 X-10.81 Y25.26 Z-17.64 A23.83 F420.0
+G01 X-10.03 Y25.30 Z-16.71 A23.87 F420.0
+G01 X-9.26 Y25.34 Z-15.78 A23.91 F420.0
+G01 X-8.48 Y25.38 Z-14.84 A23.95 F420.0
+G01 X-7.71 Y25.42 Z-13.91 A23.99 F420.0
+G01 X-6.93 Y25.46 Z-12.98 A24.03 F420.0
+G01 X-6.15 Y25.50 Z-12.04 A24.07 F420.0
+G01 X-5.37 Y25.54 Z-11.10 A24.12 F420.0
+G01 X-4.59 Y25.58 Z-10.17 A24.16 F420.0
+G01 X-3.81 Y25.62 Z-9.23 A24.21 F420.0
+G01 X-3.03 Y25.66 Z-8.29 A24.25 F420.0
+G01 X-2.25 Y25.71 Z-7.35 A24.30 F420.0
+G01 X-1.47 Y25.75 Z-6.41 A24.34 F420.0
+G01 X-0.69 Y25.79 Z-5.47 A24.39 F420.0
+G01 X0.10 Y25.83 Z-4.53 A24.44 F420.0
+G01 X0.88 Y25.88 Z-3.59 A24.48 F420.0
+G01 X1.66 Y25.92 Z-2.65 A24.53 F420.0
+G01 X2.45 Y25.96 Z-1.71 A24.58 F420.0
+G01 X3.23 Y26.01 Z-0.77 A24.63 F420.0
+G01 X4.01 Y26.05 Z0.18 A24.68 F420.0
+G01 X4.80 Y26.10 Z1.12 A24.73 F420.0
+G01 X5.58 Y26.14 Z2.06 A24.78 F420.0
+G01 X6.37 Y26.19 Z3.00 A24.83 F420.0
+G01 X7.15 Y26.23 Z3.94 A24.88 F420.0
+G01 X7.94 Y26.28 Z4.89 A24.93 F420.0
+G01 X8.72 Y26.32 Z5.83 A24.98 F420.0
+G01 X9.50 Y26.37 Z6.77 A25.04 F420.0
+G01 X10.29 Y26.41 Z7.71 A25.09 F420.0
+G01 X11.07 Y26.46 Z8.65 A25.14 F420.0
+G01 X11.86 Y26.51 Z9.60 A25.19 F420.0
+G01 X12.64 Y26.55 Z10.54 A25.25 F420.0
+G01 X13.43 Y26.60 Z11.48 A25.30 F420.0
+G01 X14.21 Y26.65 Z12.42 A25.36 F420.0
+G01 X14.99 Y26.69 Z13.36 A25.41 F420.0
+G01 X15.78 Y26.74 Z14.30 A25.47 F420.0
+G01 X16.56 Y26.79 Z15.24 A25.52 F420.0
+G01 X17.34 Y26.83 Z16.18 A25.58 F420.0
+G01 X18.13 Y26.88 Z17.12 A25.63 F420.0
+G01 X18.91 Y26.93 Z18.06 A25.69 F420.0
+G01 X19.69 Y26.98 Z19.00 A25.74 F420.0
+G01 X20.47 Y27.02 Z19.94 A25.80 F420.0
+G01 X21.26 Y27.07 Z20.88 A25.86 F420.0
+G01 X22.04 Y27.12 Z21.81 A25.91 F420.0
+G01 X22.82 Y27.17 Z22.75 A25.97 F420.0
+G01 X23.60 Y27.21 Z23.69 A26.03 F420.0
+G01 X24.38 Y27.26 Z24.62 A26.08 F420.0
+G01 X25.15 Y27.31 Z25.55 A26.14 F420.0
+G01 X25.93 Y27.36 Z26.49 A26.20 F420.0
+G01 X26.71 Y27.41 Z27.42 A26.26 F420.0
+G01 X27.49 Y27.45 Z28.35 A26.31 F420.0
+G01 X28.26 Y27.50 Z29.28 A26.37 F420.0
+G01 X29.04 Y27.55 Z30.21 A26.43 F420.0
+G01 X29.82 Y27.60 Z31.14 A26.49 F420.0
+G01 X30.59 Y27.65 Z32.07 A26.55 F420.0
+G01 X31.36 Y27.69 Z33.00 A26.60 F420.0
+G01 X32.14 Y27.74 Z33.92 A26.66 F420.0
+G01 X32.91 Y27.79 Z34.85 A26.72 F420.0
+G01 X33.68 Y27.84 Z35.77 A26.78 F420.0
+G01 X34.45 Y27.89 Z36.69 A26.84 F420.0
+G01 X35.22 Y27.93 Z37.62 A26.90 F420.0
+G01 X35.98 Y27.98 Z38.54 A26.95 F420.0
+G01 X36.75 Y28.03 Z39.45 A27.01 F420.0
+G01 X37.52 Y28.08 Z40.37 A27.07 F420.0
+G01 X38.28 Y28.12 Z41.29 A27.13 F420.0
+G01 X39.05 Y28.17 Z42.20 A27.19 F420.0
+G01 X39.81 Y28.22 Z43.11 A27.25 F420.0
+G01 X40.57 Y28.27 Z44.03 A27.31 F420.0
+G01 X41.33 Y28.31 Z44.94 A27.36 F420.0
+G01 X42.09 Y28.36 Z45.84 A27.42 F420.0
+G01 X42.85 Y28.41 Z46.75 A27.48 F420.0
+G01 X43.60 Y28.46 Z47.65 A27.54 F420.0
+G01 X44.36 Y28.50 Z48.56 A27.60 F420.0
+G01 X45.11 Y28.55 Z49.46 A27.66 F420.0
+G01 X45.86 Y28.60 Z50.36 A27.71 F420.0
+G01 X46.62 Y28.64 Z51.26 A27.77 F420.0
+G01 X47.36 Y28.69 Z52.15 A27.83 F420.0
+G01 X48.11 Y28.74 Z53.05 A27.89 F420.0
+G01 X48.86 Y28.78 Z53.94 A27.95 F420.0
+G01 X49.60 Y28.83 Z54.83 A28.01 F420.0
+G01 X50.35 Y28.87 Z55.71 A28.06 F420.0
+G01 X51.09 Y28.92 Z56.60 A28.12 F420.0
+G01 X51.83 Y28.97 Z57.48 A28.18 F420.0
+G01 X52.56 Y29.01 Z58.36 A28.24 F420.0
+G01 X53.30 Y29.06 Z59.24 A28.29 F420.0
+G01 X54.03 Y29.10 Z60.12 A28.35 F420.0
+G01 X54.77 Y29.15 Z60.99 A28.41 F420.0
+G01 X55.50 Y29.19 Z61.86 A28.47 F420.0
+G01 X56.22 Y29.24 Z62.73 A28.52 F420.0
+G01 X56.95 Y29.28 Z63.60 A28.58 F420.0
+G01 X57.68 Y29.33 Z64.46 A28.64 F420.0
+G01 X58.40 Y29.37 Z65.32 A28.70 F420.0
+G01 X59.12 Y29.42 Z66.18 A28.75 F420.0
+G01 X59.84 Y29.46 Z67.04 A28.81 F420.0
+G01 X60.55 Y29.51 Z67.89 A28.87 F420.0
+G01 X61.26 Y29.55 Z68.74 A28.92 F420.0
+G01 X61.98 Y29.60 Z69.59 A28.98 F420.0
+G01 X62.68 Y29.64 Z70.43 A29.03 F420.0
+G01 X63.39 Y29.68 Z71.27 A29.09 F420.0
+G01 X64.09 Y29.73 Z72.11 A29.15 F420.0
+G01 X64.80 Y29.77 Z72.94 A29.20 F420.0
+G01 X65.49 Y29.81 Z73.77 A29.26 F420.0
+G01 X66.19 Y29.86 Z74.60 A29.31 F420.0
+G01 X66.88 Y29.90 Z75.42 A29.37 F420.0
+G01 X67.57 Y29.94 Z76.24 A29.42 F420.0
+G01 X68.26 Y29.98 Z77.06 A29.48 F420.0
+G01 X68.95 Y30.03 Z77.87 A29.53 F420.0
+G01 X69.63 Y30.07 Z78.68 A29.59 F420.0
+G01 X70.31 Y30.11 Z79.49 A29.64 F420.0
+G01 X70.98 Y30.15 Z80.29 A29.69 F420.0
+G01 X71.66 Y30.19 Z81.09 A29.75 F420.0
+G01 X72.33 Y30.23 Z81.88 A29.80 F420.0
+G01 X72.99 Y30.27 Z82.67 A29.85 F420.0
+G01 X73.66 Y30.31 Z83.46 A29.91 F420.0
+G01 X74.32 Y30.35 Z84.24 A29.96 F420.0
+G01 X74.97 Y30.40 Z85.02 A30.01 F420.0
+G01 X75.63 Y30.44 Z85.79 A30.06 F420.0
+G01 X76.28 Y30.48 Z86.55 A30.12 F420.0
+G01 X76.92 Y30.51 Z87.32 A30.17 F420.0
+G01 X77.56 Y30.55 Z88.08 A30.22 F420.0
+G01 X78.20 Y30.59 Z88.83 A30.27 F420.0
+G01 X78.84 Y30.63 Z89.58 A30.32 F420.0
+G01 X79.47 Y30.67 Z90.32 A30.37 F420.0
+G01 X80.09 Y30.71 Z91.06 A30.42 F420.0
+G01 X80.72 Y30.75 Z91.79 A30.47 F420.0
+G01 X81.33 Y30.79 Z92.51 A30.52 F420.0
+G01 X81.95 Y30.82 Z93.23 A30.57 F420.0
+G01 X82.56 Y30.86 Z93.95 A30.62 F420.0
+G01 X83.16 Y30.90 Z94.66 A30.67 F420.0
+G01 X83.76 Y30.93 Z95.36 A30.72 F420.0
+G01 X84.36 Y30.97 Z96.06 A30.77 F420.0
+G01 X84.95 Y31.01 Z96.75 A30.81 F420.0
+G01 X85.53 Y31.04 Z97.43 A30.86 F420.0
+G01 X86.11 Y31.08 Z98.11 A30.91 F420.0
+G01 X86.69 Y31.11 Z98.78 A30.96 F420.0
+G01 X87.26 Y31.15 Z99.44 A31.00 F420.0
+G01 X87.82 Y31.18 Z100.09 A31.05 F420.0
+G01 X88.38 Y31.22 Z100.74 A31.09 F420.0
+G01 X88.93 Y31.25 Z101.38 A31.14 F420.0
+G01 X89.48 Y31.28 Z102.01 A31.18 F420.0
+G01 X90.02 Y31.32 Z102.63 A31.22 F420.0
+G01 X90.20 Y31.36 Z102.81 A31.27 F420.0
+G01 X90.35 Y31.47 Z102.96 A31.38 F420.0
+G01 X90.45 Y31.63 Z103.06 A31.54 F420.0
+G01 X90.48 Y31.82 Z103.10 A31.72 F420.0
+G01 X90.48 Y32.08 Z103.10 A32.05 F420.0
+G01 X90.48 Y32.34 Z103.10 A32.38 F420.0
+G01 X90.48 Y32.61 Z103.10 A32.70 F420.0
+G01 X90.48 Y32.87 Z103.10 A33.03 F420.0
+G01 X120.00 Y32.87 Z120.00 A33.03 F420.0
+G01 X120.00 Y80.00 Z120.00 A80.00 F420.0
+;
+; *** END BLOCK ***
+M05
+G00 X240.00 Y235.00 Z240.00 A235.00 F840.0
+G00 B0.00 F1800.0
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+"use strict";
+// ---------------------------------------------------------------------------------------------
+//  Разбор G-code: оси X/Y - левая башня (Y, Z), Z/A - правая башня (Y, Z), B - поворотный стол
+// ---------------------------------------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+let prog = null;            // результат разбора и проверки
+let simTime = 0, playing = false, lastFrame = 0;
+
+function readSettings() {
+  const n = (id) => parseFloat($(id).value) || 0;
+  return { L: n("sL"), W: n("sW"), H: n("sH"), Z0: n("sZ"), FW: n("mFW"), HT: n("mHT"), VT: n("mVT"),
+           angle: n("mAng"), invB: $("invB").checked, laser: $("laser").checked };
+}
+
+function parseGcode(text) {
+  const lines = text.replace(/\r/g, "").split("\n");
+  const moves = [], events = [], sections = [];
+  const pos = { X: 0, Y: 0, Z: 0, A: 0, B: 0 };
+  let motion = "G0", feed = 0, power = 0, wire = false, t = 0, relative = false, stock = null;
+  const lineTime = new Array(lines.length).fill(0);
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const sm = raw.match(/;\s*STOCK\s+L=([\d.]+)\s+W=([\d.]+)\s+H=([\d.]+)\s+Z0=(-?[\d.]+)/);
+    if (sm) stock = { L: +sm[1], W: +sm[2], H: +sm[3], Z0: +sm[4] };
+    const tm = raw.match(/TRIM BLOCK:\s*L=([\d.]+)\s+W=([\d.]+)\s+H=([\d.]+)/);
+    if (tm && !stock) stock = { L: +tm[1], W: +tm[2], H: +tm[3] };
+    const cm = raw.match(/;\s*(\*\*\*.*?\*\*\*|\*\*\*.*|- .*)/);
+    if (cm) sections.push({ line: i, t, text: cm[1].replace(/\*/g, "").trim() });
+    const code = raw.replace(/\(.*?\)/g, "").replace(/;.*$/, "").trim().toUpperCase();
+    lineTime[i] = t;
+    if (!code || code.startsWith("$")) continue;
+    const words = {};
+    const gs = [], ms = [];
+    for (const m of code.matchAll(/([A-Z])\s*(-?\d*\.?\d+)/g)) {
+      const k = m[1], v = parseFloat(m[2]);
+      if (k === "G") gs.push(v); else if (k === "M") ms.push(v); else words[k] = v;
+    }
+    let isG92 = false;
+    for (const g of gs) {
+      if (g === 0 || g === 1) motion = "G" + g;
+      else if (g === 90) relative = false;
+      else if (g === 91) relative = true;
+      else if (g === 92) isG92 = true;
+      else if (g === 4) { const d = (words.P || 0); events.push({ type: "dwell", line: i, t, dur: d }); t += d; }
+    }
+    if (words.F !== undefined) feed = words.F;
+    if (words.S !== undefined) { if (Math.abs(words.S - power) > 1e-9 && wire) events.push({ type: "power", line: i, t, from: power, to: words.S }); power = words.S; }
+    for (const m of ms) {
+      if (m === 3 || m === 4) { wire = true; events.push({ type: "on", line: i, t, S: power }); }
+      else if (m === 5) { wire = false; events.push({ type: "off", line: i, t }); }
+      else if (m === 2 || m === 30) events.push({ type: "end", line: i, t });
+    }
+    const axes = ["X", "Y", "Z", "A", "B"].filter((a) => words[a] !== undefined);
+    if (axes.length === 0) continue;
+    if (isG92) { for (const a of axes) pos[a] = words[a]; continue; }
+    const from = { ...pos }, to = { ...pos };
+    for (const a of axes) to[a] = relative ? pos[a] + words[a] : words[a];
+    const d = Math.hypot(to.X - from.X, to.Y - from.Y, to.Z - from.Z, to.A - from.A, to.B - from.B);
+    const dur = feed > 0 ? d / (feed / 60) : 0;
+    moves.push({ line: i, type: motion, from, to, feed, power, wire, t0: t, t1: t + dur });
+    t += dur;
+    Object.assign(pos, to);
+    lineTime[i] = t;
+  }
+  return { lines, moves, events, sections, total: t, stock, lineTime };
+}
+
+// ---------------------------------------------------------------------------------------------
+//  Геометрия: струна в координатах станка, заготовка в своих координатах (вращается со столом)
+// ---------------------------------------------------------------------------------------------
+function wireEnds(p, s) { return [[-s.FW / 2, p.X, p.Y], [s.FW / 2, p.Z, p.A]]; }
+function lerpPos(a, b, f) { return { X: a.X + (b.X - a.X) * f, Y: a.Y + (b.Y - a.Y) * f, Z: a.Z + (b.Z - a.Z) * f, A: a.A + (b.A - a.A) * f, B: a.B + (b.B - a.B) * f }; }
+function tableAngle(B, s) { return (s.invB ? -1 : 1) * B * Math.PI / 180; }
+function toLocal(pt, ang) {     // - точка станка -> координаты заготовки (поворот на -угол стола)
+  const c = Math.cos(-ang), sn = Math.sin(-ang);
+  return [pt[0] * c - pt[1] * sn, pt[0] * sn + pt[1] * c, pt[2]];
+}
+function clipToBox(p, q, s) {   // - Лян-Барски: часть отрезка p-q внутри заготовки; [s0, s1] либо null
+  const lo = [-s.W / 2, -s.L / 2, s.Z0], hi = [s.W / 2, s.L / 2, s.Z0 + s.H];
+  let t0 = 0, t1 = 1;
+  for (let k = 0; k < 3; k++) {
+    const d = q[k] - p[k];
+    if (Math.abs(d) < 1e-12) { if (p[k] < lo[k] || p[k] > hi[k]) return null; continue; }
+    let a = (lo[k] - p[k]) / d, b = (hi[k] - p[k]) / d;
+    if (a > b) [a, b] = [b, a];
+    t0 = Math.max(t0, a); t1 = Math.min(t1, b);
+    if (t0 > t1) return null;
+  }
+  return t1 - t0 > 1e-6 ? [t0, t1] : null;
+}
+function wireInStock(p, s) {
+  const ang = tableAngle(p.B, s);
+  const [l, r] = wireEnds(p, s);
+  const a = toLocal(l, ang), b = toLocal(r, ang);
+  const c = clipToBox(a, b, s);
+  return c ? { a, b, c } : null;
+}
+const mix3 = (a, b, f) => [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+
+// ---------------------------------------------------------------------------------------------
+//  Проверка программы и построение следа реза
+// ---------------------------------------------------------------------------------------------
+function analyse(p, s) {
+  const warns = [];
+  const add = (level, t, line, text) => warns.push({ level, t, line, text });
+  const trail = [], trailT = [], faces = [], facesT = [];
+  let cutLen = 0, inFoamPrev = false, prevDir = null, prevMoveEnd = null;
+  const halfY = s.HT / 2;
+  let outOfTravel = 0;
+
+  // - Мощность в момент времени (для событий внутри пенопласта)
+  const posAt = (t) => positionAt(p, t);
+
+  for (const m of p.moves) {
+    const isRot = Math.abs(m.to.B - m.from.B) > 1e-9;
+    const dmax = Math.max(Math.abs(m.to.X - m.from.X), Math.abs(m.to.Y - m.from.Y), Math.abs(m.to.Z - m.from.Z), Math.abs(m.to.A - m.from.A));
+    const n = Math.max(1, Math.ceil(dmax / 1.0), Math.ceil(Math.abs(m.to.B - m.from.B) / 2));
+    // - Ход кареток проверяем по точкам назначения: бокс выпуклый, а исходная точка после хоминга
+    //   (G92) может лежать за рабочим боксом - там стоят концевики
+    const q1 = m.to;
+    if (Math.abs(q1.X) > halfY + 1e-6 || Math.abs(q1.Z) > halfY + 1e-6 || Math.min(q1.Y, q1.A) < -1e-6 || Math.max(q1.Y, q1.A) > s.VT + 1e-6) {
+      if (outOfTravel++ < 5) add("crit", m.t1, m.line, "Выход за ход кареток: Y " + q1.X.toFixed(1) + "/" + q1.Z.toFixed(1) + ", Z " + q1.Y.toFixed(1) + "/" + q1.A.toFixed(1));
+    }
+    let prev = null, touched = false;
+    for (let i = 0; i <= n; i++) {
+      const q = lerpPos(m.from, m.to, i / n);
+      const hit = wireInStock(q, s);
+      if (hit) touched = true;
+      if (m.wire && hit) {
+        const pa = mix3(hit.a, hit.b, hit.c[0]), pb = mix3(hit.a, hit.b, hit.c[1]);
+        if (prev) {
+          trail.push(...prev[0], ...prev[1], ...pa, ...prev[1], ...pb, ...pa);
+          const tt = m.t0 + (m.t1 - m.t0) * i / n;
+          for (let k = 0; k < 6; k++) trailT.push(tt);
+          faces.push(...prev[0], ...pa, ...prev[1], ...pb);
+          for (let k = 0; k < 4; k++) facesT.push(tt);
+        }
+        prev = [pa, pb];
+      } else prev = null;
+    }
+    if (touched && m.wire && !isRot) cutLen += Math.max(Math.hypot(m.to.X - m.from.X, m.to.Y - m.from.Y), Math.hypot(m.to.Z - m.from.Z, m.to.A - m.from.A));
+
+    if (touched && isRot) add("crit", m.t0, m.line, "Поворот стола, когда струна в заготовке");
+    else if (touched && m.type === "G0") add("crit", m.t0, m.line, "Быстрый ход G0 сквозь заготовку");
+    else if (touched && !m.wire) add("crit", m.t0, m.line, "Ход холодной струной через заготовку");
+    else if (touched && m.wire && s.laser && m.type === "G0") add("warn", m.t0, m.line, "G0 в лазерном режиме выключает струну");
+
+    // - Резкий поворот траектории в пенопласте: станок тормозит, струна дольше греет одно место
+    if (touched && m.wire && !isRot) {
+      const dir = [m.to.X - m.from.X, m.to.Y - m.from.Y, m.to.Z - m.from.Z, m.to.A - m.from.A];
+      const len = Math.hypot(...dir);
+      if (len > 1e-6) {
+        const u = dir.map((v) => v / len);
+        if (prevDir && inFoamPrev && prevMoveEnd === m.t0) {
+          const cos = Math.max(-1, Math.min(1, u.reduce((acc, v, k) => acc + v * prevDir[k], 0)));
+          const deg = Math.acos(cos) * 180 / Math.PI;
+          if (deg >= s.angle) add("info", m.t0, m.line, "Поворот траектории на " + deg.toFixed(0) + "° в пенопласте: возможен пережог");
+        }
+        prevDir = u;
+      }
+    }
+    inFoamPrev = touched && m.wire;
+    prevMoveEnd = m.t1;
+  }
+
+  // - События в пенопласте: смена мощности, остановки, выключение
+  for (const e of p.events) {
+    const inside = wireInStock(posAt(e.t), s);
+    if (!inside) continue;
+    if (e.type === "power" && !s.laser) add("warn", e.t, e.line, "Смена мощности S" + e.from.toFixed(0) + "→" + e.to.toFixed(0) + " в пенопласте: при $32=0 станок остановится");
+    if (e.type === "dwell") add("warn", e.t, e.line, "Пауза G4 со струной в пенопласте: пережог");
+    if (e.type === "off") add("crit", e.t, e.line, "Струна выключена внутри заготовки");
+    if (e.type === "end") add("crit", e.t, e.line, "Конец программы со струной в заготовке");
+  }
+  const last = p.moves[p.moves.length - 1];
+  if (last && wireInStock(last.to, s)) add("crit", last.t1, last.line, "Программа заканчивается со струной в заготовке");
+
+  // - Зазор при вращении: угол заготовки описывает окружность вокруг оси стола, каретки должны стоять дальше неё
+  const r = Math.hypot(s.L, s.W) / 2;
+  for (const m of p.moves) {
+    if (Math.abs(m.to.B - m.from.B) > 1e-9 && Math.min(Math.abs(m.from.X), Math.abs(m.from.Z)) < r) {
+      add("warn", m.t0, m.line, "Поворот стола: каретки ближе к оси стола, чем угол заготовки (радиус " + r.toFixed(0) + " мм)");
+    }
+  }
+  warns.sort((a, b) => a.t - b.t);
+  return { warns, trail: new Float32Array(trail), trailT, faces: new Float32Array(faces), facesT, cutLen };
+}
+
+function positionAt(p, t) {
+  const ms = p.moves;
+  if (ms.length === 0) return { X: 0, Y: 0, Z: 0, A: 0, B: 0 };
+  let lo = 0, hi = ms.length - 1;
+  if (t <= ms[0].t0) return { ...ms[0].from };
+  if (t >= ms[hi].t1) return { ...ms[hi].to };
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (ms[mid].t0 <= t) lo = mid; else hi = mid - 1; }
+  const m = ms[lo];
+  const f = m.t1 > m.t0 ? Math.min(1, (t - m.t0) / (m.t1 - m.t0)) : 1;
+  return lerpPos(m.from, m.to, f);
+}
+function moveAt(p, t) {
+  const ms = p.moves; let lo = 0, hi = ms.length - 1;
+  if (!ms.length) return null;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (ms[mid].t0 <= t) lo = mid; else hi = mid - 1; }
+  return ms[lo];
+}
+function stateAt(p, t) {       // - струна вкл/выкл и мощность по событиям до момента t
+  let on = false, S = 0;
+  for (const e of p.events) { if (e.t > t) break; if (e.type === "on") { on = true; S = e.S; } if (e.type === "off") on = false; if (e.type === "power") S = e.to; }
+  return { on, S };
+}
+
+// ---------------------------------------------------------------------------------------------
+//  3D-сцена
+// ---------------------------------------------------------------------------------------------
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const view = $("view");
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+view.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 1, 5000);
+camera.up.set(0, 0, 1);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0, 60);
+scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+const sun = new THREE.DirectionalLight(0xffffff, 0.55); sun.position.set(-300, -400, 600); scene.add(sun);
+
+const mats = {
+  wire: new THREE.MeshBasicMaterial({ color: 0xffffff }),
+  wireOff: new THREE.MeshBasicMaterial({ color: 0xffffff }),
+  trail: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false }),
+  faces: new THREE.LineBasicMaterial({ color: 0xffffff }),
+  foam: new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.22, depthWrite: false }),
+  foamEdge: new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 }),
+  frame: new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 }),
+  path: new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55 }),
+  carriage: new THREE.MeshBasicMaterial({ color: 0xffffff }),
+  table: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.25 }),
+};
+function applyTheme() {
+  scene.background = new THREE.Color(css("--view"));
+  mats.wire.color.set(css("--wire")); mats.trail.color.set(css("--wire")); mats.faces.color.set(css("--wire"));
+  mats.wireOff.color.set(css("--muted")); mats.foam.color.set(css("--foam")); mats.foamEdge.color.set(css("--foam"));
+  mats.frame.color.set(css("--muted")); mats.path.color.set(css("--muted")); mats.carriage.color.set(css("--fg")); mats.table.color.set(css("--muted"));
+}
+try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme); } catch (e) {}
+new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+let machineGroup = null, stockGroup = null, wireMesh = null, carriages = [], trailMesh = null, faceLines = null;
+function buildScene(s) {
+  if (machineGroup) scene.remove(machineGroup);
+  machineGroup = new THREE.Group(); scene.add(machineGroup);
+  // - Ход кареток: две плоскости башен и бокс
+  const box = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(s.FW, s.HT, s.VT)), mats.frame);
+  box.position.set(0, 0, s.VT / 2); machineGroup.add(box);
+  // - Пути кареток на башнях
+  if (prog) {
+    for (const side of [0, 1]) {
+      const pts = [];
+      for (const m of prog.moves) { const [l, r] = wireEnds(m.to, s); pts.push(new THREE.Vector3(...(side ? r : l))); }
+      if (pts.length > 1) machineGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mats.path));
+    }
+  }
+  // - Стол
+  const table = new THREE.Mesh(new THREE.CircleGeometry(Math.hypot(s.L, s.W) / 2, 72), mats.table);
+  table.position.z = 0.1; machineGroup.add(table);
+  // - Заготовка (вращается вместе со столом) и след реза в её координатах
+  stockGroup = new THREE.Group(); machineGroup.add(stockGroup);
+  const foamGeo = new THREE.BoxGeometry(s.W, s.L, s.H);
+  const foam = new THREE.Mesh(foamGeo, mats.foam); foam.position.z = s.Z0 + s.H / 2; stockGroup.add(foam);
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(foamGeo), mats.foamEdge); edges.position.copy(foam.position); stockGroup.add(edges);
+  if (prog && prog.check) {
+    const g1 = new THREE.BufferGeometry(); g1.setAttribute("position", new THREE.BufferAttribute(prog.check.trail, 3));
+    trailMesh = new THREE.Mesh(g1, mats.trail); stockGroup.add(trailMesh);
+    const g2 = new THREE.BufferGeometry(); g2.setAttribute("position", new THREE.BufferAttribute(prog.check.faces, 3));
+    faceLines = new THREE.LineSegments(g2, mats.faces); stockGroup.add(faceLines);
+  }
+  // - Струна и каретки
+  wireMesh = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.1, 1, 8), mats.wire); machineGroup.add(wireMesh);
+  carriages = [0, 1].map(() => { const c = new THREE.Mesh(new THREE.SphereGeometry(4.5, 16, 12), mats.carriage); machineGroup.add(c); return c; });
+  applyTheme();
+}
+
+function countUpTo(times, t) {   // - сколько вершин следа уже прорезано к моменту t
+  let lo = 0, hi = times.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (times[mid] <= t) lo = mid + 1; else hi = mid; }
+  return lo;
+}
+
+function setCamera(mode) {
+  for (const [id, m] of [["v3d", "3d"], ["vside", "side"], ["vtop", "top"]]) $(id).setAttribute("aria-pressed", String(m === mode));
+  const s = readSettings();
+  controls.target.set(0, 0, s.Z0 + s.H / 2);
+  // - Камера со стороны оператора: станок стоит развёрнутым на 180° вокруг Z
+  if (mode === "3d") camera.position.set(520, 640, 420);
+  if (mode === "side") camera.position.set(900, 0, s.Z0 + s.H / 2 + 0.01);
+  if (mode === "top") camera.position.set(0, 0.01, 900);
+  controls.update();
+}
+
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / Math.max(1, h); camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(view);
+
+// ---------------------------------------------------------------------------------------------
+//  Интерфейс
+// ---------------------------------------------------------------------------------------------
+const fmtTime = (sec) => { sec = Math.max(0, Math.round(sec)); return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0"); };
+const levelName = { crit: "опасно", warn: "внимание", info: "заметка" };
+
+function render() {
+  if (!prog) return;
+  const s = readSettings();
+  const live = mach.connected && mach.hasPos;
+  const p = live ? mach.pos : positionAt(prog, simTime);
+  const ang = tableAngle(p.B, s);
+  stockGroup.rotation.z = ang;
+  const [l, r] = wireEnds(p, s);
+  const a = new THREE.Vector3(...l), b = new THREE.Vector3(...r);
+  wireMesh.position.copy(a).add(b).multiplyScalar(0.5);
+  wireMesh.scale.set(1, a.distanceTo(b), 1);
+  wireMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+  carriages[0].position.copy(a); carriages[1].position.copy(b);
+  const st = live ? liveWire() : stateAt(prog, simTime);
+  wireMesh.material = st.on ? mats.wire : mats.wireOff;
+  if (trailMesh) trailMesh.geometry.setDrawRange(0, countUpTo(prog.check.trailT, simTime));
+  if (faceLines) faceLines.geometry.setDrawRange(0, countUpTo(prog.check.facesT, simTime));
+
+  $("rYL").textContent = p.X.toFixed(2); $("rZL").textContent = p.Y.toFixed(2);
+  $("rYR").textContent = p.Z.toFixed(2); $("rZR").textContent = p.A.toFixed(2);
+  $("rB").textContent = p.B.toFixed(2) + "°";
+  $("rLen").textContent = a.distanceTo(b).toFixed(1);
+  const m = moveAt(prog, simTime);
+  $("rF").textContent = live ? (mach.feed / 60).toFixed(1) + " мм/с" : m ? (m.feed / 60).toFixed(1) + " мм/с" : "—";
+  $("rS").textContent = st.on ? "S" + st.S.toFixed(0) : "—";
+  const ws = $("wireState"); ws.textContent = st.on ? "струна вкл" : "струна выкл"; ws.className = "state " + (st.on ? "on" : "off");
+  let sec = "—"; for (const x of prog.sections) { if (x.t <= simTime + 1e-9) sec = x.text; else break; }
+  $("op").textContent = sec;
+  $("clock").textContent = fmtTime(simTime) + " / " + fmtTime(prog.total);
+  if (document.activeElement !== $("timeline")) $("timeline").value = String(Math.round(10000 * simTime / Math.max(1e-9, prog.total)));
+  showCode(m ? m.line : 0);
+}
+
+let shownLine = -1;
+function showCode(line) {
+  if (line === shownLine) return;
+  shownLine = line;
+  const from = Math.max(0, line - 6), to = Math.min(prog.lines.length, line + 7);
+  const out = [];
+  for (let i = from; i < to; i++) {
+    const text = prog.lines[i].replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    out.push('<span class="' + (i === line ? "cur" : "") + '"><span class="ln">' + (i + 1) + "</span>" + (text || " ") + "</span>");
+  }
+  $("code").innerHTML = out.join("\n");
+}
+
+function showWarnings() {
+  const c = prog.check, counts = { crit: 0, warn: 0, info: 0 };
+  for (const w of c.warns) counts[w.level]++;
+  const sum = $("summary"); sum.innerHTML = "";
+  if (!c.warns.length) sum.innerHTML = '<span class="chip ok">замечаний нет</span>';
+  for (const k of ["crit", "warn", "info"]) if (counts[k]) { const sp = document.createElement("span"); sp.className = "chip " + k; sp.textContent = levelName[k] + ": " + counts[k]; sum.appendChild(sp); }
+  const ul = $("warns"); ul.innerHTML = "";
+  for (const w of c.warns.slice(0, 300)) {
+    const li = document.createElement("li"); li.className = w.level; li.tabIndex = 0;
+    const div = document.createElement("div");
+    div.innerHTML = "<div></div><small></small>";
+    div.firstChild.textContent = w.text;
+    div.lastChild.textContent = "строка " + (w.line + 1) + " · " + fmtTime(w.t);
+    li.appendChild(div);
+    const go = () => { simTime = w.t; playing = false; $("play").textContent = "Пуск"; render(); };
+    li.addEventListener("click", go); li.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+    ul.appendChild(li);
+  }
+  $("stats").textContent = "Рез в пенопласте: " + (c.cutLen / 1000).toFixed(2) + " м · время программы ≈ " + fmtTime(prog.total) + " (без разгонов) · ходов: " + prog.moves.length;
+}
+
+// ---------------------------------------------------------------------------------------------
+//  Температура струны: пропорциональный пересчёт всех S в программе
+// ---------------------------------------------------------------------------------------------
+let original = null;        // - исходная программа: { text, name, base }
+let currentText = "", currentName = "";
+
+const programBaseS = (p) => { const on = p.events.find((e) => e.type === "on"); return on ? on.S : null; };
+const programRangeS = (text) => {
+  let lo = Infinity, hi = -Infinity, count = 0;
+  for (const line of text.split("\n")) {
+    const code = line.split(";")[0];
+    for (const m of code.matchAll(/S\s*(\d*\.?\d+)/gi)) { const v = parseFloat(m[1]); lo = Math.min(lo, v); hi = Math.max(hi, v); count++; }
+  }
+  return count ? { lo, hi, count } : null;
+};
+function rescaleS(text, factor, maxS) {
+  // - Меняются только слова S в командной части строки, комментарии остаются как были
+  return text.split("\n").map((line) => {
+    const i = line.indexOf(";");
+    const code = i >= 0 ? line.slice(0, i) : line, rest = i >= 0 ? line.slice(i) : "";
+    return code.replace(/S\s*(\d*\.?\d+)/gi, (m, v) => "S" + Math.min(maxS, parseFloat(v) * factor).toFixed(2)) + rest;
+  }).join("\n");
+}
+function updateTempInfo() {
+  const info = $("tInfo");
+  if (!original || original.base === null) { info.textContent = "В программе нет команды включения струны (M03 S…)."; return; }
+  const target = parseFloat($("tVal").value) || 0, maxS = parseFloat($("tMax").value) || Infinity;
+  const r = programRangeS(original.text), f = target / original.base;
+  const pct = Math.round((f - 1) * 100);
+  const lo = Math.min(maxS, r.lo * f), hi = Math.min(maxS, r.hi * f);
+  const cls = pct > 0 ? "delta-up" : pct < 0 ? "delta-down" : "";
+  info.innerHTML = "Исходно S" + r.lo.toFixed(0) + (r.hi > r.lo + 0.5 ? "…" + r.hi.toFixed(0) : "") +
+    ", будет S" + lo.toFixed(0) + (hi > lo + 0.5 ? "…" + hi.toFixed(0) : "") +
+    ' <span class="' + cls + '">(' + (pct > 0 ? "+" : "") + pct + "%)</span> · команд S: " + r.count +
+    (r.hi * f > maxS ? " · часть значений упрётся в максимум" : "");
+}
+function applyTemperature() {
+  if (!original || original.base === null) return;
+  const target = parseFloat($("tVal").value);
+  if (!(target > 0)) { $("tNote").textContent = "Введите мощность больше нуля."; return; }
+  const maxS = parseFloat($("tMax").value) || Infinity;
+  const text = rescaleS(original.text, target / original.base, maxS);
+  const same = Math.abs(target - original.base) < 1e-9;
+  const stem = original.name.replace(/\.(gcode|nc|ngc|tap|txt)$/i, "");
+  loadProgram(text, same ? original.name : stem + "_S" + Math.round(target) + ".gcode", { keepOriginal: true, keepTime: true });
+  $("tNote").textContent = same ? "Исходная температура." : "Температура применена к программе: все S умножены на " + (target / original.base).toFixed(3) + ".";
+}
+// - Локальная копия сохраняет файл сама; на claude.ai сохранение идёт через downloads (только разрешённые
+//   расширения, .gcode среди них нет - файл получает .txt)
+const isLocalFile = location.protocol === "file:" || location.hostname === "localhost";
+let downloadsNs = null;
+if (!isLocalFile) {
+  $("tSave").hidden = true;
+  try {
+    window.claude?.use?.("downloads").then((ns) => { downloadsNs = ns; if (ns) $("tSave").hidden = false; }).catch(() => {});
+  } catch (e) {}
+}
+async function saveProgram() {
+  const data = currentText.replace(/\r*\n/g, "\r\n");
+  const name = currentName.replace(/^пример:\s*/, "");
+  // - Страница не знает путь к файлу: окно сохранения открывается в папке STEP, пользователь только подтверждает
+  if (isLocalFile && stepFile && stepFile.handle && window.showSaveFilePicker) {
+    try {
+      const handle = await showSaveFilePicker({ startIn: stepFile.handle, suggestedName: name, types: [{ description: "G-code", accept: { "text/plain": [".gcode"] } }] });
+      const stream = await handle.createWritable();
+      await stream.write(data);
+      await stream.close();
+      $("tNote").textContent = "Сохранено: " + handle.name;
+    } catch (e) {
+      $("tNote").textContent = e.name === "AbortError" ? "Сохранение отменено." : "Не удалось сохранить файл: " + e.message;
+    }
+    return;
+  }
+  if (isLocalFile) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([data], { type: "text/plain" })); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    $("tNote").textContent = "Сохранено в папку загрузок: " + name;
+    return;
+  }
+  if (!downloadsNs) return;
+  const txtName = name.replace(/\.(gcode|nc|ngc|tap|txt)$/i, "") + ".txt";
+  try {
+    await downloadsNs.save({ filename: txtName, data });
+    $("tNote").textContent = "Сохранено как " + txtName + ". Если Candle не видит файл, переименуйте его в .gcode.";
+  } catch (e) {
+    const code = e && e.code;
+    $("tNote").textContent = code === "declined" ? "Сохранение отменено." :
+      code === "rate_limited" ? "Окно сохранения уже открыто, подтвердите или закройте его." :
+      "Сохранить здесь не удалось. Используйте «Копировать G-code» или локальную копию D:\\1800mm\\wire_sim.html.";
+  }
+}
+async function copyProgram() {
+  try { await navigator.clipboard.writeText(currentText.replace(/\r*\n/g, "\r\n")); $("tNote").textContent = "G-code скопирован. Вставьте его в новый файл .gcode."; }
+  catch (e) { $("tNote").textContent = "Копирование не разрешено в этом окне. Откройте локальную копию D:\\1800mm\\wire_sim.html, там есть сохранение файла."; }
+}
+$("tRange").addEventListener("input", () => { $("tVal").value = $("tRange").value; updateTempInfo(); });
+$("tVal").addEventListener("input", () => { $("tRange").value = $("tVal").value; updateTempInfo(); });
+$("tMax").addEventListener("input", updateTempInfo);
+$("tApply").addEventListener("click", applyTemperature);
+$("tReset").addEventListener("click", () => { if (!original || original.base === null) return; $("tVal").value = $("tRange").value = original.base; applyTemperature(); });
+$("tSave").addEventListener("click", saveProgram);
+$("tCopy").addEventListener("click", copyProgram);
+
+function loadProgram(text, name, opts = {}) {
+  if (job) { showMsg("Во время реза программу менять нельзя.", true); return; }
+  const parsed = parseGcode(text);
+  if (parsed.stock) {
+    for (const [id, k] of [["sL", "L"], ["sW", "W"], ["sH", "H"], ["sZ", "Z0"]]) if (parsed.stock[k] !== undefined) $(id).value = parsed.stock[k];
+  }
+  prog = parsed;
+  currentText = text; currentName = name;
+  if (!opts.keepOriginal) {
+    original = { text, name, base: programBaseS(parsed) };
+    if (original.base !== null) { $("tVal").value = $("tRange").value = Math.round(original.base); }
+    $("tNote").textContent = "";
+  }
+  updateTempInfo();
+  $("fileName").textContent = name;
+  const t = simTime;
+  recheck();
+  simTime = opts.keepTime ? Math.min(t, prog.total) : 0;
+  playing = false; $("play").textContent = "Пуск";
+  render();
+}
+function recheck() {
+  if (!prog) return;
+  prog.check = analyse(prog, readSettings());
+  buildScene(readSettings());
+  showWarnings();
+  shownLine = -1;
+  render();
+}
+
+$("fileInput").addEventListener("change", (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const rd = new FileReader(); rd.onload = () => loadProgram(String(rd.result), f.name); rd.readAsText(f);
+});
+// - Счётчик входов: dragleave приходит и при переходе на дочерние элементы, без счётчика подсказка мигает
+let dragDepth = 0;
+view.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; $("drop").hidden = false; });
+view.addEventListener("dragover", (e) => { e.preventDefault(); });
+view.addEventListener("dragleave", () => { dragDepth = Math.max(0, dragDepth - 1); if (dragDepth === 0) $("drop").hidden = true; });
+window.addEventListener("dragend", () => { dragDepth = 0; $("drop").hidden = true; });
+view.addEventListener("drop", (e) => {
+  e.preventDefault(); dragDepth = 0; $("drop").hidden = true;
+  const f = e.dataTransfer.files[0]; if (!f) return;
+  const rd = new FileReader(); rd.onload = () => loadProgram(String(rd.result), f.name); rd.readAsText(f);
+});
+for (const id of ["sL", "sW", "sH", "sZ", "mFW", "mHT", "mVT", "mAng", "invB", "laser"]) $(id).addEventListener("change", recheck);
+$("play").addEventListener("click", () => {
+  if (!prog) return;
+  if (simTime >= prog.total) simTime = 0;
+  playing = !playing; $("play").textContent = playing ? "Пауза" : "Пуск"; lastFrame = performance.now();
+});
+$("timeline").addEventListener("input", (e) => { if (!prog) return; simTime = prog.total * (+e.target.value) / 10000; render(); });
+$("v3d").addEventListener("click", () => setCamera("3d"));
+$("vside").addEventListener("click", () => setCamera("side"));
+$("vtop").addEventListener("click", () => setCamera("top"));
+
+// ---------------------------------------------------------------------------------------------
+//  Станок: GRBL через Web Serial (Grbl-Mega-5X, оси XYZAB). Только локальная копия в Chrome/Edge
+// ---------------------------------------------------------------------------------------------
+const BAUD = 115200, BOOT_MS = 3000, RX_LIMIT = 120, POLL_MS = 250, LINK_TIMEOUT_MS = 2500, STOP_TIMEOUT_MS = 2000;
+const AXES = ["X", "Y", "Z", "A", "B"];
+const RT_STATUS = 0x3f, RT_HOLD = 0x21, RT_RESUME = 0x7e, RT_RESET = 0x18, RT_SPINDLE_STOP = 0x9e;
+const ALARMS = { 1: "сработал концевик", 2: "выход за мягкие лимиты", 3: "сброс в движении, положение потеряно", 6: "хоминг не удался", 8: "хоминг не удался", 9: "хоминг не нашёл концевик" };
+const STATES = { Idle: "готов", Run: "движение", Hold: "пауза", Alarm: "авария", Home: "хоминг", Check: "проверка", Jog: "ручной ход", Door: "дверь" };
+const enc = new TextEncoder();
+const mach = {
+  port: null, writer: null, reader: null, connected: false, closing: false, tx: Promise.resolve(), timer: null, stopTimer: null,
+  state: "", hasPos: false, pos: { X: 0, Y: 0, Z: 0, A: 0, B: 0 }, wco: [0, 0, 0, 0, 0], feed: 0, S: 0, spinOn: false,
+  lastStatus: 0, linkLost: false, homing: false, needSettings: false, queue: [],
+};
+let job = null;             // - идущая программа; null, когда станок свободен
+const logLines = [];
+
+function showMsg(text, crit) { const el = $("gMsg"); el.textContent = text || ""; el.className = "note" + (crit ? " crit" : ""); }
+function log(text) {
+  logLines.push(text); if (logLines.length > 200) logLines.shift();
+  const el = $("gLog"); el.textContent = logLines.join("\n"); el.scrollTop = el.scrollHeight;
+}
+function liveWire() {       // - поле A: приходит редко, поэтому во время реза учитываем и модель программы
+  const model = job && !job.dry ? stateAt(prog, simTime) : null;
+  return { on: mach.spinOn || !!(model && model.on), S: model ? model.S : mach.S };
+}
+
+// - Запись идёт по цепочке обещаний, чтобы байты уходили строго по порядку
+function writeBytes(bytes) {
+  mach.tx = mach.tx.then(() => (mach.writer ? mach.writer.write(bytes) : undefined)).catch((e) => linkLost(e));
+}
+const realtime = (code) => writeBytes(Uint8Array.of(code));
+function sendLine(text, src) {
+  mach.queue.push({ text, src, len: text.length + 1 });
+  if (/^\$H/i.test(text)) mach.homing = true;
+  writeBytes(enc.encode(text + "\n"));
+  if (!job) log("> " + text);
+}
+const inFlight = () => mach.queue.reduce((acc, q) => acc + q.len, 0);
+
+// - Подготовка программы: без комментариев; в холостом прогоне убираются включение струны и все S
+function buildStream(text, dry) {
+  const out = [];
+  text.replace(/\r/g, "").split("\n").forEach((raw, src) => {
+    let code = raw.replace(/\(.*?\)/g, "").replace(/;.*$/, "").trim();
+    if (dry && !code.startsWith("$")) code = code.replace(/M0*[34](?!\d)/gi, "").replace(/S\s*\d*\.?\d+/gi, "").trim();
+    if (code) out.push({ text: code, src });
+  });
+  return out;
+}
+// - Потоковая отправка с подсчётом символов в буфере контроллера. Команды $ идут только при пустой очереди
+function pump() {
+  if (!job || job.halt || job.paused) return;
+  while (job.idx < job.lines.length) {
+    const l = job.lines[job.idx], sync = l.text.startsWith("$");
+    if ((sync || job.syncWait) && mach.queue.length) return;
+    job.syncWait = false;
+    if (inFlight() + l.text.length + 1 > RX_LIMIT) return;
+    sendLine(l.text, l.src);
+    job.idx++;
+    if (sync) { job.syncWait = true; return; }
+  }
+  if (!mach.queue.length && !job.doneAt) job.doneAt = performance.now();
+}
+// - Где станок на траектории: ближайшая точка среди ходов между последним пройденным и последним принятым
+function trackJob() {
+  const ms = prog.moves;
+  while (job.ackMove + 1 < ms.length && ms[job.ackMove + 1].line <= job.ackLine) job.ackMove++;
+  if (job.ackMove < 0) return;
+  let best = Infinity, bestI = job.moveIdx, bestF = 0;
+  for (let i = job.moveIdx; i <= job.ackMove; i++) {
+    const m = ms[i], d = AXES.map((a) => m.to[a] - m.from[a]), r = AXES.map((a) => mach.pos[a] - m.from[a]);
+    const len2 = d.reduce((acc, v) => acc + v * v, 0);
+    const f = len2 > 0 ? Math.max(0, Math.min(1, d.reduce((acc, v, k) => acc + v * r[k], 0) / len2)) : 1;
+    const dist = Math.hypot(...r.map((v, k) => v - d[k] * f));
+    if (dist < best - 1e-6) { best = dist; bestI = i; bestF = f; }
+  }
+  job.moveIdx = bestI;
+  const m = ms[bestI];
+  simTime = Math.max(simTime, m.t0 + (m.t1 - m.t0) * bestF);
+}
+function endJob(text, crit) {
+  job = null;
+  clearTimeout(mach.stopTimer); mach.stopTimer = null;
+  $("gPause").textContent = "Пауза";
+  showMsg(text, crit); refreshMachine();
+}
+function softReset(text) {
+  realtime(RT_RESET);
+  mach.queue = [];
+  if (job) endJob(text); else { clearTimeout(mach.stopTimer); mach.stopTimer = null; showMsg(text); refreshMachine(); }
+}
+// - Плавная остановка: удержание, затем сброс (он выключает струну). Без удержания GRBL теряет положение
+function stopMachine(text, crit) {
+  if (mach.stopTimer) return;
+  if (job) job.halt = true;
+  realtime(RT_HOLD);
+  showMsg("Останавливаю…", crit);
+  mach.stopText = text;
+  mach.stopTimer = setTimeout(() => softReset(mach.stopText), STOP_TIMEOUT_MS);
+}
+
+function onStatus(line) {
+  const m = line.match(/^<([^|>]+)(?:\|(.*))?>$/);
+  if (!m) return;
+  mach.state = m[1]; mach.lastStatus = performance.now();
+  if (mach.linkLost) { mach.linkLost = false; showMsg(""); }
+  let values = null, isMachinePos = false;
+  for (const f of (m[2] || "").split("|")) {
+    const i = f.indexOf(":"), key = f.slice(0, i), val = f.slice(i + 1);
+    if (key === "MPos" || key === "WPos") { values = val.split(",").map(Number); isMachinePos = key === "MPos"; }
+    else if (key === "WCO") mach.wco = val.split(",").map(Number);
+    else if (key === "FS") { const fs = val.split(",").map(Number); mach.feed = fs[0]; mach.S = fs[1]; }
+    else if (key === "F") mach.feed = Number(val);
+    // - Ov и A приходят вместе и нечасто: Ov без A значит, что струна выключена
+    else if (key === "Ov") mach.spinOn = /\|A:[^|]*[SC]/.test("|" + m[2]);
+  }
+  if (values) {
+    AXES.forEach((a, k) => { mach.pos[a] = (values[k] || 0) - (isMachinePos ? mach.wco[k] || 0 : 0); });
+    mach.hasPos = true;
+  }
+  const holdDone = mach.state === "Hold:0";
+  if (mach.stopTimer && holdDone) softReset(mach.stopText);
+  if (job) {
+    if (job.paused && holdDone && !job.holdOff && !job.dry && $("gHoldOff").checked) { realtime(RT_SPINDLE_STOP); job.holdOff = true; }
+    trackJob();
+    if (job.doneAt && mach.state === "Idle" && mach.lastStatus > job.doneAt + 100) { simTime = prog.total; endJob("Программа завершена."); }
+  }
+  if (mach.needSettings && !job && /^(Idle|Alarm)/.test(mach.state)) { mach.needSettings = false; sendLine("$$"); }
+  refreshMachine(); render();
+}
+function onAck(errorText) {
+  const q = mach.queue.shift();
+  if (q && /^\$H/i.test(q.text)) mach.homing = false;
+  if (job && q && q.src !== undefined) { job.acked++; job.ackLine = q.src; }
+  if (errorText) {
+    const place = q ? " в строке «" + q.text + "»" : "";
+    log(errorText + place);
+    if (job) stopMachine("Программа остановлена: " + errorText + place + ".", true);
+    else showMsg(errorText + place, true);
+  }
+  pump();
+}
+function onLine(line) {
+  if (line[0] === "<") return onStatus(line);
+  if (line === "ok") { if (!job) log(line); return onAck(); }
+  if (line.startsWith("error:")) return onAck(line);
+  log(line);
+  if (line.startsWith("ALARM:")) {
+    const n = +line.slice(6), text = "Авария " + n + (ALARMS[n] ? ": " + ALARMS[n] : "");
+    mach.queue = []; mach.homing = false;
+    if (job) endJob(text + ". Программа прервана.", true); else showMsg(text, true);
+  } else if (/^Grbl /.test(line)) {    // - контроллер перезапустился: всё, что было в его буфере, потеряно
+    startPolling();
+    mach.queue = []; mach.homing = false; mach.wco = [0, 0, 0, 0, 0]; mach.spinOn = false; mach.needSettings = true;
+    if (job) endJob("Контроллер перезапустился, программа прервана.", true);
+  } else {
+    const set = line.match(/^\$32=(\d)/);
+    if (set && $("laser").checked !== (set[1] === "1")) { $("laser").checked = set[1] === "1"; recheck(); }
+  }
+}
+
+async function readLoop() {
+  const dec = new TextDecoder();
+  let buf = "";
+  try {
+    for (;;) {
+      const { value, done } = await mach.reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) { const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1); if (line) onLine(line); }
+    }
+  } catch (e) {}
+  if (!mach.closing) linkLost();
+}
+function linkLost() {
+  if (!mach.connected) return;
+  const wasRunning = !!job;
+  releasePort();
+  job = null;
+  showMsg(wasRunning ? "Связь потеряна во время реза. Контроллер мог продолжить ход: выключите питание струны и станка." : "Связь со станком потеряна.", true);
+  refreshMachine(); render();
+}
+function releasePort() {
+  clearInterval(mach.timer); clearTimeout(mach.stopTimer); mach.timer = mach.stopTimer = null;
+  mach.connected = false; mach.hasPos = false; mach.state = ""; mach.queue = []; mach.homing = false; mach.spinOn = false;
+  const { port, reader, writer } = mach;
+  mach.port = mach.reader = mach.writer = null;
+  (async () => {
+    try { if (reader) await reader.cancel(); } catch (e) {}
+    try { if (reader) reader.releaseLock(); if (writer) writer.releaseLock(); } catch (e) {}
+    try { if (port) await port.close(); } catch (e) {}
+  })();
+}
+async function connectMachine() {
+  if (mach.connected) {
+    if (job) { showMsg("Сначала остановите программу.", true); return; }
+    mach.closing = true; releasePort(); showMsg(""); refreshMachine(); render();
+    return;
+  }
+  if (!("serial" in navigator)) { showMsg("Здесь нет доступа к USB. Откройте D:\\1800mm\\wire_sim.html в Chrome или Edge.", true); return; }
+  let port;
+  try { port = await navigator.serial.requestPort(); }
+  catch (e) {
+    if (e.name !== "NotFoundError") showMsg("Браузер не дал доступ к USB. Откройте D:\\1800mm\\wire_sim.html в Chrome или Edge.", true);
+    return;
+  }
+  try { await port.open({ baudRate: BAUD }); }
+  catch (e) { showMsg("Порт не открылся. Если запущен Candle, закройте его.", true); return; }
+  Object.assign(mach, { port, writer: port.writable.getWriter(), reader: port.readable.getReader(), connected: true, closing: false,
+    tx: Promise.resolve(), queue: [], needSettings: true, linkLost: false, lastStatus: performance.now() + BOOT_MS });
+  playing = false; $("play").textContent = "Пуск";
+  showMsg(""); refreshMachine();
+  readLoop();
+  setTimeout(startPolling, BOOT_MS);
+}
+// - При открытии порта Mega перезагружается: байты в это время держат её в загрузчике, и GRBL не стартует.
+//   Поэтому опрос начинается после приветствия контроллера или, если его нет, через BOOT_MS
+function startPolling() {
+  if (!mach.connected || mach.timer) return;
+  mach.timer = setInterval(() => {
+    realtime(RT_STATUS);
+    // - Во время хоминга контроллер на запросы состояния не отвечает
+    if (!mach.homing && !mach.linkLost && performance.now() - mach.lastStatus > LINK_TIMEOUT_MS) { mach.linkLost = true; showMsg("Контроллер не отвечает.", true); }
+  }, POLL_MS);
+}
+function startJob() {
+  if (!mach.connected || job || !prog) return;
+  const dry = $("gDry").checked, lines = buildStream(currentText, dry);
+  const hasHome = lines.some((l) => /^\$H/i.test(l.text));
+  if (!(mach.state === "Idle" || (mach.state === "Alarm" && hasHome))) {
+    showMsg(mach.state === "Alarm" ? "Станок в аварии: выполните хоминг." :
+      mach.state ? "Станок не готов, состояние контроллера: " + mach.state + "." : "Контроллер не отвечает. Отключите и подключите заново, проверьте питание станка.", true);
+    return;
+  }
+  if (dry && mach.spinOn) { showMsg("Струна включена. Выключите её перед холостым прогоном.", true); return; }
+  const crit = prog.check.warns.filter((w) => w.level === "crit").length;
+  if (crit && !confirm("В проверке программы опасных замечаний: " + crit + ". Всё равно запустить?")) return;
+  if (!confirm(dry ? "Холостой прогон: станок будет двигаться, струна выключена. Запустить?" : "Струна будет включена. Заготовка закреплена, рядом никого нет. Запустить рез?")) return;
+  job = { lines, dry, idx: 0, acked: 0, ackLine: -1, ackMove: -1, moveIdx: 0, syncWait: false, halt: false, paused: false, holdOff: false, doneAt: 0 };
+  simTime = 0; playing = false; $("play").textContent = "Пуск";
+  showMsg(""); log("Старт: " + currentName + (dry ? ", холостой прогон" : ""));
+  refreshMachine(); pump();
+}
+function togglePause() {
+  if (!job || job.halt) return;
+  if (!job.paused) { job.paused = true; realtime(RT_HOLD); $("gPause").textContent = "Продолжить"; return; }
+  if (mach.state !== "Hold:0") { showMsg("Дождитесь полной остановки."); return; }
+  showMsg("");
+  job.paused = false; job.holdOff = false;
+  realtime(RT_RESUME); $("gPause").textContent = "Пауза";
+  pump();
+}
+function refreshMachine() {
+  const on = mach.connected, base = mach.state.split(":")[0];
+  $("gConn").textContent = on ? "Отключить" : "Подключить";
+  const chip = $("gState");
+  chip.textContent = !on ? "нет связи" : mach.state ? (STATES[base] || mach.state) : "жду ответ";
+  chip.className = "state " + (!on ? "off" : base === "Alarm" ? "crit" : base === "Idle" ? "ready" : "on");
+  $("gHome").disabled = $("gUnlock").disabled = $("gCmd").disabled = !on || !!job;
+  $("gStart").disabled = !on || !!job;
+  $("gPause").disabled = !job;
+  $("gStop").disabled = !on;
+  $("gProg").textContent = job ? "Выполнено строк: " + job.acked + " из " + job.lines.length + (job.dry ? " · холостой прогон" : "") : "";
+}
+$("gConn").addEventListener("click", connectMachine);
+$("gHome").addEventListener("click", () => sendLine("$H"));
+$("gUnlock").addEventListener("click", () => sendLine("$X"));
+$("gStart").addEventListener("click", startJob);
+$("gPause").addEventListener("click", togglePause);
+$("gStop").addEventListener("click", () => stopMachine("Остановлено, струна выключена."));
+$("gCmd").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || !e.target.value.trim() || !mach.connected || job) return;
+  sendLine(e.target.value.trim()); e.target.value = "";
+});
+window.addEventListener("beforeunload", (e) => { if (job) e.preventDefault(); });
+refreshMachine();
+
+// ---------------------------------------------------------------------------------------------
+//  Генератор: STEP -> G-code. Тот же алгоритм, что в FM_step.py, FM_lib.py и FM_step2gcode.py
+// ---------------------------------------------------------------------------------------------
+const Gen = (() => {
+  class StepError extends Error {}
+  const EOL = "\r\n";
+
+  // --- Разбор текста STEP
+  const NUMBER = "[-+]?(?:\\d+\\.\\d*|\\.\\d+|\\d+)(?:[eE][-+]?\\d+)?";
+  const TOKEN = new RegExp("'(?:[^']|'')*'|#\\d+|" + NUMBER + "|\\.[A-Z_0-9]+\\.|[A-Z_][A-Z_0-9]*|[(),*$]", "g");
+  const NUM_RE = new RegExp("^" + NUMBER + "$");
+
+  function parseValue(tokens, i) {
+    const token = tokens[i];
+    if (token === "(") {
+      const items = [];
+      i++;
+      while (tokens[i] !== ")") {
+        if (tokens[i] === ",") { i++; continue; }
+        const [value, next] = parseValue(tokens, i);
+        items.push(value); i = next;
+      }
+      return [items, i + 1];
+    }
+    if (token[0] === "'") return [token.slice(1, -1), i + 1];
+    if (token[0] === "#") return [{ id: parseInt(token.slice(1), 10) }, i + 1];
+    if (token === "*" || token === "$") return [null, i + 1];
+    if (token[0] === "." && token[token.length - 1] === "." && token.length > 2) return [token, i + 1];
+    if (NUM_RE.test(token)) return [parseFloat(token), i + 1];
+    if (i + 1 < tokens.length && tokens[i + 1] === "(") {
+      const [args, j] = parseValue(tokens, i + 1);
+      return [{ name: token, args }, j];
+    }
+    return [token, i + 1];
+  }
+  function parseStep(text) {
+    const start = text.indexOf("DATA;");
+    if (start < 0) throw new StepError("Это не файл STEP: нет раздела DATA");
+    const end = text.indexOf("ENDSEC;", start);
+    if (end < 0) throw new StepError("Файл STEP обрезан: нет конца раздела DATA");
+    const entities = new Map();
+    for (const m of (text.slice(start + 5, end) + "\nENDSEC").matchAll(/#(\d+)\s*=\s*([\s\S]*?);(?=\s*(?:#|ENDSEC))/g)) {
+      entities.set(parseInt(m[1], 10), parseValue(m[2].match(TOKEN), 0)[0]);
+    }
+    return entities;
+  }
+
+  // --- B-сплайны
+  const expandKnots = (knots, mults) => knots.flatMap((k, i) => new Array(Math.trunc(mults[i])).fill(k));
+  function findSpan(n, p, u, U) {
+    if (u >= U[n + 1]) return n;
+    if (u <= U[p]) return p;
+    let low = p, high = n + 1, mid = Math.floor((low + high) / 2);
+    while (u < U[mid] || u >= U[mid + 1]) {
+      if (u < U[mid]) high = mid; else low = mid;
+      mid = Math.floor((low + high) / 2);
+    }
+    return mid;
+  }
+  function basis(span, u, p, U) {
+    const N = new Array(p + 1).fill(0), left = new Array(p + 1).fill(0), right = new Array(p + 1).fill(0);
+    N[0] = 1;
+    for (let j = 1; j <= p; j++) {
+      left[j] = u - U[span + 1 - j];
+      right[j] = U[span + j] - u;
+      let saved = 0;
+      for (let r = 0; r < j; r++) {
+        const temp = N[r] / (right[r + 1] + left[j - r]);
+        N[r] = saved + right[r + 1] * temp;
+        saved = left[j - r] * temp;
+      }
+      N[j] = saved;
+    }
+    return N;
+  }
+  class Surface {
+    constructor(udeg, vdeg, grid, uknots, vknots, weights) {
+      this.pu = udeg; this.pv = vdeg; this.P = grid; this.U = uknots; this.V = vknots; this.w = weights;
+      this.nu = grid.length - 1; this.nv = grid[0].length - 1;
+      this.udomain = [uknots[udeg], uknots[this.nu + 1]];
+      this.vdomain = [vknots[vdeg], vknots[this.nv + 1]];
+    }
+    at(u, v) {
+      const su = findSpan(this.nu, this.pu, u, this.U), sv = findSpan(this.nv, this.pv, v, this.V);
+      const Nu = basis(su, u, this.pu, this.U), Nv = basis(sv, v, this.pv, this.V);
+      let x = 0, y = 0, z = 0, d = 0;
+      for (let i = 0; i <= this.pu; i++) {
+        const iu = su - this.pu + i;
+        for (let j = 0; j <= this.pv; j++) {
+          const iv = sv - this.pv + j, c = Nu[i] * Nv[j] * this.w[iu][iv], point = this.P[iu][iv];
+          x += c * point[0]; y += c * point[1]; z += c * point[2]; d += c;
+        }
+      }
+      return [x / d, y / d, z / d];
+    }
+  }
+
+  // --- Модель
+  const dist = (a, b) => { const x = a[0] - b[0], y = a[1] - b[1], z = a[2] - b[2]; return Math.sqrt(x * x + y * y + z * z); };
+  const mid3 = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+  const isTyped = (e) => e !== null && typeof e === "object" && !Array.isArray(e) && e.name !== undefined;
+  const sum2 = (d) => d[0] + d[1];
+
+  class Model {
+    constructor(text) { this.entities = parseStep(text); this.readGeometry(); }
+    get(ref) { return this.entities.get(ref.id); }
+    point(ref) { return this.get(ref).args[1]; }
+    vertex(ref) { return this.point(this.get(ref).args[1]); }
+    surface(ref) {
+      const entity = this.get(ref);
+      let udeg, vdeg, gridRefs, umult, vmult, uknots, vknots, weights = null;
+      if (Array.isArray(entity)) {
+        const part = (name) => entity.find((p) => p.name === name) || null;
+        const base = part("B_SPLINE_SURFACE"), knots = part("B_SPLINE_SURFACE_WITH_KNOTS"), rational = part("RATIONAL_B_SPLINE_SURFACE");
+        if (base === null || knots === null) throw new StepError("#" + ref.id + ": неподдерживаемая поверхность");
+        udeg = Math.trunc(base.args[0]); vdeg = Math.trunc(base.args[1]); gridRefs = base.args[2];
+        [umult, vmult, uknots, vknots] = knots.args;
+        if (rational !== null) weights = rational.args[0];
+      } else {
+        if (entity.name !== "B_SPLINE_SURFACE_WITH_KNOTS") throw new StepError("#" + ref.id + ": тип поверхности " + entity.name + " не поддерживается");
+        udeg = Math.trunc(entity.args[1]); vdeg = Math.trunc(entity.args[2]); gridRefs = entity.args[3];
+        umult = entity.args[8]; vmult = entity.args[9]; uknots = entity.args[10]; vknots = entity.args[11];
+      }
+      const grid = gridRefs.map((row) => row.map((r) => this.point(r)));
+      if (weights === null) weights = grid.map((row) => row.map(() => 1));
+      return new Surface(udeg, vdeg, grid, expandKnots(uknots, umult), expandKnots(vknots, vmult), weights);
+    }
+    readGeometry() {
+      // - Рёбра: начальная и конечная вершины
+      this.edges = new Map();
+      for (const [eid, e] of this.entities) {
+        if (isTyped(e) && e.name === "EDGE_CURVE") this.edges.set(eid, [this.vertex(e.args[1]), this.vertex(e.args[2])]);
+      }
+      // - Грани: поверхность и рёбра внешней и внутренних границ
+      this.facesRaw = [];
+      for (const [fid, f] of this.entities) {
+        if (!isTyped(f) || f.name !== "ADVANCED_FACE") continue;
+        const edgeIds = [];
+        for (const boundRef of f.args[1]) {
+          const bound = this.get(boundRef), loop = this.get(bound.args[1]);
+          for (const orientedRef of loop.args[1]) edgeIds.push(this.get(orientedRef).args[3].id);
+        }
+        this.facesRaw.push({ fid, surf: f.args[2], edgeIds });
+      }
+      if (this.facesRaw.length === 0) throw new StepError("В файле нет граней: ожидается твёрдое тело (MANIFOLD_SOLID_BREP)");
+    }
+    // --- Ось размаха: единственная ось, по которой вершины лежат ровно в двух плоскостях
+    spanAxis() {
+      const points = [...this.edges.values()].flat();
+      const planes = (axis) => [...new Set(points.map((p) => Math.round(p[axis] * 1000) / 1000))].sort((a, b) => a - b);
+      const candidates = [0, 1, 2].filter((axis) => planes(axis).length === 2);
+      if (candidates.length !== 1) throw new StepError("Не удалось определить ось размаха (вершины должны лежать в двух плоскостях профилей)");
+      const values = planes(candidates[0]);
+      return [candidates[0], values[0], values[values.length - 1]];
+    }
+    build() {
+      const [axis, planeA, planeB] = this.spanAxis();
+      const outer = [], holes = [];
+      for (const raw of this.facesRaw) {
+        const face = this.ruledFace(this.surface(raw.surf), axis, planeA, planeB, raw.edgeIds);
+        if (face !== null) (face.closed ? holes : outer).push(face);
+      }
+      return { outer: Model.chain(outer), holes: holes.map((h) => [[h, true]]), axis, planeA, planeB };
+    }
+    ruledFace(surf, axis, planeA, planeB, edgeIds) {
+      // - Параметр размаха: степень 1 и координата по оси размаха меняется вдоль него
+      const uMid = sum2(surf.udomain) / 2, vMid = sum2(surf.vdomain) / 2;
+      let spanIsU = null;
+      if (surf.pu === 1) {
+        const a = surf.at(surf.udomain[0], vMid), b = surf.at(surf.udomain[1], vMid);
+        if (Math.abs(a[axis] - b[axis]) > 1e-6) spanIsU = true;
+      }
+      if (spanIsU === null && surf.pv === 1) {
+        const a = surf.at(uMid, surf.vdomain[0]), b = surf.at(uMid, surf.vdomain[1]);
+        if (Math.abs(a[axis] - b[axis]) > 1e-6) spanIsU = false;
+      }
+      if (spanIsU === null) return null;     // - торцевая грань (лежит в плоскости профиля)
+
+      const sDom = spanIsU ? surf.udomain : surf.vdomain, tDom = spanIsU ? surf.vdomain : surf.udomain;
+      const at = (s, t) => (spanIsU ? surf.at(s, t) : surf.at(t, s));
+
+      // - Значения параметра размаха в плоскостях профилей (координата линейна по параметру размаха)
+      const c0 = at(sDom[0], sum2(tDom) / 2)[axis], c1 = at(sDom[1], sum2(tDom) / 2)[axis];
+      const sA = sDom[0] + (planeA - c0) / (c1 - c0) * (sDom[1] - sDom[0]);
+      const sB = sDom[0] + (planeB - c0) / (c1 - c0) * (sDom[1] - sDom[0]);
+      for (const t of tDom) {
+        if (Math.abs(at(sA, t)[axis] - planeA) > 1e-4 || Math.abs(at(sB, t)[axis] - planeB) > 1e-4) {
+          throw new StepError("Поверхность не линейчатая вдоль размаха: вырезать её проволокой между профилями нельзя");
+        }
+      }
+      const railA = (t) => at(sA, t);
+      let railB = (t) => at(sB, t);
+
+      // - Границы по t по рёбрам в плоскостях профилей
+      let endsA = [], endsB = [], closed = false;
+      for (const eid of edgeIds) {
+        const [v1, v2] = this.edges.get(eid);
+        if (Math.abs(v1[axis] - planeA) < 1e-3 && Math.abs(v2[axis] - planeA) < 1e-3) {
+          if (dist(v1, v2) < 1e-6) closed = true;
+          endsA = [v1, v2];
+        }
+        if (Math.abs(v1[axis] - planeB) < 1e-3 && Math.abs(v2[axis] - planeB) < 1e-3) endsB = [v1, v2];
+      }
+      if (endsA.length === 0 || endsB.length === 0) throw new StepError("Грань без рёбер в плоскостях профилей");
+
+      let skew = 0, t0, t1;
+      if (closed) [t0, t1] = tDom;
+      else {
+        t0 = Model.project(railA, tDom, endsA[0]); t1 = Model.project(railA, tDom, endsA[1]);
+        const u0 = Model.project(railB, tDom, endsB[0]), u1 = Model.project(railB, tDom, endsB[1]);
+
+        // - Грань может быть куском поверхности, обрезанным прямыми рёбрами: её углы в плоскостях A и B лежат
+        //   при немного разных параметрах. Углы увязываем с углами, внутри параметр масштабируем.
+        const aLo = Math.min(t0, t1), aHi = Math.max(t0, t1), bLo = Math.min(u0, u1), bHi = Math.max(u0, u1);
+        skew = Math.max(Math.abs(aLo - bLo), Math.abs(aHi - bHi)) / (aHi - aLo);
+
+        // - Проверка по топологии: углы в плоскостях A и B должны быть соединены боковым ребром грани
+        const sideEdges = [];
+        for (const eid of edgeIds) {
+          const [v1, v2] = this.edges.get(eid);
+          if (Math.abs(v1[axis] - planeA) < 1e-3 && Math.abs(v2[axis] - planeB) < 1e-3) sideEdges.push([v1, v2]);
+          else if (Math.abs(v2[axis] - planeA) < 1e-3 && Math.abs(v1[axis] - planeB) < 1e-3) sideEdges.push([v2, v1]);
+        }
+        const cornersA = t0 <= t1 ? [endsA[0], endsA[1]] : [endsA[1], endsA[0]];
+        const cornersB = u0 <= u1 ? [endsB[0], endsB[1]] : [endsB[1], endsB[0]];
+        for (const k of [0, 1]) {
+          if (!sideEdges.some(([sa, sb]) => dist(cornersA[k], sa) < 0.01 && dist(cornersB[k], sb) < 0.01)) {
+            throw new StepError("Углы грани в плоскостях профилей не соединены боковым ребром: соответствие направляющих неоднозначно");
+          }
+        }
+        if (skew > 1e-6) {
+          const baseB = railB, scale = (bHi - bLo) / (aHi - aLo);
+          railB = (t) => baseB(bLo + (t - aLo) * scale);
+        }
+      }
+      return { A: railA, B: railB, t0, t1, closed, skew };
+    }
+    static project(rail, domain, point, samples = 1500) {
+      let bestT = domain[0], best = 1e18;
+      for (let i = 0; i <= samples; i++) {
+        const t = domain[0] + (domain[1] - domain[0]) * i / samples, d = dist(rail(t), point);
+        if (d < best) { best = d; bestT = t; }
+      }
+      let low = Math.max(domain[0], bestT - (domain[1] - domain[0]) / samples);
+      let high = Math.min(domain[1], bestT + (domain[1] - domain[0]) / samples);
+      for (let i = 0; i < 60; i++) {
+        const m1 = low + (high - low) / 3, m2 = high - (high - low) / 3;
+        if (dist(rail(m1), point) < dist(rail(m2), point)) high = m2; else low = m1;
+      }
+      const t = (low + high) / 2;
+      if (dist(rail(t), point) > 0.01) throw new StepError("Вершина ребра не лежит на направляющей (расстояние " + dist(rail(t), point).toFixed(3) + " мм)");
+      return t;
+    }
+    // --- Замыкает грани в цепочку по совпадающим концам направляющей A
+    static chain(faces) {
+      if (faces.length === 0) throw new StepError("Нет линейчатых граней");
+      const ends = (f) => [f.A(f.t0), f.A(f.t1)];
+      const items = [[faces[0], true]], rest = faces.slice(1);
+      const firstStart = ends(faces[0])[0];
+      let current = ends(faces[0])[1];
+      while (rest.length > 0) {
+        let found = false;
+        for (let i = 0; i < rest.length; i++) {
+          const [s, e] = ends(rest[i]);
+          if (dist(current, s) < 0.01) { items.push([rest[i], true]); current = e; rest.splice(i, 1); found = true; break; }
+          if (dist(current, e) < 0.01) { items.push([rest[i], false]); current = s; rest.splice(i, 1); found = true; break; }
+        }
+        if (!found) throw new StepError("Профиль не образует единую замкнутую цепочку граней");
+      }
+      if (dist(current, firstStart) > 0.01) throw new StepError("Профиль не замкнут");
+      return items;
+    }
+  }
+
+  // --- Дискретизация: делит отрезок, пока стрелка прогиба больше sag либо шаг больше maxStep
+  function sampleFace(face, tFrom, tTo, sag = 0.01, maxStep = 1) {
+    const pair = (t) => [face.A(t), face.B(t)];
+    const result = [pair(tFrom)];
+    const refine = (t0, p0, t1, p1, depth) => {
+      const tm = (t0 + t1) / 2, pm = pair(tm);
+      const deviation = Math.max(dist(pm[0], mid3(p0[0], p1[0])), dist(pm[1], mid3(p0[1], p1[1])));
+      const length = Math.max(dist(p0[0], p1[0]), dist(p0[1], p1[1]));
+      if (depth < 2 || (depth < 18 && (deviation > sag || length > maxStep))) {
+        refine(t0, p0, tm, pm, depth + 1);
+        refine(tm, pm, t1, p1, depth + 1);
+      } else result.push(p1);
+    };
+    refine(tFrom, result[0], tTo, pair(tTo), 0);
+    return result;
+  }
+
+  // --- Участки контура и компенсация толщины реза
+  const segment = (A, B, kind = "face") => ({ A, B, kind, t0: 0, t1: 1 });
+  function faceSegment(face, forward = true) {
+    const t0 = forward ? face.t0 : face.t1, t1 = forward ? face.t1 : face.t0;
+    return segment((u) => face.A(t0 + (t1 - t0) * u), (u) => face.B(t0 + (t1 - t0) * u));
+  }
+  const subSegment = (seg, u0, u1) => segment((u) => seg.A(u0 + (u1 - u0) * u), (u) => seg.B(u0 + (u1 - u0) * u), seg.kind);
+  function startSequence(segments, k, u) {
+    const result = [];
+    if (u < 1 - 1e-9) result.push(subSegment(segments[k], u, 1));
+    result.push(...segments.slice(k + 1), ...segments.slice(0, k));
+    if (u > 1e-9) result.push(subSegment(segments[k], 0, u));
+    return result;
+  }
+  function tangent(f, u, ia, ja, h = 1e-5) {
+    const a = f(Math.max(0, u - h)), b = f(Math.min(1, u + h));
+    const dx = b[ia] - a[ia], dz = b[ja] - a[ja], length = Math.hypot(dx, dz);
+    if (length < 1e-14) throw new StepError("Вырожденный участок контура (нулевая длина)");
+    return [dx / length, dz / length];
+  }
+  function railLength(f, n = 60) {
+    let total = 0, prev = f(0);
+    for (let i = 1; i <= n; i++) { const p = f(i / n); total += dist(prev, p); prev = p; }
+    return total;
+  }
+  function signedArea(segments, rail, ia, ja, n = 60) {
+    const pts = [];
+    for (const seg of segments) for (let i = 0; i < n; i++) pts.push(seg[rail](i / n));
+    let area = 0;
+    pts.forEach((p, i) => { const q = pts[(i + 1) % pts.length]; area += p[ia] * q[ja] - q[ia] * p[ja]; });
+    return area / 2;
+  }
+  const offsetRail = (f, side, distance, ia, ja) => (u) => {
+    const p = [...f(u)], [tx, tz] = tangent(f, u, ia, ja);
+    p[ia] += distance * (-tz) * side;
+    p[ja] += distance * tx * side;
+    return p;
+  };
+  function segmentHit(p1, p2, q1, q2, ia, ja) {
+    const rx = p2[ia] - p1[ia], ry = p2[ja] - p1[ja], sx = q2[ia] - q1[ia], sy = q2[ja] - q1[ja];
+    const denominator = rx * sy - ry * sx;
+    if (Math.abs(denominator) < 1e-18) return null;
+    const qx = q1[ia] - p1[ia], qy = q1[ja] - p1[ja];
+    const a = (qx * sy - qy * sx) / denominator, b = (qx * ry - qy * rx) / denominator;
+    return a >= -1e-9 && a <= 1 + 1e-9 && b >= -1e-9 && b <= 1 + 1e-9 ? [a, b] : null;
+  }
+  function intersectOffsets(g1, g2, ia, ja, length1, length2, window = 10, n = 200) {
+    for (const w of [window, null]) {
+      const w1 = w === null ? 1 : Math.min(1, w / Math.max(length1, 1e-9));
+      const w2 = w === null ? 1 : Math.min(1, w / Math.max(length2, 1e-9));
+      const u1 = [], u2 = [];
+      for (let i = 0; i <= n; i++) { u1.push(1 - w1 + w1 * i / n); u2.push(w2 * i / n); }
+      const p1 = u1.map((u) => g1(u)), p2 = u2.map((u) => g2(u));
+      let best = null, bestCost = 1e18;
+      for (let a = 0; a < n; a++) {
+        for (let b = 0; b < n; b++) {
+          const hit = segmentHit(p1[a], p1[a + 1], p2[b], p2[b + 1], ia, ja);
+          if (hit !== null) {
+            const s1 = u1[a] + hit[0] * (u1[a + 1] - u1[a]), s2 = u2[b] + hit[1] * (u2[b + 1] - u2[b]);
+            const cost = (1 - s1) * length1 + s2 * length2;
+            if (cost < bestCost) { best = [s1, s2]; bestCost = cost; }
+          }
+        }
+      }
+      if (best !== null) return best;
+    }
+    return null;
+  }
+  // - Смещение замкнутого контура в сторону от материала (каждая плоскость профиля отдельно). На выпуклых
+  //   углах вставляется дуга, на внутренних участки подрезаются до пересечения
+  function offsetSegments(segments, axis, distance, materialInside) {
+    const [ia, ja] = [0, 1, 2].filter((k) => k !== axis);
+    const areaA = signedArea(segments, "A", ia, ja), areaB = signedArea(segments, "B", ia, ja);
+    if (areaA * areaB <= 0) throw new StepError("Контур в плоскостях профилей обходится в разные стороны");
+    const ccw = areaA > 0;
+    const side = materialInside ? (ccw ? -1 : 1) : (ccw ? 1 : -1);
+    const count = segments.length, RAILS = ["A", "B"], notes = [];
+    const rails = segments.map((s) => ({ A: offsetRail(s.A, side, distance, ia, ja), B: offsetRail(s.B, side, distance, ia, ja) }));
+    const ranges = segments.map(() => ({ A: [0, 1], B: [0, 1] }));
+    const joins = segments.map(() => ({}));
+    const lengths = segments.map((s) => ({ A: railLength(s.A), B: railLength(s.B) }));
+
+    for (let k = 0; k < count; k++) {
+      const nxt = (k + 1) % count;
+      for (const P of RAILS) {
+        const f1 = segments[k][P], f2 = segments[nxt][P];
+        const [t1x, t1z] = tangent(f1, 1, ia, ja), [t2x, t2z] = tangent(f2, 0, ia, ja);
+        const turn = Math.atan2(t1x * t2z - t1z * t2x, t1x * t2x + t1z * t2z);
+        const corner = f1(1);
+        if (Math.abs(turn) < Math.PI / 180) joins[k][P] = { kind: "point" };
+        else if (side * turn < 0) joins[k][P] = { kind: "arc", center: corner, startAngle: Math.atan2(t1x * side, -t1z * side), turn };
+        else {
+          const hit = intersectOffsets(rails[k][P], rails[nxt][P], ia, ja, lengths[k][P], lengths[nxt][P]);
+          if (hit === null) throw new StepError("Элемент контура у точки (" + corner[ia].toFixed(2) + ", " + corner[ja].toFixed(2) + ") уже толщины реза");
+          ranges[k][P][1] = hit[0]; ranges[nxt][P][0] = hit[1];
+          joins[k][P] = { kind: "point" };
+          const gap = dist(corner, rails[k][P](hit[0])) - distance;
+          if (gap > 0.25) notes.push("Внутренний угол у (" + corner[ia].toFixed(1) + ", " + corner[ja].toFixed(1) + ") в плоскости " + P + ": проволока не дойдёт до вершины на " + gap.toFixed(2) + " мм");
+        }
+      }
+    }
+    // - Сборка: подрезанные участки и дуги между ними
+    const result = [];
+    for (let k = 0; k < count; k++) {
+      for (const P of RAILS) {
+        if (ranges[k][P][0] >= ranges[k][P][1]) throw new StepError("Участок контура полностью съеден толщиной реза: деталь тоньше реза в этом месте");
+      }
+      const trimmed = (P) => { const [lo, hi] = ranges[k][P], g = rails[k][P]; return (u) => g(lo + (hi - lo) * u); };
+      result.push(segment(trimmed("A"), trimmed("B")));
+      if (RAILS.some((P) => joins[k][P].kind === "arc")) {
+        const arc = (P) => {
+          const join = joins[k][P];
+          if (join.kind !== "arc") { const end = trimmed(P)(1); return () => end; }
+          return (u) => {
+            const angle = join.startAngle + join.turn * u, p = [...join.center];
+            p[ia] += distance * Math.cos(angle);
+            p[ja] += distance * Math.sin(angle);
+            return p;
+          };
+        };
+        result.push(segment(arc("A"), arc("B"), "arc"));
+      }
+    }
+    return [result, notes];
+  }
+
+  // --- Блоки G-code
+  const fix2 = (v) => (Object.is(v, -0) ? "-0.00" : v.toFixed(2));
+  const fmtG = (v) => String(+(+v).toPrecision(6));
+  const pyFloat = (v) => (Number.isInteger(v) ? v.toFixed(1) : String(v));
+  const travelPosition = (x1, z1, x2, z2) => "X" + fix2(x1) + " Y" + fix2(z1) + " Z" + fix2(x2) + " A" + fix2(z2);
+  const command = (template, position, feed) => template + " " + position + " F" + pyFloat(feed * 60) + EOL;
+  const rotate = (cfg, angle) => command("G00", "B" + fix2(angle), cfg.FeedRateRotate);
+  const travel = (cfg, kind, yl, zl, yr, zr) => (kind === "cut" ? command("G01", travelPosition(yl, zl, yr, zr), cfg.FeedRateCut) : command("G00", travelPosition(yl, zl, yr, zr), cfg.FeedRateMove));
+
+  class Program {   // - Подстраивает мощность под длину проволоки: S = WireMinPower * длина / FieldWidth, не больше WireMaxPower
+    constructor(cfg, compensate, powerStep) {
+      this.cfg = cfg; this.compensate = compensate; this.powerStep = powerStep;
+      this.pos = null; this.power = cfg.WireMinPower; this.minPower = this.maxPower = this.power; this.changes = 0; this.clipped = false;
+    }
+    wireLength(pos) { const a = pos[0] - pos[2], b = pos[1] - pos[3]; return Math.sqrt(this.cfg.FieldWidth ** 2 + a * a + b * b); }
+    powerFor(length) {
+      let power = this.cfg.WireMinPower * length / this.cfg.FieldWidth;
+      if (power > this.cfg.WireMaxPower) { this.clipped = true; power = this.cfg.WireMaxPower; }
+      return Math.max(power, this.cfg.WireMinPower);
+    }
+    travel(kind, yl, zl, yr, zr) {
+      const target = [yl, zl, yr, zr];
+      let g = "";
+      if (kind === "cut" && this.compensate) {
+        // - Длиннее из двух положений (начало и конец шага), чтобы не недогреть проволоку
+        const length = this.pos === null ? this.wireLength(target) : Math.max(this.wireLength(target), this.wireLength(this.pos));
+        const power = this.powerFor(length);
+        if (Math.abs(power - this.power) >= this.powerStep) {
+          g += "M03 S" + power.toFixed(2) + EOL;
+          this.power = power; this.changes++;
+          this.minPower = Math.min(this.minPower, power); this.maxPower = Math.max(this.maxPower, power);
+        }
+      }
+      this.pos = target;
+      return g + travel(this.cfg, kind, yl, zl, yr, zr);
+    }
+  }
+  function startBlock(cfg) {
+    return "; *** START BLOCK ***" + EOL + "$H" + EOL + "G21 G90 G94" + EOL +
+      "G92 " + travelPosition(cfg.HomingX1, cfg.HomingZ1, cfg.HomingX2, cfg.HomingZ2) + " B" + fix2(cfg.HomingR1) + EOL +
+      travel(cfg, "move", cfg.ParkX, cfg.ParkZ, cfg.ParkX, cfg.ParkZ) + rotate(cfg, cfg.ParkR1) +
+      "M03 S" + cfg.WireMinPower.toFixed(2) + EOL;
+  }
+  function endBlock(cfg) {
+    return ";" + EOL + "; *** END BLOCK ***" + EOL + "M05" + EOL +
+      travel(cfg, "move", cfg.ParkX, cfg.ParkZ, cfg.ParkX, cfg.ParkZ) + rotate(cfg, cfg.ParkR1);
+  }
+  function trimBlock(cfg, trim, prog) {
+    const safe = trim.BottomZ + trim.Height + cfg.TravelClearance, y0 = trim.Length / 2 - trim.TrimEnds;
+    let g = ";" + EOL + "; *** TRIM BLOCK: L=" + fmtG(trim.Length) + " W=" + fmtG(trim.Width) + " H=" + fmtG(trim.Height) + ", LongAxis=Y ***" + EOL;
+    for (const y of [-y0, y0]) {
+      const yOut = y + (y < 0 || Object.is(y, -0) ? -trim.RetractOffset : trim.RetractOffset);
+      g += "; - Trim Y=" + fix2(y) + " at angle 0" + EOL;
+      g += prog.travel("move", y, safe, y, safe);                 // - к точке входа на высоте холостых ходов
+      g += prog.travel("cut", y, trim.BottomZ, y, trim.BottomZ);  // - рез вниз
+      g += prog.travel("cut", yOut, trim.BottomZ, yOut, trim.BottomZ);   // - отвод от центра, в отход
+      g += prog.travel("cut", yOut, safe, yOut, safe);            // - подъём уже вне чистого реза
+    }
+    return g;
+  }
+  function checkTrim(cfg, trim) {
+    const errors = [], halfY = cfg.HorizontalTravel / 2, top = trim.BottomZ + trim.Height;
+    if (Math.min(trim.Length, trim.Width, trim.Height) <= 0) return ["Размеры заготовки должны быть положительными"];
+    if (trim.TrimEnds > 0) {
+      const y = trim.Length / 2 - trim.TrimEnds, yOut = y + trim.RetractOffset;
+      if (Math.abs(y) > halfY) errors.push("Рез Y=" + y.toFixed(2) + " выходит за ход каретки +-" + halfY.toFixed(1));
+      if (Math.abs(yOut) > halfY) errors.push("Отвод Y=" + yOut.toFixed(2) + " выходит за ход каретки +-" + halfY.toFixed(1));
+    }
+    if (trim.TrimEnds >= trim.Length / 2) errors.push("Припуск на подрезку больше половины размера заготовки");
+    if (top + cfg.TravelClearance > cfg.VerticalTravel) errors.push("Высота холостых ходов Z=" + (top + cfg.TravelClearance).toFixed(1) + " больше хода каретки " + cfg.VerticalTravel.toFixed(1));
+    if (trim.BottomZ < 0) errors.push("Низ заготовки меньше 0: ниже хода каретки");
+    return errors;
+  }
+
+  // --- Контуры
+  function sampleSequence(segments, sag, maxStep, minStep = 0.02) {
+    // - Близкие точки отбрасываются: микрошаг назад на стыке граней заставил бы станок затормозить до нуля
+    const points = [];
+    for (const seg of segments) {
+      for (const p of sampleFace(seg, 0, 1, sag, maxStep)) {
+        const last = points[points.length - 1];
+        if (!last || Math.max(dist(last[0], p[0]), dist(last[1], p[1])) > minStep) points.push(p);
+      }
+    }
+    return points;
+  }
+  function prepareContour(segments, axis, kerf, materialInside, notes) {
+    if (kerf <= 0) return segments;
+    const [result, contourNotes] = offsetSegments(segments, axis, kerf / 2, materialInside);
+    notes.push(...contourNotes);
+    return result;
+  }
+  // - gap: высоты [левая башня, правая] в зазоре между деталями пары, откуда струна подходит к отверстию;
+  //   null - подход сверху. fromBelow: вход снизу, в самую низкую точку контура (верхняя деталь пары)
+  function holeBlock(safe, prog, face, layout, axis, kerf, notes, sag, maxStep, gap = null, fromBelow = false) {
+    const segments = prepareContour([faceSegment(face)], axis, kerf, false, notes);
+    // - Старт: точка, в которой контур наивысший на станке (при входе снизу - наинизший)
+    let best = [0, 0], bestZ = -1e18;
+    segments.forEach((seg, k) => {
+      for (let i = 0; i <= 360; i++) {
+        const u = i / 360, [[, zl], [, zr]] = layout.towers(seg.A(u), seg.B(u));
+        const z = (fromBelow ? -1 : 1) * (zl + zr) / 2;
+        if (z > bestZ) { best = [k, u]; bestZ = z; }
+      }
+    });
+    const towers = sampleSequence(startSequence(segments, best[0], best[1]), sag, maxStep).map(([a, b]) => layout.towers(a, b));
+    const [[yl, zl], [yr, zr]] = towers[0];
+    let g = ";" + EOL + "; *** HOLE: " + towers.length + " points, kerf " + kerf.toFixed(2) + " ***" + EOL;
+    const [levelL, levelR] = gap === null ? [safe, safe] : gap;
+    g += prog.travel(gap === null ? "move" : "cut", yl, levelL, yr, levelR);
+    g += prog.travel("cut", yl, zl, yr, zr);               // - по щели до контура
+    for (const [[yl2, zl2], [yr2, zr2]] of towers.slice(1)) g += prog.travel("cut", yl2, zl2, yr2, zr2);
+    g += prog.travel("cut", yl, levelL, yr, levelR);       // - обратно по той же щели
+    return [g, towers];
+  }
+  function profileBlock(safe, prog, contour, layout, axis, kerf, notes, side, stockWidth, margin, sag, maxStep) {
+    const segments = prepareContour(contour.map(([f, fw]) => faceSegment(f, fw)), axis, kerf, true, notes);
+    // - Участок грани, лежащий дальше всех в сторону входа; середина его - точка входа
+    let start = -1, bestY = -Infinity;
+    segments.forEach((seg, k) => {
+      if (seg.kind !== "face") return;
+      const y = side * layout.machine(seg.A(0.5))[1];
+      if (y > bestY) { bestY = y; start = k; }
+    });
+    const towers = sampleSequence(startSequence(segments, start, 0.5), sag, maxStep).map(([a, b]) => layout.towers(a, b));
+    const yOut = side * (stockWidth / 2 + margin);
+    const [[yl, zl], [yr, zr]] = towers[0];
+    let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", lead-in from Y=" + yOut.toFixed(1) + " ***" + EOL;
+    g += prog.travel("move", yOut, safe, yOut, safe);
+    g += prog.travel("cut", yOut, zl, yOut, zr);           // - вниз снаружи заготовки
+    g += prog.travel("cut", yl, zl, yr, zr);               // - подход к контуру по щели
+    for (const [[yl2, zl2], [yr2, zr2]] of towers.slice(1)) g += prog.travel("cut", yl2, zl2, yr2, zr2);
+    g += prog.travel("cut", yOut, zl, yOut, zr);           // - обратно по щели наружу
+    g += prog.travel("cut", yOut, safe, yOut, safe);       // - вверх вне детали
+    return [g, towers];
+  }
+
+  // --- Программа целиком
+  const CONFIG = {
+    HorizontalTravel: 490, VerticalTravel: 235, FieldWidth: 374,
+    HomingX1: 249, HomingZ1: 238, HomingX2: 245, HomingZ2: 236, HomingR1: -7.3, ParkX: 240, ParkZ: 235, ParkR1: 0,
+    TravelClearance: 20, FeedRateCut: 7, FeedRateMove: 14, FeedRateRotate: 30, WireMinPower: 500, WireMaxPower: 1000,
+  };
+  function buildProgram(text, fileName, o) {
+    const cfg = { ...CONFIG, TravelClearance: o.clearance, FeedRateCut: o.feed, WireMinPower: o.minS, WireMaxPower: o.maxS };
+    const warnings = [], [stockLength, stockWidth, stockHeight] = o.stock, kerf = o.kerf, sag = 0.01, maxStep = 1, RadialMargin = 2;
+    const model = new Model(text), { outer, holes, axis, planeA, planeB } = model.build();
+    if (axis !== 1) throw new StepError("Пока поддерживается только размах вдоль оси Y модели (найдена ось " + "XYZ"[axis] + ")");
+
+    // - Габарит детали по направляющим
+    const xs = [], zs = [], zsA = [], zsB = [];
+    for (const [face] of outer) for (const [a, b] of sampleFace(face, face.t0, face.t1, 0.05, 5)) { xs.push(a[0], b[0]); zs.push(a[2], b[2]); zsA.push(a[2]); zsB.push(b[2]); }
+    const part = { x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs), span: planeB - planeA };
+    if (part.x1 - part.x0 > stockWidth || part.z1 - part.z0 > stockHeight || part.span > stockLength) {
+      throw new Error("Деталь " + part.span.toFixed(1) + " x " + (part.x1 - part.x0).toFixed(1) + " x " + (part.z1 - part.z0).toFixed(1) +
+        " не помещается в заготовку " + stockLength.toFixed(1) + " x " + stockWidth.toFixed(1) + " x " + stockHeight.toFixed(1));
+    }
+    const xc = (part.x0 + part.x1) / 2, yc = (planeA + planeB) / 2, zc = (part.z0 + part.z1) / 2;
+    const half = cfg.FieldWidth / 2;
+    // - spanSign и chordSign меняют стороны размаха и хорды, zSign отражает по высоте, zMid - высота середины детали
+    const makeLayout = (spanSign, chordSign, zSign, zMid) => ({
+      machine: (p) => [spanSign * (p[1] - yc), chordSign * (p[0] - xc), zSign * (p[2] - zc) + zMid],
+      towers(a, b) {    // - положение концов проволоки на башнях для прямой через точки a и b
+        const ma = this.machine(a), mb = this.machine(b);
+        const at = (x) => { const s = (x - ma[0]) / (mb[0] - ma[0]); return [ma[1] + s * (mb[1] - ma[1]), ma[2] + s * (mb[2] - ma[2])]; };
+        return [at(-half), at(half)];
+      },
+    });
+
+    // --- Торцевание до размера детали по размаху (стол 0: размах вдоль Y каретки)
+    const trim = { Length: stockLength, Width: stockWidth, Height: stockHeight, TrimEnds: (stockLength - part.span) / 2 - kerf / 2, BottomZ: o.bottomZ, RetractOffset: o.retract };
+    const errors = checkTrim(cfg, trim);
+    if (errors.length) throw new Error(errors.join("; "));
+    if (trim.TrimEnds > 0 && Math.abs(trim.Length / 2 - trim.TrimEnds) < 0.01) warnings.push("Рез идёт через ось стола: припуск больше половины размера");
+    // - Стол вращается после торцевания, поэтому зазор до башни считаем по размеру после среза
+    const radius = Math.hypot(part.span, stockWidth) / 2;
+    if (cfg.ParkX - radius < RadialMargin) warnings.push("При повороте на 90 радиус заготовки " + radius.toFixed(1) + " мм, каретки отведены только на " + cfg.ParkX.toFixed(1) + " мм: проверьте зазор");
+
+    // - Шапка: сведения для симулятора и для человека
+    let program = "; FM_step2gcode: " + fileName + (o.pair ? " (pair: upper reflected over gap, turned 180)" : o.mirror ? " (mirror)" : "") + EOL;
+    program += "; STOCK L=" + fmtG(stockLength) + " W=" + fmtG(stockWidth) + " H=" + fmtG(stockHeight) + " Z0=" + fmtG(o.bottomZ) + EOL;
+    program += "; CUT F=" + fmtG(cfg.FeedRateCut) + " mm/s S=" + fmtG(cfg.WireMinPower) + ".." + fmtG(cfg.WireMaxPower) + " kerf=" + fmtG(kerf) + EOL;
+    program += startBlock(cfg);
+    const prog = new Program(cfg, o.powerComp, 5);
+    if (trim.TrimEnds > 0) program += trimBlock(cfg, trim, prog);
+    const allTowers = [], safe = o.bottomZ + stockHeight + cfg.TravelClearance;
+    // - Перед поворотом каретки уходят от центра в сторону дома: угол заготовки описывает окружность вокруг оси стола
+    program += ";" + EOL + "; - Rotation 90" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe) + rotate(cfg, 90);
+    const addHole = (hole, layout, gap, fromBelow) => {
+      const [block, towers] = holeBlock(safe, prog, hole[0][0], layout, axis, kerf, warnings, sag, maxStep, gap, fromBelow);
+      program += block; allTowers.push(...towers);
+    };
+    const addProfile = (layout, side) => {
+      const [block, towers] = profileBlock(safe, prog, outer, layout, axis, kerf, warnings, side, stockWidth, o.leadMargin, sag, maxStep);
+      program += block; allTowers.push(...towers);
+    };
+    if (o.pair) {
+      // - Щели к отверстиям идут из зазора между деталями: сверху вниз к нижней нельзя, щель прошла бы через верхнюю.
+      //   Наружный контур верхней режется первым: освобождённая нижняя деталь просела бы вместе с блоком над ней
+      //   Верхняя - нижняя, отражённая по высоте и развёрнутая на 180 градусов в плане: толстый корень
+      //   ложится над тонким концом, щели обеих выходят на одну сторону крыла, вход в контур - с той же кромки
+      const zA = (list) => list.map((z) => z - zc);
+      const lowA = Math.min(...zA(zsA)) - kerf / 2, lowB = Math.min(...zA(zsB)) - kerf / 2;
+      const topA = Math.max(...zA(zsA)) + kerf / 2, topB = Math.max(...zA(zsB)) + kerf / 2;
+      const low = Math.min(lowA, lowB), reach = half / (part.span / 2);
+      const free = stockHeight + 2 * low - (topA + topB);   // - сумма зазора и двух припусков, разделим поровну
+      const MinGap = 3, space = free / 3;
+      if (space < MinGap) throw new Error("Две детали не помещаются по высоте: нужна заготовка от " + Math.ceil(stockHeight - free + 3 * MinGap) + " мм");
+      const zLower = o.bottomZ + space - low, zUpper = o.bottomZ + stockHeight - space + low;
+      const lower = makeLayout(-1, 1, 1, zLower), upper = makeLayout(1, -1, -1, zUpper);
+      // - Середина зазора наклонена, как клин между деталями; на башнях она лежит на продолжении этой прямой
+      const gapMid = (zLower + zUpper) / 2, gapTilt = (topA - topB) / 2 * reach;
+      const gap = [gapMid - gapTilt, gapMid + gapTilt], yOut = o.side * (stockWidth / 2 + o.leadMargin);
+      if (holes.length > 0) {
+        program += ";" + EOL + "; *** GAP ENTRY: Z=" + fix2(gap[0]) + "/" + fix2(gap[1]) + " ***" + EOL;
+        program += prog.travel("move", yOut, safe, yOut, safe) + prog.travel("cut", yOut, gap[0], yOut, gap[1]);
+        allTowers.push([[yOut, gap[0]], [yOut, gap[1]]]);
+        for (const hole of holes) { addHole(hole, upper, gap, true); addHole(hole, lower, gap, false); }
+        program += prog.travel("cut", yOut, gap[0], yOut, gap[1]) + prog.travel("cut", yOut, safe, yOut, safe);
+      }
+      addProfile(upper, -o.side);
+      addProfile(lower, o.side);
+    } else {
+      const layout = makeLayout(o.mirror ? 1 : -1, 1, 1, o.bottomZ + stockHeight / 2);   // - зеркало: корень и конец меняются башнями
+      for (const hole of holes) addHole(hole, layout, null, false);
+      addProfile(layout, o.side);
+    }
+    program += endBlock(cfg);
+
+    // --- Проверка пределов хода
+    const halfY = cfg.HorizontalTravel / 2;
+    for (const [[yl, zl], [yr, zr]] of allTowers) {
+      if (Math.abs(yl) > halfY || Math.abs(yr) > halfY || Math.min(zl, zr) < 0 || Math.max(zl, zr) > cfg.VerticalTravel) {
+        throw new Error("Контур выходит за ход кареток: Y=(" + yl.toFixed(1) + ", " + yr.toFixed(1) + ") Z=(" + zl.toFixed(1) + ", " + zr.toFixed(1) + ")");
+      }
+    }
+    if (prog.clipped) warnings.push("Мощность проволоки упёрлась в максимум S=" + fmtG(cfg.WireMaxPower) + ": проволока слишком длинная для этой формулы");
+    return { program, warnings: [...new Set(warnings)], part, points: allTowers.length, holes: holes.length, power: [prog.minPower, prog.maxPower, prog.changes] };
+  }
+  return { buildProgram, CONFIG };
+})();
+
+// ---------------------------------------------------------------------------------------------
+//  Вкладки и экран генератора
+// ---------------------------------------------------------------------------------------------
+let stepFile = null;        // - открытый STEP: { name, text }
+function showTab(tab) {
+  const gen = tab === "gen";
+  $("panelGen").hidden = !gen; $("panelCut").hidden = gen;
+  $("tabGen").setAttribute("aria-pressed", String(gen)); $("tabCut").setAttribute("aria-pressed", String(!gen));
+  for (const el of document.querySelectorAll(".cut-only")) el.hidden = gen;
+}
+function openStep(file, handle = null) {
+  const rd = new FileReader();
+  rd.onload = () => {
+    stepFile = { name: file.name, text: String(rd.result), handle };
+    $("gnFile").textContent = file.name;
+    $("gnGo").disabled = $("gnMirror").disabled = $("gnPair").disabled = false;
+    $("gnStatus").textContent = ""; $("gnOut").textContent = ""; $("gnWarn").innerHTML = ""; $("gnDone").hidden = true;
+  };
+  rd.readAsText(file, "latin1");
+}
+function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зеркальная деталь над обычной)
+  if (!stepFile) return;
+  const status = $("gnStatus");
+  if (job) { status.textContent = "Идёт рез: дождитесь конца программы."; status.className = "note crit"; return; }
+  const n = (id) => parseFloat($(id).value);
+  const ul = $("gnWarn"); ul.innerHTML = "";
+  $("gnDone").hidden = true;
+  try {
+    const r = Gen.buildProgram(stepFile.text, stepFile.name, {
+      stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
+      clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair",
+    });
+    const outName = stepFile.name.replace(/\.(stp|step)$/i, "") + (mode === "normal" ? "" : "_" + mode) + "_auto.gcode";
+    $("gnOut").textContent = outName;
+    loadProgram(r.program, outName);
+    setCamera("3d");
+    const p = r.part;
+    status.className = "note";
+    status.textContent = { normal: "Деталь", mirror: "Зеркальная деталь", pair: "Пара, зеркальная над обычной" }[mode] + ": размах " + p.span.toFixed(1) + ", хорда " + (p.x1 - p.x0).toFixed(1) + ", толщина " + (p.z1 - p.z0).toFixed(1) +
+      "; отверстий: " + r.holes + ". Точек контуров: " + r.points + ", строк: " + (r.program.split("\n").length - 1) +
+      ". Мощность S " + r.power[0].toFixed(0) + "…" + r.power[1].toFixed(0) + ", изменений: " + r.power[2] + ". Время ≈ " + fmtTime(prog.total) + ".";
+    for (const w of r.warnings) { const li = document.createElement("li"); li.className = "warn"; const d = document.createElement("div"); d.textContent = w; li.appendChild(d); ul.appendChild(li); }
+    $("gnDone").hidden = false;
+  } catch (e) {
+    status.className = "note crit";
+    status.textContent = "Не удалось: " + e.message;
+  }
+}
+$("tabGen").addEventListener("click", () => showTab("gen"));
+$("tabCut").addEventListener("click", () => showTab("cut"));
+$("gnInput").addEventListener("change", (e) => { if (e.target.files[0]) openStep(e.target.files[0]); });
+// - Окно выбора с доступом к файлу нужно, чтобы потом сохранить G-code в ту же папку
+$("gnInput").addEventListener("click", async (e) => {
+  if (!window.showOpenFilePicker) return;
+  e.preventDefault();
+  try {
+    const [handle] = await showOpenFilePicker({ types: [{ description: "STEP", accept: { "application/octet-stream": [".stp", ".step"] } }] });
+    openStep(await handle.getFile(), handle);
+  } catch (err) {
+    if (err.name !== "AbortError") { $("gnStatus").className = "note crit"; $("gnStatus").textContent = "Файл не открылся: " + err.message; }
+  }
+});
+$("panelGen").addEventListener("dragover", (e) => e.preventDefault());
+$("panelGen").addEventListener("drop", async (e) => {
+  e.preventDefault();
+  const item = e.dataTransfer.items[0], f = e.dataTransfer.files[0];
+  const pending = item && item.getAsFileSystemHandle ? item.getAsFileSystemHandle() : null;   // - только синхронно, в самом событии
+  if (f) openStep(f, await Promise.resolve(pending).catch(() => null));
+});
+$("gnGo").addEventListener("click", () => generate("normal"));
+$("gnMirror").addEventListener("click", () => generate("mirror"));
+$("gnPair").addEventListener("click", () => generate("pair"));
+$("gnToCut").addEventListener("click", () => showTab("cut"));
+$("gnSave").addEventListener("click", async () => { await saveProgram(); $("gnStatus").textContent = $("tNote").textContent; });
+showTab("gen");
+
+function frame(now) {
+  if (playing && prog) {
+    simTime += (now - lastFrame) / 1000 * (+$("speed").value);
+    if (simTime >= prog.total) { simTime = prog.total; playing = false; $("play").textContent = "Пуск"; }
+    render();
+  }
+  lastFrame = now;
+  controls.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+resize();
+setCamera("3d");
+loadProgram($("sample").textContent, "пример: W2_auto.gcode");
+// - Открываем пример на середине профиля, чтобы сразу было видно след реза
+if (prog) { simTime = prog.total * 0.8; render(); }
+requestAnimationFrame(frame);
+</script>
+
+</body>
+</html>
