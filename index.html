@@ -1400,7 +1400,7 @@ function applyTemperature() {
 }
 // - Локальная копия сохраняет файл сама; на claude.ai сохранение идёт через downloads (только разрешённые
 //   расширения, .gcode среди них нет - файл получает .txt)
-const isLocalFile = location.protocol === "file:" || location.hostname === "localhost";
+const isLocalFile = !window.claude;   // - на любом обычном сайте, с диска и с localhost файл сохраняется напрямую
 let downloadsNs = null;
 if (!isLocalFile) {
   $("tSave").hidden = true;
