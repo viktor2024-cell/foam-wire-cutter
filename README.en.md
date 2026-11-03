@@ -47,3 +47,9 @@ The `lib/` folder (three.js r128, MIT license: `lib/three.LICENSE`) is required 
 | `FM_lib.py` | machine settings and G-code blocks (start, end, face trimming) |
 | `materials.json` | cutting settings for different foams |
 | `lib/` | three.js library for the 3D view |
+
+## License
+
+[MIT](LICENSE). The three.js library in `lib/` is distributed under its own MIT license: `lib/three.LICENSE`.
+
+> The software drives a heated wire and the machine's moving parts. You use it at your own risk; the license provides the code "as is", without warranty.
