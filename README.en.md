@@ -2,6 +2,22 @@
 
 # Foam Wire Cutter
 
+**From a STEP file to the cut in one window**
+
+Getting from a model to the machine used to go like this: run macros in FreeCAD that build the G-code, then open Candle and send it to the machine. Candle is made for ordinary CNC machines, so it only shows toolpath lines and not how a wire cut actually proceeds. You had to take the code on trust.
+
+Now it all happens on one browser page.
+
+- **Load a STEP file, get G-code.** One part, or two from the same stock block, one of them mirrored: for example, the left and right wing panels. The "Зеркало" (Mirror) button does that for you.
+- **See the cut before you run it.** The program opens in 3D and you can play it back on screen: view it from above, along the wire, or in 3D.
+- **Control the machine from the same page.** USB connection, homing, start and pause, all in one tab.
+- **Nothing to install.** Open `index.html` in Chrome or Edge. No internet connection is needed either: everything required is in the folder.
+- **Open code.** Read it, adapt it to your machine, and see exactly what goes into the G-code.
+
+Before: FreeCAD, macros, Candle and guessing the toolpath. Now: one file, a clear picture and fewer ruined stock blocks.
+
+---
+
 Software for a hot-wire foam cutting machine with a rotary table (GRBL, XYZAB axes).
 
 > ⚠️ **Emergency stop is the physical key or the power switch only.** The "Stop" button on the page is not an emergency stop.
