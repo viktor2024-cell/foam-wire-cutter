@@ -19,10 +19,6 @@
 
 Папка `lib/` (three.js r128, лицензия MIT — `lib/three.LICENSE`) нужна для 3D-вида, держите её рядом с `index.html`.
 
-### Python-генератор
-
-Резервный вариант без браузера. Нужен Python 3, сторонние пакеты не требуются.
-
 ```
 python FM_step2gcode.py деталь.stp --stock 340 230 50 --bottom-z 10
 ```
