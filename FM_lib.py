@@ -11,8 +11,8 @@ import math
 # - Значения по умолчанию взяты из FM_Init.FCMacro
 DEFAULT_CONFIG = {
   "HorizontalTravel": 490.0,    # - ход по Y: от -245 до +245
-  "VerticalTravel":   235.0,    # - ход по Z: от 0 до 235
-  "FieldWidth":       374.0,    # - расстояние между башнями по X: +-187
+  "VerticalTravel":   250.0,    # - подтверждённый ход по Z: от 0 до 250
+  "FieldWidth":       370.0,    # - подтверждённое расстояние между башнями по X: +-185
 
   "X1AxisName": "X", "Z1AxisName": "Y", "X2AxisName": "Z", "Z2AxisName": "A", "R1AxisName": "B",
 

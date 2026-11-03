@@ -28,10 +28,10 @@ test('no trimming: no B90, stock metadata agrees with simulator X=W Y=L',()=>{
 });
 test('every Program move is checked, including lead-in and park',()=>{
  assert.throws(()=>build({leadMargin:300}),/Перемещение выходит/);
- assert.throws(()=>build({stock:[50,140,230],bottomZ:0}),/250.*235/);
+ assert.throws(()=>build({stock:[50,140,240],bottomZ:0}),/260.*250/);
  const p=new gen.Program(gen.CONFIG,true,5);
  gen.startBlock(gen.CONFIG,p);assert.equal(p.pos.join(','),'240,235,240,235');
- assert.throws(()=>p.travel('move',0,236,0,236),/Перемещение выходит/);
+ assert.throws(()=>p.travel('move',0,251,0,251),/Перемещение выходит/);
  assert.equal(p.pos.join(','),'240,235,240,235');
  p.travel('cut',20,50,20,50);gen.endBlock(gen.CONFIG,p);assert.equal(p.pos.join(','),'240,235,240,235');
 });
@@ -49,10 +49,36 @@ test('external F1 regression (file is never committed)',{skip:!process.env.F1_ST
 const sim=vm.runInNewContext(html.slice(html.indexOf('function parseGcode('),html.indexOf('const css ='))+';({parseGcode,analyse})');
 test('production simulator agrees with generated stock and rejects unsafe rapid moves',()=>{
  const p=sim.parseGcode(build().program);
- const s={...p.stock,FW:374,HT:490,VT:235,angle:45,invB:false,laser:false};
+ const s={...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false};
  const check=sim.analyse(p,s);
  assert.equal(p.moves.length,410);assert.ok(p.total>0);assert.ok(check.trail.length>0);
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0);
  const bad=sim.parseGcode('; STOCK L=140 W=50 H=60 Z0=10\nG92 X0 Y100 Z0 A100 B0\nG00 X0 Y20 Z0 A20 F600\n');
  assert.ok(sim.analyse(bad,s).warns.some(w=>w.level==='crit'&&w.text.includes('G0')));
+});
+test('right-side entry stays outside stock on rapids and needs no overhead height',()=>{
+ const r=build({stock:[50,140,240],bottomZ:10,sideEntry:true});
+ const p=sim.parseGcode(r.program),s={...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false};
+ assert.equal(sim.analyse(p,s).warns.filter(w=>w.level==='crit').length,0);
+ assert.doesNotMatch(r.program,/TRIM BLOCK|B90/);
+ assert.ok(p.moves.every(m=>Math.max(m.to.Y,m.to.A)<=250));
+ // Approach and return are on the right, all rapid destinations outside the stock width.
+ assert.ok(p.moves.filter(m=>m.type==='G0').every(m=>m.to.X>70&&m.to.Z>70));
+ assert.throws(()=>build({sideEntry:true,side:-1}),/Боковой вход/);
+ assert.throws(()=>build({sideEntry:true,trim:true}),/Боковой вход/);
+ assert.throws(()=>build({sideEntry:true,pair:true}),/Боковой вход/);
+ assert.throws(()=>build({sideEntry:true,stock:[50,480,60]}),/коридора/);
+ assert.throws(()=>build({sideEntry:true,stock:[50,140,250],bottomZ:10}),/Верх заготовки/);
+});
+test('external F1: 400×240×50, right-side path at B0 fits confirmed machine',{skip:!process.env.F1_STEP},()=>{
+ const text=fs.readFileSync(process.env.F1_STEP,'utf8');
+ const r=gen.buildProgram(text,'F1.stp',options({stock:[50,400,240],bottomZ:10,sideEntry:true}));
+ const p=sim.parseGcode(r.program),s={...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false};
+ const check=sim.analyse(p,s);assert.equal(check.warns.filter(w=>w.level==='crit').length,0);
+ assert.doesNotMatch(r.program,/TRIM BLOCK|B90/);
+ assert.ok(p.moves.every(m=>Math.abs(m.to.X)<=245&&Math.abs(m.to.Z)<=245&&Math.min(m.to.Y,m.to.A)>=0&&Math.max(m.to.Y,m.to.A)<=250));
+ assert.ok(p.moves.filter(m=>m.type==='G0').every(m=>m.to.X>=205&&m.to.Z>=205));
+ assert.ok(p.moves.filter(m=>m.wire&&m.type==='G1').every(m=>m.to.B===0));
+ if(process.env.F1_GCODE_OUT) fs.writeFileSync(process.env.F1_GCODE_OUT,r.program);
+ console.log('F1 simulation',JSON.stringify({points:r.points,moves:p.moves.length,seconds:p.total,warnings:check.warns.map(w=>({level:w.level,text:w.text})),generatorWarnings:r.warnings}));
 });

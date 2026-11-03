@@ -1,6 +1,6 @@
 # Issue #1: F1 on-edge stock validation
 
-Result: **rejected; no machining G-code is produced for F1 under the requested conditions**. The source STEP is private to the task and is not included in the repository. No physical machine was connected.
+Original 340×230×50 stock: **rejected**. Updated user-confirmed 400×240×50 stock: **generation and browser simulation pass with right-side entry**, as detailed below. The source STEP is private to the task and is not included in the repository. No physical machine was connected.
 
 ## Geometry and placement
 
@@ -20,13 +20,28 @@ At table 0°, model Y maps along the wire (machine X), model X maps horizontally
 
 For centered placement with bottom Z=0, the model occupies horizontal [-190.324184, +190.324184] and vertical [4.137107, 225.862893] mm. Stock occupies horizontal [-170,+170], vertical [0,230]. Minimum horizontal allowance is **-20.324184 mm** (fails), vertical allowance is 4.137107 mm, and along-wire allowance is 0 mm. A 1 mm kerf further consumes approximately 0.5 mm of allowance. These values describe geometric placement, not a certified usable cutting path.
 
-## Motion and machine limits
+## Updated stock and confirmed machine
 
-Machine parameters remain unchanged: field width 374 mm, horizontal travel ±245 mm, vertical travel 0–235 mm, clearance 20 mm. Even with stock bottom Z=0, the required overhead move is **250 mm**, exceeding vertical travel by **15 mm**. At the UI default bottom Z=10, it is 260 mm (excess 25 mm); stock top is already 240 mm. Changing the stock interpretation does not solve either incompatibility.
+The user subsequently confirmed the machine working area as **490 mm horizontal × 250 mm vertical × 370 mm along the wire**, and changed the stock to **400×240×50 mm**. Browser generator/simulator and Python shared machine defaults now use 250 mm vertical travel and 370 mm field width. Homing offsets and park coordinates remain at their existing calibrated values; no new limit-switch positions were invented.
 
-The generator stops at the geometry-fit check before it emits an executable result, so there is no valid F1 toolpath, entry/exit, or cutting simulation to approve. Enlarging the stock or changing machine travel to force success was deliberately not done. A different model/placement strategy and reachable clearance would need separate investigation.
+For the updated stock, generator inputs are **50 along wire, 400 across wire, 240 high**, bottom Z=10 mm, kerf=1 mm, feed=7 mm/s, S=500, trim=false, sideEntry=true, side=+1, pair=false. The part is centered: horizontal ±190.324184 mm, vertical [19.137107,240.862893] mm. Nominal allowance is **9.675816 mm horizontally** and **9.137107 mm vertically**; kerf compensation consumes approximately 0.5 mm. Along-wire allowance is 0 mm, stock-to-tower gap is 160 mm per side, and stock top is exactly Z=250 mm.
 
-For valid generated programs, every Program movement destination (including approach, exit and start/end park) must be finite and inside travel. Linear interpolation remains inside the convex axis travel box; homing coordinates set by G92 are the documented limit-switch exception. Start/end blocks now update Program.pos rather than emitting untracked movements. Generation additionally runs the existing simulator checks before exposing the result. Critical simulator findings block save and machine start; they cannot be overridden by confirmation. This simulator models stock/wire intersection, travel and sampled rotation checks; fixtures, thermal effects, actual GRBL motion and the physical machine remain outside its model.
+The old overhead route requires Z=270 mm for this stock and remains correctly rejected. The new explicit “Вход и выход справа без подъёма над заготовкой” option avoids that route. From the right park (horizontal 240 mm, Z=235 mm), the wire approaches horizontal 205 mm at the contour-entry height, cuts inward to the profile, completes the contour, exits through the same slit to 205 mm, switches off and returns directly to the right park. Both the approach and return remain beyond the stock edge at 200 mm. There is **no move above the stock**, no end trimming and no B90; the main cut stays at B0.
+
+The side-entry option rejects left entry, trimming, pair cutting and profiles with holes instead of silently using an overhead route. It also requires a positive outside lead margin, a reachable corridor between stock and park, and stock top within vertical travel.
+
+### Actual simulation result
+
+- 2596 contour points; **2603 simulated movements**.
+- Estimated duration **362.702 s (6:03)**, excluding acceleration and real controller effects.
+- All movement destination coordinates, including entry/exit and park: horizontal [-190.82,240.00] mm and vertical [18.64,241.36] mm for both towers.
+- Axis margins over the complete program: at least **5.00 mm horizontal** (park), **18.64 mm below**, **8.64 mm above**. The exterior entry has **5 mm stock clearance**.
+- No critical findings, no generator warnings, no JavaScript exceptions; WebGL simulation verified in Chromium.
+- Four informational 90° contour-turn notices remain: local overheating is possible at corners. No physical cutting or controller test was performed.
+
+For every generated Program movement, destination coordinates must be finite and inside travel. Linear interpolation stays in the convex axis travel box; G92 homing coordinates retain the documented limit-switch exception. Start/end blocks synchronize Program.pos. The existing simulator checks stock intersections before exposing generated output; critical findings block save, copy and machine start. Rotation intersection checks remain sampled; fixtures, thermal effects and real controller behavior remain outside the simulator model.
+
+The F1 source, G-code and images stay outside the checkout. They are not included in the public PR, per the user's request to keep F1 external.
 
 ## Reproduction
 
@@ -44,8 +59,8 @@ F1_STEP=/absolute/path/F1.stp node --test tests/generator.test.cjs
 F1_STEP=/absolute/path/F1.stp python3 -B -m unittest discover -s tests -v
 ```
 
-The committed synthetic rectangular profile has split coedge chains and no dependency on F1. It checks full-chain reconstruction, stock-axis metadata, no trim/B90 when disabled, finite in-range motion, excessive approach/clearance rejection, invalid input rejection and Program.pos synchronization. The external tests check the actual trimmed dimensions and the expected stock-fit rejection. Node tests execute the production generator extracted from index.html, not a port of it.
+The committed synthetic rectangular profile has split coedge chains and no dependency on F1. Tests cover full-chain reconstruction, stock-axis metadata, no trim/B90, all commanded travel coordinates, approach/clearance rejection, invalid input rejection, Program.pos, simulator collision detection and the right-side exterior corridor. External tests check both the original 340 mm stock rejection and successful updated 400 mm stock path at B0.
 
-Validation in Chromium: synthetic model generated 410 moves, simulated duration 141.815 s, WebGL active, no critical simulator findings and no JavaScript exceptions. F1 UI showed `Деталь 50.0 x 380.6 x 221.7 не помещается ... 50.0 x 340.0 x 230.0`, with result export controls hidden. The independent geometry illustration and browser screenshots remain task-local to avoid publishing model geometry without permission.
+Validation with F1_STEP set: **8 Node tests and 2 Python tests pass**. Without the private file, its three tests are explicitly skipped and the synthetic regressions still run in CI.
 
-The Python CLI retains its existing legacy trimming/90° workflow; this issue's optional-trim/table-0 workflow is the browser generator. Only the shared geometry parsing correction applies to Python here.
+The Python CLI retains its existing legacy trimming/90° workflow; the optional-trim/table-0 and side-entry workflow is the browser generator. Python receives the shared geometry correction and user-confirmed machine dimensions.

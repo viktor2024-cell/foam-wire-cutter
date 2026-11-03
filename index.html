@@ -169,6 +169,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       <label>Высота<input id="gnH" type="number" step="1" value="50"></label>
       <label>Низ Z<input id="gnZ" type="number" step="1" value="10"></label>
     </div>
+    <label class="check"><input type="checkbox" id="gnSideEntry"> Вход и выход справа без подъёма над заготовкой (одна деталь, без отверстий и торцевания)</label>
     <label class="check"><input type="checkbox" id="gnTrim" checked> Торцевать заготовку (стол 90°)</label>
     <div class="note">Размеры заданы при столе 0°. Для листа 340×230×50 мм на ребре введите 50, 340, 230 мм соответственно. При отключении торцевания профиль режется при столе 0°.</div>
   </section>
@@ -303,9 +304,9 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
         <label>Ширина<input id="sW" type="number" step="1" value="230"></label>
         <label>Толщина<input id="sH" type="number" step="1" value="50"></label>
         <label>Низ Z<input id="sZ" type="number" step="1" value="10"></label>
-        <label>Башни<input id="mFW" type="number" step="1" value="374"></label>
+        <label>Башни<input id="mFW" type="number" step="1" value="370"></label>
         <label>Ход Y<input id="mHT" type="number" step="1" value="490"></label>
-        <label>Ход Z<input id="mVT" type="number" step="1" value="235"></label>
+        <label>Ход Z<input id="mVT" type="number" step="1" value="250"></label>
         <label>Порог °<input id="mAng" type="number" step="5" value="60"></label>
       </div>
       <label class="check"><input type="checkbox" id="invB"> Стол вращается по часовой при +B</label>
@@ -2284,7 +2285,7 @@ const Gen = (() => {
     }
     return g;
   }
-  function checkTrim(cfg, trim) {
+  function checkTrim(cfg, trim, overhead = true) {
     const errors = [], halfY = cfg.HorizontalTravel / 2, top = trim.BottomZ + trim.Height;
     if (Math.min(trim.Length, trim.Width, trim.Height) <= 0) return ["Размеры заготовки должны быть положительными"];
     if (trim.TrimEnds > 0) {
@@ -2293,7 +2294,8 @@ const Gen = (() => {
       if (Math.abs(yOut) > halfY) errors.push("Отвод Y=" + yOut.toFixed(2) + " выходит за ход каретки +-" + halfY.toFixed(1));
     }
     if (trim.TrimEnds >= trim.Length / 2) errors.push("Припуск на подрезку больше половины размера заготовки");
-    if (top + cfg.TravelClearance > cfg.VerticalTravel) errors.push("Высота холостых ходов Z=" + (top + cfg.TravelClearance).toFixed(1) + " больше хода каретки " + cfg.VerticalTravel.toFixed(1));
+    if (!overhead && top > cfg.VerticalTravel) errors.push("Верх заготовки Z=" + top + " больше хода каретки " + cfg.VerticalTravel);
+    if (overhead && top + cfg.TravelClearance > cfg.VerticalTravel) errors.push("Высота холостых ходов Z=" + (top + cfg.TravelClearance).toFixed(1) + " больше хода каретки " + cfg.VerticalTravel.toFixed(1));
     if (trim.BottomZ < 0) errors.push("Низ заготовки меньше 0: ниже хода каретки");
     return errors;
   }
@@ -2339,7 +2341,7 @@ const Gen = (() => {
     g += prog.travel("cut", yl, levelL, yr, levelR);       // - обратно по той же щели
     return [g, towers];
   }
-  function profileBlock(safe, prog, contour, layout, axis, kerf, notes, side, stockWidth, margin, sag, maxStep) {
+  function profileBlock(safe, prog, contour, layout, axis, kerf, notes, side, stockWidth, margin, sag, maxStep, sideEntry = false) {
     const segments = prepareContour(contour.map(([f, fw]) => faceSegment(f, fw)), axis, kerf, true, notes);
     // - Участок грани, лежащий дальше всех в сторону входа; середина его - точка входа
     let start = -1, bestY = -Infinity;
@@ -2352,18 +2354,21 @@ const Gen = (() => {
     const yOut = side * (stockWidth / 2 + margin);
     const [[yl, zl], [yr, zr]] = towers[0];
     let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", lead-in from Y=" + yOut.toFixed(1) + " ***" + EOL;
-    g += prog.travel("move", yOut, safe, yOut, safe);
-    g += prog.travel("cut", yOut, zl, yOut, zr);           // - вниз снаружи заготовки
+    if (sideEntry) g += prog.travel("move", yOut, zl, yOut, zr);
+    else {
+      g += prog.travel("move", yOut, safe, yOut, safe);
+      g += prog.travel("cut", yOut, zl, yOut, zr);
+    }           // - вниз снаружи заготовки
     g += prog.travel("cut", yl, zl, yr, zr);               // - подход к контуру по щели
     for (const [[yl2, zl2], [yr2, zr2]] of towers.slice(1)) g += prog.travel("cut", yl2, zl2, yr2, zr2);
     g += prog.travel("cut", yOut, zl, yOut, zr);           // - обратно по щели наружу
-    g += prog.travel("cut", yOut, safe, yOut, safe);       // - вверх вне детали
+    if (!sideEntry) g += prog.travel("cut", yOut, safe, yOut, safe);       // - вверх вне детали
     return [g, towers];
   }
 
   // --- Программа целиком
   const CONFIG = {
-    HorizontalTravel: 490, VerticalTravel: 235, FieldWidth: 374,
+    HorizontalTravel: 490, VerticalTravel: 250, FieldWidth: 370,
     HomingX1: 249, HomingZ1: 238, HomingX2: 245, HomingZ2: 236, HomingR1: -7.3, ParkX: 240, ParkZ: 235, ParkR1: 0,
     TravelClearance: 20, FeedRateCut: 7, FeedRateMove: 14, FeedRateRotate: 30, WireMinPower: 500, WireMaxPower: 1000,
   };
@@ -2400,7 +2405,10 @@ const Gen = (() => {
     // --- Торцевание до размера детали по размаху (стол 0: размах вдоль струны)
     const trim = { Length: stockLength, Width: stockWidth, Height: stockHeight, TrimEnds: (stockLength - part.span) / 2 - kerf / 2, BottomZ: o.bottomZ, RetractOffset: o.retract };
     const hasTrim = o.trim !== false && trim.TrimEnds > 0;
-    const errors = checkTrim(cfg, hasTrim ? trim : { ...trim, TrimEnds: 0 });
+    const sideEntry = o.sideEntry === true;
+    if (sideEntry && (o.trim !== false || o.pair || holes.length || o.side !== 1)) throw new Error("Боковой вход справа требует одну деталь без отверстий, торцевания и входа слева");
+    if (sideEntry && (stockWidth / 2 + o.leadMargin > cfg.ParkX || o.leadMargin <= 0)) throw new Error("Нет внешнего коридора между правым краем заготовки и парковкой");
+    const errors = checkTrim(cfg, hasTrim ? trim : { ...trim, TrimEnds: 0 }, !sideEntry);
     if (errors.length) throw new Error(errors.join("; "));
     if (hasTrim && Math.abs(trim.Length / 2 - trim.TrimEnds) < 0.01) warnings.push("Рез идёт через ось стола: припуск больше половины размера");
     // - При торцевании заготовка поворачивается на 90°, затем возвращается в 0° для резки профиля
@@ -2413,7 +2421,7 @@ const Gen = (() => {
     program += "; CUT F=" + fmtG(cfg.FeedRateCut) + " mm/s S=" + fmtG(cfg.WireMinPower) + ".." + fmtG(cfg.WireMaxPower) + " kerf=" + fmtG(kerf) + EOL;
     const prog = new Program(cfg, o.powerComp, 5);
     program += startBlock(cfg, prog);
-    const allTowers = [], safe = o.bottomZ + stockHeight + cfg.TravelClearance;
+    const allTowers = [], safe = sideEntry ? cfg.ParkZ : o.bottomZ + stockHeight + cfg.TravelClearance;
     // - Сначала отводим каретки в безопасную позицию; торцевание выполняется при столе 90°
     program += ";" + EOL + "; - Safe position before cutting" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe);
     if (hasTrim) {
@@ -2427,7 +2435,7 @@ const Gen = (() => {
       program += block; allTowers.push(...towers);
     };
     const addProfile = (layout, side) => {
-      const [block, towers] = profileBlock(safe, prog, outer, layout, axis, kerf, warnings, side, stockWidth, o.leadMargin, sag, maxStep);
+      const [block, towers] = profileBlock(safe, prog, outer, layout, axis, kerf, warnings, side, stockWidth, o.leadMargin, sag, maxStep, sideEntry);
       program += block; allTowers.push(...towers);
     };
     if (o.pair) {
@@ -2506,7 +2514,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
   try {
     const r = Gen.buildProgram(stepFile.text, stepFile.name, {
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
-      clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair",
+      clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair",
     });
     const outName = stepFile.name.replace(/\.(stp|step)$/i, "") + (mode === "normal" ? "" : "_" + mode) + "_auto.gcode";
     $("gnOut").textContent = outName;
