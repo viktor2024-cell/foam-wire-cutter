@@ -9,7 +9,7 @@
 
 Управление станком работает в Chrome или Edge: страница открывает COM-порт через Web Serial.
 
-`index.html` работает без установки. Файлы `FM_*.py` и `materials.json` — резервный генератор на Python:
+`index.html` работает без установки и без интернета: нужная библиотека three.js (r128, лицензия MIT — `lib/three.LICENSE`) лежит в папке `lib/`, держите её рядом с `index.html`. Файлы `FM_*.py` и `materials.json` — резервный генератор на Python (только стандартная библиотека, интернет тоже не нужен):
 
 ```
 python FM_step2gcode.py деталь.stp --stock 340 230 50 --bottom-z 10
