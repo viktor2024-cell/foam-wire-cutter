@@ -169,7 +169,8 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       <label>Толщина<input id="gnH" type="number" step="1" value="50"></label>
       <label>Низ Z<input id="gnZ" type="number" step="1" value="10"></label>
     </div>
-    <div class="note">Длина — вдоль размаха детали, ширина — вдоль хорды.</div>
+    <label class="check"><input type="checkbox" id="gnTrim" checked> Торцевать заготовку (стол 90°)</label>
+    <div class="note">Длина — вдоль размаха детали, ширина — вдоль хорды. При отключении торцевания профиль режется при столе 0°.</div>
   </section>
   <section class="box">
     <h2>Рез</h2>
@@ -2377,12 +2378,13 @@ const Gen = (() => {
 
     // --- Торцевание до размера детали по размаху (стол 0: размах вдоль Y каретки)
     const trim = { Length: stockLength, Width: stockWidth, Height: stockHeight, TrimEnds: (stockLength - part.span) / 2 - kerf / 2, BottomZ: o.bottomZ, RetractOffset: o.retract };
-    const errors = checkTrim(cfg, trim);
+    const hasTrim = o.trim !== false && trim.TrimEnds > 0;
+    const errors = checkTrim(cfg, hasTrim ? trim : { ...trim, TrimEnds: 0 });
     if (errors.length) throw new Error(errors.join("; "));
-    if (trim.TrimEnds > 0 && Math.abs(trim.Length / 2 - trim.TrimEnds) < 0.01) warnings.push("Рез идёт через ось стола: припуск больше половины размера");
-    // - Стол вращается после торцевания, поэтому зазор до башни считаем по размеру после среза
+    if (hasTrim && Math.abs(trim.Length / 2 - trim.TrimEnds) < 0.01) warnings.push("Рез идёт через ось стола: припуск больше половины размера");
+    // - При торцевании заготовка поворачивается на 90°, затем возвращается в 0° для резки профиля
     const radius = Math.hypot(part.span, stockWidth) / 2;
-    if (cfg.ParkX - radius < RadialMargin) warnings.push("При повороте на 90 радиус заготовки " + radius.toFixed(1) + " мм, каретки отведены только на " + cfg.ParkX.toFixed(1) + " мм: проверьте зазор");
+    if (hasTrim && cfg.ParkX - radius < RadialMargin) warnings.push("При повороте на 90 радиус заготовки " + radius.toFixed(1) + " мм, каретки отведены только на " + cfg.ParkX.toFixed(1) + " мм: проверьте зазор");
 
     // - Шапка: сведения для симулятора и для человека
     let program = "; FM_step2gcode: " + fileName + (o.pair ? " (pair: upper reflected over gap, turned 180)" : o.mirror ? " (mirror)" : "") + EOL;
@@ -2390,10 +2392,15 @@ const Gen = (() => {
     program += "; CUT F=" + fmtG(cfg.FeedRateCut) + " mm/s S=" + fmtG(cfg.WireMinPower) + ".." + fmtG(cfg.WireMaxPower) + " kerf=" + fmtG(kerf) + EOL;
     program += startBlock(cfg);
     const prog = new Program(cfg, o.powerComp, 5);
-    if (trim.TrimEnds > 0) program += trimBlock(cfg, trim, prog);
     const allTowers = [], safe = o.bottomZ + stockHeight + cfg.TravelClearance;
-    // - Перед поворотом каретки уходят от центра в сторону дома: угол заготовки описывает окружность вокруг оси стола
-    program += ";" + EOL + "; - Rotation 90" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe) + rotate(cfg, 90);
+    // - Сначала отводим каретки в безопасную позицию; торцевание выполняется при столе 90°
+    program += ";" + EOL + "; - Safe position before cutting" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe);
+    if (hasTrim) {
+      program += ";" + EOL + "; - Rotation 90 for end trimming" + EOL + rotate(cfg, 90);
+      program += trimBlock(cfg, trim, prog);
+      // - После торцевания возвращаем стол в 0°: основной профиль всегда режется в этой позиции
+      program += ";" + EOL + "; - Return table to 0 for profile cutting" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe) + rotate(cfg, 0);
+    }
     const addHole = (hole, layout, gap, fromBelow) => {
       const [block, towers] = holeBlock(safe, prog, hole[0][0], layout, axis, kerf, warnings, sag, maxStep, gap, fromBelow);
       program += block; allTowers.push(...towers);
@@ -2478,7 +2485,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
   try {
     const r = Gen.buildProgram(stepFile.text, stepFile.name, {
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
-      clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair",
+      clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair",
     });
     const outName = stepFile.name.replace(/\.(stp|step)$/i, "") + (mode === "normal" ? "" : "_" + mode) + "_auto.gcode";
     $("gnOut").textContent = outName;
