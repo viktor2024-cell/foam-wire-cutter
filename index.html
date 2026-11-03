@@ -164,13 +164,13 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
   <section class="box">
     <h2>Заготовка</h2>
     <div class="fields">
-      <label>Длина<input id="gnL" type="number" step="1" value="340"></label>
-      <label>Ширина<input id="gnW" type="number" step="1" value="230"></label>
-      <label>Толщина<input id="gnH" type="number" step="1" value="50"></label>
+      <label>Вдоль струны<input id="gnL" type="number" step="1" value="340"></label>
+      <label>Поперёк струны<input id="gnW" type="number" step="1" value="230"></label>
+      <label>Высота<input id="gnH" type="number" step="1" value="50"></label>
       <label>Низ Z<input id="gnZ" type="number" step="1" value="10"></label>
     </div>
     <label class="check"><input type="checkbox" id="gnTrim" checked> Торцевать заготовку (стол 90°)</label>
-    <div class="note">Длина — вдоль размаха детали, ширина — вдоль хорды. При отключении торцевания профиль режется при столе 0°.</div>
+    <div class="note">Размеры заданы при столе 0°. Для листа 340×230×50 мм на ребре введите 50, 340, 230 мм соответственно. При отключении торцевания профиль режется при столе 0°.</div>
   </section>
   <section class="box">
     <h2>Рез</h2>
@@ -1408,6 +1408,7 @@ if (!isLocalFile) {
   } catch (e) {}
 }
 async function saveProgram() {
+  if (prog && prog.check.warns.some((w) => w.level === "crit")) { showMsg("Экспорт заблокирован: устраните критические ошибки проверки траектории.", true); return; }
   const data = currentText.replace(/\r*\n/g, "\r\n");
   const name = currentName.replace(/^пример:\s*/, "");
   // - Страница не знает путь к файлу: окно сохранения открывается в папке STEP, пользователь только подтверждает
@@ -1444,6 +1445,7 @@ async function saveProgram() {
   }
 }
 async function copyProgram() {
+  if (prog && prog.check.warns.some((w) => w.level === "crit")) { showMsg("Экспорт заблокирован: устраните критические ошибки проверки траектории.", true); return; }
   try { await navigator.clipboard.writeText(currentText.replace(/\r*\n/g, "\r\n")); $("tNote").textContent = "G-code скопирован. Вставьте его в новый файл .gcode."; }
   catch (e) { $("tNote").textContent = "Копирование не разрешено в этом окне. Откройте локальную копию D:\\1800mm\\wire_sim.html, там есть сохранение файла."; }
 }
@@ -1749,7 +1751,7 @@ function startJob() {
   }
   if (dry && mach.spinOn) { showMsg("Струна включена. Выключите её перед холостым прогоном.", true); return; }
   const crit = prog.check.warns.filter((w) => w.level === "crit").length;
-  if (crit && !confirm("В проверке программы опасных замечаний: " + crit + ". Всё равно запустить?")) return;
+  if (crit) { showMsg("Запуск заблокирован: критических ошибок траектории " + crit + ".", true); return; }
   if (!confirm(dry ? "Холостой прогон: станок будет двигаться, струна выключена. Запустить?" : "Струна будет включена. Заготовка закреплена, рядом никого нет. Запустить рез?")) return;
   job = { lines, dry, idx: 0, acked: 0, ackLine: -1, ackMove: -1, moveIdx: 0, syncWait: false, halt: false, paused: false, holdOff: false, doneAt: 0 };
   simTime = 0; playing = false; $("play").textContent = "Пуск";
@@ -1989,12 +1991,23 @@ const Gen = (() => {
         const [v1, v2] = this.edges.get(eid);
         if (Math.abs(v1[axis] - planeA) < 1e-3 && Math.abs(v2[axis] - planeA) < 1e-3) {
           if (dist(v1, v2) < 1e-6) closed = true;
-          endsA = [v1, v2];
+          endsA.push(v1, v2);
         }
-        if (Math.abs(v1[axis] - planeB) < 1e-3 && Math.abs(v2[axis] - planeB) < 1e-3) endsB = [v1, v2];
+        if (Math.abs(v1[axis] - planeB) < 1e-3 && Math.abs(v2[axis] - planeB) < 1e-3) endsB.push(v1, v2);
       }
       if (endsA.length === 0 || endsB.length === 0) throw new StepError("Грань без рёбер в плоскостях профилей");
 
+      // Split coedge chains have interior vertices twice; only their endpoints trim the rail.
+      const chainEnds = (points) => {
+        const ends = [];
+        for (const p of points) {
+          const i = ends.findIndex((q) => dist(p, q) < 1e-6);
+          if (i < 0) ends.push(p); else ends.splice(i, 1);
+        }
+        if (ends.length !== 2) throw new StepError("Неоднозначная граница направляющей: ожидается одна цепочка рёбер");
+        return ends;
+      };
+      if (!closed) { endsA = chainEnds(endsA); endsB = chainEnds(endsB); }
       let skew = 0, t0, t1;
       if (closed) [t0, t1] = tDom;
       else {
@@ -2229,6 +2242,10 @@ const Gen = (() => {
     }
     travel(kind, yl, zl, yr, zr) {
       const target = [yl, zl, yr, zr];
+      const halfY = this.cfg.HorizontalTravel / 2;
+      if (!target.every(Number.isFinite) || Math.abs(yl) > halfY || Math.abs(yr) > halfY || Math.min(zl, zr) < 0 || Math.max(zl, zr) > this.cfg.VerticalTravel) {
+        throw new Error("Перемещение выходит за ход кареток: Y=" + yl + "/" + yr + ", Z=" + zl + "/" + zr);
+      }
       let g = "";
       if (kind === "cut" && this.compensate) {
         // - Длиннее из двух положений (начало и конец шага), чтобы не недогреть проволоку
@@ -2244,22 +2261,22 @@ const Gen = (() => {
       return g + travel(this.cfg, kind, yl, zl, yr, zr);
     }
   }
-  function startBlock(cfg) {
+  function startBlock(cfg, prog) {
     return "; *** START BLOCK ***" + EOL + "$H" + EOL + "G21 G90 G94" + EOL +
       "G92 " + travelPosition(cfg.HomingX1, cfg.HomingZ1, cfg.HomingX2, cfg.HomingZ2) + " B" + fix2(cfg.HomingR1) + EOL +
-      travel(cfg, "move", cfg.ParkX, cfg.ParkZ, cfg.ParkX, cfg.ParkZ) + rotate(cfg, cfg.ParkR1) +
+      prog.travel("move", cfg.ParkX, cfg.ParkZ, cfg.ParkX, cfg.ParkZ) + rotate(cfg, cfg.ParkR1) +
       "M03 S" + cfg.WireMinPower.toFixed(2) + EOL;
   }
-  function endBlock(cfg) {
+  function endBlock(cfg, prog) {
     return ";" + EOL + "; *** END BLOCK ***" + EOL + "M05" + EOL +
-      travel(cfg, "move", cfg.ParkX, cfg.ParkZ, cfg.ParkX, cfg.ParkZ) + rotate(cfg, cfg.ParkR1);
+      prog.travel("move", cfg.ParkX, cfg.ParkZ, cfg.ParkX, cfg.ParkZ) + rotate(cfg, cfg.ParkR1);
   }
   function trimBlock(cfg, trim, prog) {
     const safe = trim.BottomZ + trim.Height + cfg.TravelClearance, y0 = trim.Length / 2 - trim.TrimEnds;
-    let g = ";" + EOL + "; *** TRIM BLOCK: L=" + fmtG(trim.Length) + " W=" + fmtG(trim.Width) + " H=" + fmtG(trim.Height) + ", LongAxis=Y ***" + EOL;
+    let g = ";" + EOL + "; *** TRIM BLOCK: L=" + fmtG(trim.Length) + " W=" + fmtG(trim.Width) + " H=" + fmtG(trim.Height) + ", LongAxis=X ***" + EOL;
     for (const y of [-y0, y0]) {
       const yOut = y + (y < 0 || Object.is(y, -0) ? -trim.RetractOffset : trim.RetractOffset);
-      g += "; - Trim Y=" + fix2(y) + " at angle 0" + EOL;
+      g += "; - Trim Y=" + fix2(y) + " at angle 90" + EOL;
       g += prog.travel("move", y, safe, y, safe);                 // - к точке входа на высоте холостых ходов
       g += prog.travel("cut", y, trim.BottomZ, y, trim.BottomZ);  // - рез вниз
       g += prog.travel("cut", yOut, trim.BottomZ, yOut, trim.BottomZ);   // - отвод от центра, в отход
@@ -2353,6 +2370,10 @@ const Gen = (() => {
   function buildProgram(text, fileName, o) {
     const cfg = { ...CONFIG, TravelClearance: o.clearance, FeedRateCut: o.feed, WireMinPower: o.minS, WireMaxPower: o.maxS };
     const warnings = [], [stockLength, stockWidth, stockHeight] = o.stock, kerf = o.kerf, sag = 0.01, maxStep = 1, RadialMargin = 2;
+    if (![...o.stock, o.bottomZ, o.kerf, o.clearance, o.leadMargin, o.feed, o.minS, o.maxS, o.retract].every(Number.isFinite) ||
+        Math.min(...o.stock, o.feed) <= 0 || Math.min(o.bottomZ, o.kerf, o.clearance, o.leadMargin, o.retract, o.minS) < 0 || o.maxS < o.minS) {
+      throw new Error("Недопустимые параметры заготовки или реза");
+    }
     const model = new Model(text), { outer, holes, axis, planeA, planeB } = model.build();
     if (axis !== 1) throw new StepError("Пока поддерживается только размах вдоль оси Y модели (найдена ось " + "XYZ"[axis] + ")");
 
@@ -2362,7 +2383,7 @@ const Gen = (() => {
     const part = { x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs), span: planeB - planeA };
     if (part.x1 - part.x0 > stockWidth || part.z1 - part.z0 > stockHeight || part.span > stockLength) {
       throw new Error("Деталь " + part.span.toFixed(1) + " x " + (part.x1 - part.x0).toFixed(1) + " x " + (part.z1 - part.z0).toFixed(1) +
-        " не помещается в заготовку " + stockLength.toFixed(1) + " x " + stockWidth.toFixed(1) + " x " + stockHeight.toFixed(1));
+        " не помещается в заготовку (размах × хорда × высота) " + stockLength.toFixed(1) + " x " + stockWidth.toFixed(1) + " x " + stockHeight.toFixed(1));
     }
     const xc = (part.x0 + part.x1) / 2, yc = (planeA + planeB) / 2, zc = (part.z0 + part.z1) / 2;
     const half = cfg.FieldWidth / 2;
@@ -2376,7 +2397,7 @@ const Gen = (() => {
       },
     });
 
-    // --- Торцевание до размера детали по размаху (стол 0: размах вдоль Y каретки)
+    // --- Торцевание до размера детали по размаху (стол 0: размах вдоль струны)
     const trim = { Length: stockLength, Width: stockWidth, Height: stockHeight, TrimEnds: (stockLength - part.span) / 2 - kerf / 2, BottomZ: o.bottomZ, RetractOffset: o.retract };
     const hasTrim = o.trim !== false && trim.TrimEnds > 0;
     const errors = checkTrim(cfg, hasTrim ? trim : { ...trim, TrimEnds: 0 });
@@ -2388,10 +2409,10 @@ const Gen = (() => {
 
     // - Шапка: сведения для симулятора и для человека
     let program = "; FM_step2gcode: " + fileName + (o.pair ? " (pair: upper reflected over gap, turned 180)" : o.mirror ? " (mirror)" : "") + EOL;
-    program += "; STOCK L=" + fmtG(stockLength) + " W=" + fmtG(stockWidth) + " H=" + fmtG(stockHeight) + " Z0=" + fmtG(o.bottomZ) + EOL;
+    program += "; STOCK L=" + fmtG(stockWidth) + " W=" + fmtG(stockLength) + " H=" + fmtG(stockHeight) + " Z0=" + fmtG(o.bottomZ) + EOL;
     program += "; CUT F=" + fmtG(cfg.FeedRateCut) + " mm/s S=" + fmtG(cfg.WireMinPower) + ".." + fmtG(cfg.WireMaxPower) + " kerf=" + fmtG(kerf) + EOL;
-    program += startBlock(cfg);
     const prog = new Program(cfg, o.powerComp, 5);
+    program += startBlock(cfg, prog);
     const allTowers = [], safe = o.bottomZ + stockHeight + cfg.TravelClearance;
     // - Сначала отводим каретки в безопасную позицию; торцевание выполняется при столе 90°
     program += ";" + EOL + "; - Safe position before cutting" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe);
@@ -2440,7 +2461,7 @@ const Gen = (() => {
       for (const hole of holes) addHole(hole, layout, null, false);
       addProfile(layout, o.side);
     }
-    program += endBlock(cfg);
+    program += endBlock(cfg, prog);
 
     // --- Проверка пределов хода
     const halfY = cfg.HorizontalTravel / 2;
@@ -2490,6 +2511,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
     const outName = stepFile.name.replace(/\.(stp|step)$/i, "") + (mode === "normal" ? "" : "_" + mode) + "_auto.gcode";
     $("gnOut").textContent = outName;
     loadProgram(r.program, outName);
+    if (prog.check.warns.some((w) => w.level === "crit")) throw new Error("Траектория не прошла проверку симулятора: " + prog.check.warns.find((w) => w.level === "crit").text);
     setCamera("3d");
     const p = r.part;
     status.className = "note";
