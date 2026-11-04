@@ -41,6 +41,7 @@ const generatorPreview = (() => {
     scene.remove(group);
   }
   function rebuild() {
+    document.getElementById('gnStockFromModel').disabled = !geometry;
     clear(); group = new THREE.Group(); scene.add(group);
     const stock = [n('gnL'), n('gnW'), n('gnH')], bottom = n('gnZ');
     const valid = stock.every(v => Number.isFinite(v) && v > 0) && Number.isFinite(bottom) && bottom >= 0;
@@ -98,6 +99,15 @@ const generatorPreview = (() => {
     modelRotation=Gen.rotateModel(modelRotation,Number(button.dataset.axis),Number(button.dataset.turn)); load();
   });
   document.getElementById('gnResetRotation').addEventListener('click',()=>{modelRotation=Gen.identityRotation();load();});
+  document.getElementById('gnStockFromModel').addEventListener('click',()=>{
+    load(); // Use the current orientation and scale, including a just-edited scale field.
+    if (!geometry) return;
+    ['gnL','gnW','gnH'].forEach((id,k)=>{
+      // Round up to 0.01 mm; ignore floating-point noise at exact hundredths.
+      document.getElementById(id).value = Math.ceil((geometry.size[k] + 20) * 100 - 1e-7) / 100;
+    });
+    invalidate(); rebuild();
+  });
   document.getElementById('gnScale').addEventListener('change',load);
   for (const id of ['gnL','gnW','gnH','gnZ']) document.getElementById(id).addEventListener('input',()=>{invalidate();rebuild();});
   new ResizeObserver(()=>{
