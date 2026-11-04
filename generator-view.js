@@ -70,7 +70,17 @@ const generatorPreview = (() => {
       const paired = document.getElementById('gnStockPair')?.checked === true;
       const kerf = n('gnKerf') || 0;
       const minGap = 5 + kerf;
-      const requiredZ = paired ? 2 * geometry.size[2] + minGap : geometry.size[2];
+      // Use the same kerf-aware pair-height constraint as the G-code
+      // generator. A green stock preview must not promise a pair that the
+      // generator immediately rejects (especially for different A/B tips).
+      const zsA = geometry.rails.flatMap(rail => rail.map(pair => pair[0][2]));
+      const zsB = geometry.rails.flatMap(rail => rail.map(pair => pair[1][2]));
+      const zLow = Math.min(...zsA, ...zsB);
+      const pairHeight = Math.max(
+        2 * geometry.size[2] + minGap,
+        Math.max(...zsA) + Math.max(...zsB) - 2*zLow + 5 + 4*kerf
+      );
+      const requiredZ = paired ? pairHeight : geometry.size[2];
       const fits = geometry.size[0] <= stock[0] + .001 && geometry.size[1] <= stock[1] + .001 && requiredZ <= stock[2] + .001;
       const vertices = [], lines = [];
       const point = p => p.map((v,k) => v - geometry.center[k] + (k===2 ? bottom+stock[2]/2 : 0));
@@ -119,6 +129,7 @@ const generatorPreview = (() => {
       }
       fit.textContent = (paired ? 'Пара: ' : 'Модель: ') + geometry.size.map(v=>v.toFixed(2)).join(' × ') + ' мм (вдоль струны × поперёк × высота). ' +
         (fits ? 'Помещается в заготовку. ' : 'Не помещается в заготовку. ') +
+        (paired ? 'Минимальная высота листа для пары с компенсацией струны: '+pairHeight.toFixed(1)+' мм. ' : '') +
         (geometry.axis === 1 ? 'Размах направлен вдоль струны.' : 'Для генерации поверните размах вдоль X — струны.');
       if (!fits || geometry.axis !== 1) fit.className = 'note crit';
     } else {
