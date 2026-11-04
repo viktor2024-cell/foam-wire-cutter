@@ -114,6 +114,9 @@ pre.code .ln { color: var(--muted); display: inline-block; min-width: 4.5ch; }
 .delta-up { color: var(--wire); font-weight: 600; } .delta-down { color: var(--info); font-weight: 600; }
 .tabs button { font-weight: 600; letter-spacing: 0.03em; }
 #panelGen { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-content: start; }
+#panelGen .gn-preview { grid-column: 1 / -1; }
+#gnView { height: 420px; min-height: 260px; position: relative; border-radius: 8px; overflow: hidden; background: var(--view); }
+#gnView canvas { display: block; width: 100%; height: 100%; }
 #panelGen .gn-result { grid-column: 1 / -1; }
 .fields select { width: 100%; padding: 4px 6px; font-family: var(--font-num); font-size: 13px; }
 @media (max-width: 860px) { #panelGen { grid-template-columns: minmax(0, 1fr); } }
@@ -153,6 +156,30 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
 </header>
 
 <div id="panelGen">
+  <section class="box gn-preview">
+    <div class="row">
+      <h2>Размещение модели</h2>
+      <div class="seg" role="group" aria-label="Вид модели">
+        <button id="gnView3d" aria-pressed="true">3D</button>
+        <button id="gnViewTop" aria-pressed="false">Сверху</button>
+        <button id="gnViewSide" aria-pressed="false">Сбоку · вдоль струны</button>
+      </div>
+    </div>
+    <div id="gnView" aria-label="Модель и заготовка"></div>
+    <div class="row" id="gnRotate" aria-label="Поворот модели">
+      <span>Модель, шаг 90°:</span>
+      <button data-axis="0" data-turn="-1" aria-label="Повернуть модель вокруг X на минус 90 градусов">X ↶</button>
+      <button data-axis="0" data-turn="1" aria-label="Повернуть модель вокруг X на 90 градусов">X ↷</button>
+      <button data-axis="1" data-turn="-1" aria-label="Повернуть модель вокруг Y на минус 90 градусов">Y ↶</button>
+      <button data-axis="1" data-turn="1" aria-label="Повернуть модель вокруг Y на 90 градусов">Y ↷</button>
+      <button data-axis="2" data-turn="-1" aria-label="Повернуть модель вокруг Z на минус 90 градусов">Z ↶</button>
+      <button data-axis="2" data-turn="1" aria-label="Повернуть модель вокруг Z на 90 градусов">Z ↷</button>
+      <button id="gnResetRotation">Сбросить поворот</button>
+      <label>Масштаб, % <input id="gnScale" type="number" min="0.01" step="1" value="100" style="width:85px"></label>
+    </div>
+    <div class="note">X — вдоль струны (красная ось), Y — поперёк (зелёная), Z — вверх (синяя). Модель центрируется в заготовке. Повороты меняют модель, а не угол стола.</div>
+    <div class="note" id="gnFit" role="status">Откройте STEP для проверки размещения.</div>
+  </section>
   <section class="box">
     <h2>Модель</h2>
     <div class="mline">
@@ -1800,6 +1827,23 @@ const Gen = (() => {
   class StepError extends Error {}
   const EOL = "\r\n";
 
+  const identityRotation = () => [[1,0,0],[0,1,0],[0,0,1]];
+  function rotateModel(rotation, axis, turn) {
+    const r = identityRotation(), i = (axis + 1) % 3, j = (axis + 2) % 3;
+    r[i][i] = r[j][j] = 0; r[i][j] = -turn; r[j][i] = turn;
+    return r.map((row) => [0,1,2].map((col) => row.reduce((sum, v, k) => sum + v * rotation[k][col], 0)));
+  }
+  function previewGeometry(text, rotation = identityRotation(), scale = 1) {
+    if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
+    const { outer, holes, axis } = new Model(text, rotation, scale).build();
+    const rails = [...outer, ...holes.flat()].map(([face]) => sampleFace(face, face.t0, face.t1, 0.01, 2)
+      .map((pair) => pair.map((p) => [-p[1], p[0], p[2]])));
+    const points = rails.flat(2);
+    const low = [0,1,2].map((k) => Math.min(...points.map((p) => p[k])));
+    const high = [0,1,2].map((k) => Math.max(...points.map((p) => p[k])));
+    return { rails, axis, center: low.map((v,k) => (v+high[k])/2), size: low.map((v,k) => high[k]-v) };
+  }
+
   // --- Разбор текста STEP
   const NUMBER = "[-+]?(?:\\d+\\.\\d*|\\.\\d+|\\d+)(?:[eE][-+]?\\d+)?";
   const TOKEN = new RegExp("'(?:[^']|'')*'|#\\d+|" + NUMBER + "|\\.[A-Z_0-9]+\\.|[A-Z_][A-Z_0-9]*|[(),*$]", "g");
@@ -1897,9 +1941,13 @@ const Gen = (() => {
   const sum2 = (d) => d[0] + d[1];
 
   class Model {
-    constructor(text) { this.entities = parseStep(text); this.readGeometry(); }
+    constructor(text, rotation = identityRotation(), scale = 1) { this.rotation = rotation; this.scale = scale; this.entities = parseStep(text); this.readGeometry(); }
     get(ref) { return this.entities.get(ref.id); }
-    point(ref) { return this.get(ref).args[1]; }
+    point(ref) {
+      const p = this.get(ref).args[1], machine = [-p[1], p[0], p[2]];
+      const q = this.rotation.map((row) => row.reduce((sum, v, i) => sum + v * machine[i], 0) * this.scale);
+      return [q[1], -q[0], q[2]];
+    }
     vertex(ref) { return this.point(this.get(ref).args[1]); }
     surface(ref) {
       const entity = this.get(ref);
@@ -2379,8 +2427,10 @@ const Gen = (() => {
         Math.min(...o.stock, o.feed) <= 0 || Math.min(o.bottomZ, o.kerf, o.clearance, o.leadMargin, o.retract, o.minS) < 0 || o.maxS < o.minS) {
       throw new Error("Недопустимые параметры заготовки или реза");
     }
-    const model = new Model(text), { outer, holes, axis, planeA, planeB } = model.build();
-    if (axis !== 1) throw new StepError("Пока поддерживается только размах вдоль оси Y модели (найдена ось " + "XYZ"[axis] + ")");
+    const scale = o.scale === undefined ? 1 : o.scale;
+    if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
+    const model = new Model(text, o.rotation, scale), { outer, holes, axis, planeA, planeB } = model.build();
+    if (axis !== 1) throw new StepError("Поверните модель: размах должен идти вдоль струны (сейчас ось модели " + "XYZ"[axis] + ")");
 
     // - Габарит детали по направляющим
     const xs = [], zs = [], zsA = [], zsB = [];
@@ -2481,12 +2531,13 @@ const Gen = (() => {
     if (prog.clipped) warnings.push("Мощность проволоки упёрлась в максимум S=" + fmtG(cfg.WireMaxPower) + ": проволока слишком длинная для этой формулы");
     return { program, warnings: [...new Set(warnings)], part, points: allTowers.length, holes: holes.length, power: [prog.minPower, prog.maxPower, prog.changes] };
   }
-  return { buildProgram, CONFIG };
+  return { buildProgram, CONFIG, previewGeometry, identityRotation, rotateModel };
 })();
 
 // ---------------------------------------------------------------------------------------------
 //  Вкладки и экран генератора
 // ---------------------------------------------------------------------------------------------
+let modelRotation = Gen.identityRotation();
 let stepFile = null;        // - открытый STEP: { name, text }
 function showTab(tab) {
   const gen = tab === "gen";
@@ -2498,10 +2549,12 @@ function openStep(file, handle = null) {
   const rd = new FileReader();
   rd.onload = () => {
     stepFile = { name: file.name, text: String(rd.result), handle };
+    modelRotation = Gen.identityRotation(); $("gnScale").value = 100;
     $("gnFile").textContent = file.name;
     $("gnGo").disabled = $("gnMirror").disabled = $("gnPair").disabled = false;
     $("gnStatus").textContent = ""; $("gnOut").textContent = ""; $("gnWarn").innerHTML = ""; $("gnDone").hidden = true;
   };
+  rd.addEventListener("load", () => { generatorPreview.load(); });
   rd.readAsText(file, "latin1");
 }
 function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зеркальная деталь над обычной)
@@ -2513,6 +2566,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
   $("gnDone").hidden = true;
   try {
     const r = Gen.buildProgram(stepFile.text, stepFile.name, {
+      rotation: modelRotation, scale: n("gnScale") / 100,
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
       clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair",
     });
@@ -2581,5 +2635,6 @@ if (prog) { simTime = prog.total * 0.8; render(); }
 requestAnimationFrame(frame);
 </script>
 
+<script src="generator-view.js"></script>
 </body>
 </html>

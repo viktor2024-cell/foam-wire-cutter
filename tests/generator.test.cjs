@@ -4,7 +4,7 @@ const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
 // Exercise the production generator without DOM stubs or a second implementation.
 const source=html.slice(html.indexOf('const Gen ='),html.indexOf('//  Вкладки и экран генератора'))
- .replace('return { buildProgram, CONFIG };','return { buildProgram, CONFIG, Model, sampleFace, Program, startBlock, endBlock };');
+ .replace('return { buildProgram, CONFIG, previewGeometry, identityRotation, rotateModel };','return { buildProgram, CONFIG, previewGeometry, identityRotation, rotateModel, Model, sampleFace, Program, startBlock, endBlock };');
 const gen=vm.runInNewContext(source+';Gen');
 const fixture=fs.readFileSync(path.join(__dirname,'fixtures/split-profile.stp'),'utf8');
 const options=(extra={})=>({stock:[50,140,60],bottomZ:10,kerf:1,feed:7,minS:500,maxS:1000,clearance:20,retract:30,leadMargin:5,trim:false,side:1,powerComp:true,...extra});
@@ -81,4 +81,30 @@ test('external F1: 400×240×50, right-side path at B0 fits confirmed machine',{
  assert.ok(p.moves.filter(m=>m.wire&&m.type==='G1').every(m=>m.to.B===0));
  if(process.env.F1_GCODE_OUT) fs.writeFileSync(process.env.F1_GCODE_OUT,r.program);
  console.log('F1 simulation',JSON.stringify({points:r.points,moves:p.moves.length,seconds:p.total,warnings:check.warns.map(w=>({level:w.level,text:w.text})),generatorWarnings:r.warnings}));
+});
+test('model quarter turns and scale are shared by preview and G-code',()=>{
+ const identity=gen.identityRotation();
+ const original=gen.previewGeometry(fixture);
+ for(const axis of [0,1,2]) {
+  let rotation=identity;
+  for(let i=0;i<4;i++) rotation=gen.rotateModel(rotation,axis,1);
+  assert.equal(JSON.stringify(rotation),JSON.stringify(identity));
+  const reverse=gen.rotateModel(gen.rotateModel(identity,axis,1),axis,-1);
+  assert.equal(JSON.stringify(reverse),JSON.stringify(identity));
+ }
+ const rotation=gen.rotateModel(identity,0,1);
+ const preview=gen.previewGeometry(fixture,rotation,.5);
+ [25,20,50].forEach((v,k)=>assert.ok(Math.abs(preview.size[k]-v)<.001));
+ const result=build({rotation,scale:.5,stock:[50,80,100]});
+ assert.ok(Math.abs(result.part.x1-result.part.x0-preview.size[1])<.001);
+ assert.ok(Math.abs(result.part.z1-result.part.z0-preview.size[2])<.001);
+ assert.notEqual(result.program,build().program);
+ assert.equal(original.axis,1);
+ for(const axis of [1,2]) {
+  const tilted=gen.rotateModel(identity,axis,1);
+  assert.notEqual(gen.previewGeometry(fixture,tilted).axis,1);
+  assert.throws(()=>build({rotation:tilted}),/Поверните модель/);
+ }
+ assert.throws(()=>build({scale:0}),/Масштаб/);
+ assert.throws(()=>gen.previewGeometry(fixture,identity,NaN),/Масштаб/);
 });
