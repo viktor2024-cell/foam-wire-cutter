@@ -85,6 +85,29 @@ test('swept wing keeps the real end-cap span even with oblique generators',()=>{
  assert.equal(r.secondary,0);
  assert.doesNotMatch(r.program,/SECONDARY CUT/);
 });
+test('pair uses one central web and two kerf-aware outer margins',()=>{
+ const small=options({pair:true,stock:[50,140,89]});
+ const r=build(small);
+ assert.match(r.program,/pair: upper reflected over gap/);
+ assert.match(r.program,/GAP ENTRY/);
+ assert.equal(r.secondary,0);
+ assert.ok(r.points>500);
+ const p=sim.parseGcode(r.program),machine={...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false};
+ const check=sim.analyse(p,machine);
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
+ assert.throws(()=>build(options({pair:true,stock:[50,140,88]})),/Пара не помещается.*89\.0/);
+});
+test('external W1: mirror pair at 65 mm stock height is machinable',{skip:!process.env.W1_STEP},()=>{
+ const text=fs.readFileSync(process.env.W1_STEP,'utf8');
+ const o=options({pair:true,stock:[300,230,65]});
+ const r=gen.buildProgram(text,'W1.stp',o);
+ assert.equal(r.secondary,0);
+ assert.match(r.program,/GAP ENTRY/);
+ assert.ok(r.points>1000);
+ const p=sim.parseGcode(r.program);
+ const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
+});
 test('external W1: no false transverse operation from STEP end caps',{skip:!process.env.W1_STEP},()=>{
  const text=fs.readFileSync(process.env.W1_STEP,'utf8');
  const m=new gen.Model(text),shape=m.build();
