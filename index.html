@@ -2192,16 +2192,22 @@ const Gen = (() => {
     ruledFace(surf, axis, planeA, planeB, edgeIds) {
       // - Параметр размаха: степень 1 и координата по оси размаха меняется вдоль него
       const uMid = sum2(surf.udomain) / 2, vMid = sum2(surf.vdomain) / 2;
-      let spanIsU = null;
-      if (surf.pu === 1) {
-        const a = surf.at(surf.udomain[0], vMid), b = surf.at(surf.udomain[1], vMid);
-        if (Math.abs(a[axis] - b[axis]) > 1e-6) spanIsU = true;
+      // Compare normalized alignment, not a tiny absolute coordinate drift.
+      // STEP planes often have roundoff in their nominally constant Y values.
+      const candidate=[];
+      if(surf.pu===1) {
+        const a=surf.at(surf.udomain[0],vMid),b=surf.at(surf.udomain[1],vMid);
+        const norm=dist(a,b);
+        if(norm>1e-6)candidate.push({u:true,alignment:Math.abs(b[axis]-a[axis])/norm});
       }
-      if (spanIsU === null && surf.pv === 1) {
-        const a = surf.at(uMid, surf.vdomain[0]), b = surf.at(uMid, surf.vdomain[1]);
-        if (Math.abs(a[axis] - b[axis]) > 1e-6) spanIsU = false;
+      if(surf.pv===1) {
+        const a=surf.at(uMid,surf.vdomain[0]),b=surf.at(uMid,surf.vdomain[1]);
+        const norm=dist(a,b);
+        if(norm>1e-6)candidate.push({u:false,alignment:Math.abs(b[axis]-a[axis])/norm});
       }
-      if (spanIsU === null) return null;     // - торцевая грань (лежит в плоскости профиля)
+      candidate.sort((a,b)=>b.alignment-a.alignment);
+      if(!candidate.length||candidate[0].alignment<.999)return null;
+      const spanIsU=candidate[0].u;
 
       const sDom = spanIsU ? surf.udomain : surf.vdomain, tDom = spanIsU ? surf.vdomain : surf.udomain;
       const at = (s, t) => (spanIsU ? surf.at(s, t) : surf.at(t, s));
