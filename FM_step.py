@@ -335,11 +335,25 @@ class Model:
       if abs(v1[axis] - plane_a) < 1e-3 and abs(v2[axis] - plane_a) < 1e-3:
         if _dist(v1, v2) < 1e-6:
           closed = True
-        ends_a = [v1, v2]
+        ends_a.extend((v1, v2))
       if abs(v1[axis] - plane_b) < 1e-3 and abs(v2[axis] - plane_b) < 1e-3:
-        ends_b = [v1, v2]
+        ends_b.extend((v1, v2))
     if len(ends_a) == 0 or len(ends_b) == 0:
       raise StepError("Грань без рёбер в плоскостях профилей")
+
+    def chain_ends(points):
+      ends = []
+      for p in points:
+        match = next((q for q in ends if _dist(p, q) < 1e-6), None)
+        if match is None:
+          ends.append(p)
+        else:
+          ends.remove(match)
+      if len(ends) != 2:
+        raise StepError("Неоднозначная граница направляющей: ожидается одна цепочка рёбер")
+      return ends
+    if not closed:
+      ends_a, ends_b = chain_ends(ends_a), chain_ends(ends_b)
 
     skew = 0.0
     if closed:
