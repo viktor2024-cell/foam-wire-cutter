@@ -51,7 +51,7 @@ test('production simulator agrees with generated stock and rejects unsafe rapid 
  const p=sim.parseGcode(build().program);
  const s={...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false};
  const check=sim.analyse(p,s);
- assert.equal(p.moves.length,410);assert.ok(p.total>0);assert.ok(check.trail.length>0);
+ // Closing overrun adds one intentional G01 move to the profile.\n assert.equal(p.moves.length,411);assert.ok(p.total>0);assert.ok(check.trail.length>0);
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0);
  const bad=sim.parseGcode('; STOCK L=140 W=50 H=60 Z0=10\nG92 X0 Y100 Z0 A100 B0\nG00 X0 Y20 Z0 A20 F600\n');
  assert.ok(sim.analyse(bad,s).warns.some(w=>w.level==='crit'&&w.text.includes('G0')));
