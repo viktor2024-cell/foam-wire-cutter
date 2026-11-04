@@ -2021,14 +2021,14 @@ const Gen = (() => {
     spanAxis() {
       const points = [...this.edges.values()].flat();
       const planes = (axis) => [...new Set(points.map((p) => Math.round(p[axis] * 1000) / 1000))].sort((a, b) => a - b);
-      const candidates = [0, 1, 2].filter((axis) => planes(axis).length === 2);
-      if (candidates.length !== 1) {
-        const dirs = this.cutDirectionCandidates();
-        const info = dirs.map(c=>c.direction.map(v=>v.toFixed(3)).join("/")+" ("+c.faces.length+" граней)").join("; ");
-        throw new StepError("STEP содержит несколько направлений или промежуточные плоскости. Обнаружены направления линейчатых граней: "+(info||"нет")+". Автоматическая многооперационная резка пока не поддерживается; G-code не создан.");
-      }
-      const values = planes(candidates[0]);
-      return [candidates[0], values[0], values[values.length - 1]];
+      const dirs = this.cutDirectionCandidates();
+      const dominant = dirs[0];
+      const axis = dominant && dominant.direction.findIndex(v=>Math.abs(v)>0.999);
+      if (axis !== 1) throw new StepError("Основное направление резки не определено вдоль Y; G-code не создан");
+      const values = planes(axis);
+      if (values.length < 2) throw new StepError("Не найдены две торцевые плоскости");
+      // End planes are the extremes, even when intermediate vertices exist.
+      return [axis, values[0], values[values.length-1]];
     }
     build() {
       const [axis, planeA, planeB] = this.spanAxis();
@@ -2037,6 +2037,24 @@ const Gen = (() => {
         const face = this.ruledFace(this.surface(raw.surf), axis, planeA, planeB, raw.edgeIds);
         if (face !== null) (face.closed ? holes : outer).push(face);
       }
+      // A second cutting direction cannot be silently discarded.
+      // Interior surface patches are not equivalent to end caps.
+      const secondary = this.facesRaw.filter(raw => {
+        const surf = this.surface(raw.surf);
+        const p = [
+          surf.at(surf.udomain[0],surf.vdomain[0]),
+          surf.at(surf.udomain[1],surf.vdomain[0]),
+          surf.at(surf.udomain[0],surf.vdomain[1]),
+          surf.at(surf.udomain[1],surf.vdomain[1])
+        ];
+        const ys = p.map(q=>q[axis]);
+        const onEnd = ys.every(y=>Math.abs(y-planeA)<0.01) || ys.every(y=>Math.abs(y-planeB)<0.01);
+        return !onEnd && Math.max(...ys)-Math.min(...ys)<planeB-planeA-0.01;
+      });
+      if (secondary.length) throw new StepError("Обнаружены дополнительные внутренние грани #"+
+        secondary.map(f=>f.fid).join(", #")+
+        ". Торцы основной детали Y="+planeA.toFixed(3)+" / "+planeB.toFixed(3)+
+        ". Вторая операция ещё не реализована; неполный G-code заблокирован.");
       return { outer: Model.chain(outer), holes: holes.map((h) => [[h, true]]), axis, planeA, planeB };
     }
     ruledFace(surf, axis, planeA, planeB, edgeIds) {
