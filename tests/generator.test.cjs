@@ -85,6 +85,38 @@ test('swept wing keeps the real end-cap span even with oblique generators',()=>{
  assert.equal(r.secondary,0);
  assert.doesNotMatch(r.program,/SECONDARY CUT/);
 });
+test('pair checkbox controls Create G-code, not only the stock preview',()=>{
+ // Exercise the actual UI mode dispatch and event handlers with minimal DOM stubs.
+ const clickHandlers=new Map();
+ const nodes=Object.fromEntries(['gnGo','gnMirror','gnPair','gnStockPair','gnDone','gnOut','gnStatus']
+  .map(id=>[id,{checked:false,hidden:false,textContent:'',addEventListener(type,fn){clickHandlers.set(id+':'+type,fn);}}]));
+ const get=id=>nodes[id],modes=[];
+ // Use only the production dispatch wiring; do not silently substitute another implementation.
+ const ui=html.slice(html.indexOf('// The pair checkbox is a real machining mode'),html.indexOf('function frame(now)'));
+ vm.runInNewContext(ui,{ $:get,generate:mode=>modes.push(mode),generatorPreview:{rebuild(){}},
+   showTab(){},saveProgram(){},});
+ get('gnStockPair').checked=true;
+ clickHandlers.get('gnStockPair:change')();
+ assert.match(get('gnGo').textContent,/ПАРА.*2 детали/);
+ clickHandlers.get('gnGo:click')();
+ assert.equal(modes.at(-1),'pair');
+ get('gnStockPair').checked=false;
+ clickHandlers.get('gnStockPair:change')();
+ clickHandlers.get('gnGo:click')();
+ assert.equal(modes.at(-1),'normal');
+ clickHandlers.get('gnPair:click')();
+ assert.equal(modes.at(-1),'pair');
+ assert.equal(get('gnStockPair').checked,true);
+});
+test('pair G-code explicitly contains two profiles and a two-piece mode header',()=>{
+ const r=build(options({pair:true,stock:[50,140,89]}));
+ assert.match(r.program,/CUT MODE=PAIR PIECES=2/);
+ assert.equal((r.program.match(/PROFILE [12]\/2:/g)||[]).length,2);
+ assert.ok(r.program.indexOf('PROFILE 1/2: UPPER')<r.program.indexOf('PROFILE 2/2: LOWER'));
+ assert.equal((r.program.match(/corner entry, upper first/g)||[]).length,2);
+ assert.match(build().program,/CUT MODE=SINGLE PIECES=1/);
+ assert.equal((build().program.match(/PROFILE [12]\/2:/g)||[]).length,0);
+});
 test('pair uses one central web and two kerf-aware outer margins',()=>{
  const small=options({pair:true,stock:[50,140,89]});
  const r=build(small);
