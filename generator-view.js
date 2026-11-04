@@ -102,10 +102,20 @@ const generatorPreview = (() => {
   document.getElementById('gnStockFromModel').addEventListener('click',()=>{
     load(); // Use the current orientation and scale, including a just-edited scale field.
     if (!geometry) return;
-    ['gnL','gnW','gnH'].forEach((id,k)=>{
-      // Round up to 0.01 mm; ignore floating-point noise at exact hundredths.
-      document.getElementById(id).value = Math.ceil((geometry.size[k] + 20) * 100 - 1e-7) / 100;
-    });
+    const round5 = x => Math.ceil((x - 1e-7) / 5) * 5;
+    const pair = document.getElementById('gnStockPair')?.checked || false;
+    const kerf = n('gnKerf') || 0;
+    const requiredHeight = (pair ? 2 * geometry.size[2] + 5 + kerf : geometry.size[2]) + 20;
+    const thickness = [20,50,100].find(t => t + 1e-7 >= requiredHeight);
+    if (!thickness) {
+      const fit = document.getElementById('gnFit');
+      fit.className = 'note crit';
+      fit.textContent = 'Нужна высота ' + requiredHeight.toFixed(1) + ' мм; один стандартный лист (20/50/100 мм) не подходит.';
+      return;
+    }
+    document.getElementById('gnL').value = round5(geometry.size[0] + 20);
+    document.getElementById('gnW').value = round5(geometry.size[1] + 20);
+    document.getElementById('gnH').value = thickness;
     invalidate(); rebuild();
   });
   document.getElementById('gnScale').addEventListener('change',load);
