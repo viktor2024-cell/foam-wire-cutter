@@ -89,8 +89,9 @@ test('pair uses one central web and two kerf-aware outer margins',()=>{
  const small=options({pair:true,stock:[50,140,89]});
  const r=build(small);
  assert.match(r.program,/pair: upper reflected over gap/);
- assert.match(r.program,/GAP ENTRY/);
+ assert.doesNotMatch(r.program,/GAP ENTRY/); // synthetic profile has no holes
  assert.equal(r.secondary,0);
+ assert.equal((r.program.match(/corner entry, upper first/g)||[]).length,2);
  assert.ok(r.points>500);
  const p=sim.parseGcode(r.program),machine={...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false};
  const check=sim.analyse(p,machine);
