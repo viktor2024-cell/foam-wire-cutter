@@ -41,6 +41,34 @@ function transverseFixture(yShift=0,twist=0) {
   .replace("#48 = ADVANCED_FACE('',(#46),#47,.T.);","#48 = ADVANCED_FACE('',(#46,#131),#47,.T.);")
   .replace('ENDSEC;\nEND-ISO',extra+'ENDSEC;\nEND-ISO');
 }
+// Split one annular cross-contour into two open ruled STEP faces sharing
+// longitudinal coedges. The resulting contour must be reconstructed as a
+// closed chain of BOTH faces, not mistaken for two independent holes.
+function twoFaceTransverseFixture() {
+ let step=transverseFixture();
+ const swap=(a,b)=>{assert.ok(step.includes(a),a);step=step.replace(a,b);};
+ swap("#122 = EDGE_CURVE('',#120,#120,$,.T.);","#122 = EDGE_CURVE('',#120,#150,$,.T.);");
+ swap("#123 = EDGE_CURVE('',#121,#121,$,.T.);","#123 = EDGE_CURVE('',#121,#151,$,.T.);");
+ swap("#128 = EDGE_LOOP('',(#125));","#128 = EDGE_LOOP('',(#125,#155));");
+ swap("#130 = EDGE_LOOP('',(#126));","#130 = EDGE_LOOP('',(#126,#156));");
+ swap("#132 = EDGE_LOOP('',(#125,#127,#126));","#132 = EDGE_LOOP('',(#125,#127,#126,#157));");
+ swap("#134 = B_SPLINE_SURFACE_WITH_KNOTS('',1,3,((#100,#101,#102,#103,#104,#105,#106),(#110,#111,#112,#113,#114,#115,#116)),.UNSPECIFIED.,.F.,.F.,.F.,(2,2),(4,3,4),(0.,1.),(0.,0.5,1.),.UNSPECIFIED.);",
+ "#134 = B_SPLINE_SURFACE_WITH_KNOTS('',1,3,((#100,#101,#102,#103),(#110,#111,#112,#113)),.UNSPECIFIED.,.F.,.F.,.F.,(2,2),(4,4),(0.,1.),(0.,1.),.UNSPECIFIED.);");
+ const more=`#150 = VERTEX_POINT('',#103);
+#151 = VERTEX_POINT('',#113);
+#152 = EDGE_CURVE('',#150,#120,$,.T.);
+#153 = EDGE_CURVE('',#151,#121,$,.T.);
+#154 = EDGE_CURVE('',#150,#151,$,.T.);
+#155 = ORIENTED_EDGE('',*,*,#152,.T.);
+#156 = ORIENTED_EDGE('',*,*,#153,.T.);
+#157 = ORIENTED_EDGE('',*,*,#154,.T.);
+#158 = EDGE_LOOP('',(#155,#157,#156,#127));
+#159 = FACE_OUTER_BOUND('',#158,.T.);
+#160 = B_SPLINE_SURFACE_WITH_KNOTS('',1,3,((#103,#104,#105,#106),(#113,#114,#115,#116)),.UNSPECIFIED.,.F.,.F.,.F.,(2,2),(4,4),(0.,1.),(0.,1.),.UNSPECIFIED.);
+#161 = ADVANCED_FACE('',(#159),#160,.T.);
+`;
+ return step.replace('ENDSEC;\nEND-ISO',more+'ENDSEC;\nEND-ISO');
+}
 const options=(extra={})=>({stock:[50,140,60],bottomZ:10,kerf:1,feed:7,minS:500,maxS:1000,clearance:20,retract:30,leadMargin:5,trim:false,side:1,powerComp:true,...extra});
 const build=(o={})=>gen.buildProgram(fixture,'synthetic.stp',options(o));
 test('split coedges yield the complete trimmed rectangular profile',()=>{
@@ -162,6 +190,18 @@ test('transverse curved bore is cut at B90 before outer profile, with guarded to
  assert.throws(()=>gen.buildProgram(text.replace("ADVANCED_FACE('',(#26,#129)","ADVANCED_FACE('',(#26)"),'incomplete.stp',options()),/нужны две граничные/);
  assert.throws(()=>gen.buildProgram(text,'pair.stp',options({pair:true})),/Дополнительные направления/);
  assert.throws(()=>gen.buildProgram(transverseFixture(0,12),'twisted.stp',options()),/образующие|не совпадает/);
+});
+test('secondary contour joins multiple open ruled faces into one closed cut',()=>{
+ const text=twoFaceTransverseFixture(),m=new gen.Model(text),shape=m.build();
+ assert.equal(shape.secondaryContours.length,1);
+ assert.equal(shape.secondaryContours[0].contour.length,2);
+ assert.ok(shape.secondaryContours[0].contour.every(([f])=>!f.closed));
+ const r=gen.buildProgram(text,'multi-patch.stp',options());
+ assert.equal(r.secondary,1);assert.equal(r.holes,1);
+ assert.match(r.program,/SECONDARY CUT: STEP faces #135, #161 B=90\.000/);
+ assert.ok(r.program.indexOf('SECONDARY CUT')<r.program.indexOf('corner entry, upper first'));
+ const p=sim.parseGcode(r.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
 });
 test('transverse straight generators support non-right-angle table rotations',()=>{
  const text=transverseFixture(4);
