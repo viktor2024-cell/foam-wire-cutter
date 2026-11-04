@@ -2051,8 +2051,10 @@ const Gen = (() => {
       const planes = (axis) => [...new Set(points.map((p) => Math.round(p[axis] * 1000) / 1000))].sort((a, b) => a - b);
       const dirs = this.cutDirectionCandidates();
       const dominant = dirs[0];
+      // Model and preview may be rotated to any Cartesian axis. Only the
+      // machine G-code path requires the span along Y (checked in buildProgram).
       const axis = dominant && dominant.direction.findIndex(v=>Math.abs(v)>0.999);
-      if (axis !== 1) throw new StepError("Основное направление резки не определено вдоль Y; G-code не создан");
+      if (axis === undefined || axis < 0) throw new StepError("Основное направление резки не совпадает с осью XYZ; G-code не создан");
       const values = planes(axis);
       if (values.length < 2) throw new StepError("Не найдены две торцевые плоскости");
       // End planes are the extremes, even when intermediate vertices exist.
