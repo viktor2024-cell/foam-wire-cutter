@@ -67,71 +67,37 @@ const generatorPreview = (() => {
     edge.position.copy(foam.position); group.add(edge);
     const axes = new THREE.AxesHelper(Math.max(...stock)*.35); axes.position.set(-stock[0]/2,-stock[1]/2,bottom); group.add(axes);
     if (geometry) {
-      const paired = document.getElementById('gnStockPair')?.checked === true;
-      const kerf = n('gnKerf') || 0;
-      const minGap = 5 + kerf;
-      // Use the same kerf-aware pair-height constraint as the G-code
-      // generator. A green stock preview must not promise a pair that the
-      // generator immediately rejects (especially for different A/B tips).
-      const zsA = geometry.rails.flatMap(rail => rail.map(pair => pair[0][2]));
-      const zsB = geometry.rails.flatMap(rail => rail.map(pair => pair[1][2]));
-      const zLow = Math.min(...zsA, ...zsB);
-      const pairHeight = Math.max(
-        2 * geometry.size[2] + minGap,
-        Math.max(...zsA) + Math.max(...zsB) - 2*zLow + 5 + 4*kerf
-      );
-      const requiredZ = paired ? pairHeight : geometry.size[2];
-      const fits = geometry.size[0] <= stock[0] + .001 && geometry.size[1] <= stock[1] + .001 && requiredZ <= stock[2] + .001;
-      const vertices = [], lines = [];
-      const point = p => p.map((v,k) => v - geometry.center[k] + (k===2 ? bottom+stock[2]/2 : 0));
-      for (const rail of geometry.rails) {
-        for (let i=1;i<rail.length;i++) {
-          const [a,b] = rail[i-1].map(point), [c,d] = rail[i].map(point);
-          vertices.push(...a,...b,...c,...b,...d,...c);
-          lines.push(...a,...c,...b,...d);
-        }
-        lines.push(...point(rail[0][0]),...point(rail[0][1]),...point(rail.at(-1)[0]),...point(rail.at(-1)[1]));
-      }
-      const mesh = new THREE.BufferGeometry(); mesh.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));
-      const color = fits ? 0xe87722 : 0xd73333;
-      group.add(new THREE.Mesh(mesh,new THREE.MeshBasicMaterial({color,side:THREE.DoubleSide,transparent:true,opacity:.45,depthWrite:false})));
-      const outline = new THREE.BufferGeometry(); outline.setAttribute('position',new THREE.Float32BufferAttribute(lines,3));
-      group.add(new THREE.LineSegments(outline,new THREE.LineBasicMaterial({color})));
-      if (paired) {
-        // Upper copy: reflect across horizontal plane and rotate 180 degrees about Z.
-        // This is a conservative envelope preview; actual paired toolpath uses per-tower placement.
-        const offset = (geometry.size[2] + minGap) / 2;
-        const transform = p => {
-          const q = point(p);
-          return [-q[0],-q[1],2*(bottom+stock[2]/2)-q[2]+offset];
-        };
-        const lowerOffset = -offset;
-        const lowerVertices = vertices.map((value,i)=>i%3===2 ? value+lowerOffset : value);
-        const lowerLines = lines.map((value,i)=>i%3===2 ? value+lowerOffset : value);
-        const lowerGeo = new THREE.BufferGeometry(); lowerGeo.setAttribute('position',new THREE.Float32BufferAttribute(lowerVertices,3));
-        const lowerEdges = new THREE.BufferGeometry(); lowerEdges.setAttribute('position',new THREE.Float32BufferAttribute(lowerLines,3));
-        mesh.setAttribute('position',new THREE.Float32BufferAttribute(lowerVertices,3));
-        outline.setAttribute('position',new THREE.Float32BufferAttribute(lowerLines,3));
-        const upperVertices = [], upperLines = [];
+      const paired = document.getElementById('gnStockPair').checked;
+      const kerf = n('gnKerf');
+      let placement;
+      try { if (paired) placement=Gen.previewPair(geometry,stock[2],bottom,kerf); }
+      catch(e) { fit.className='note crit';fit.textContent=e.message;aim();return; }
+      const requiredZ=paired ? placement.minimumHeight : geometry.size[2];
+      const fits=geometry.size[0]<=stock[0]+.001 && geometry.size[1]<=stock[1]+.001 && requiredZ<=stock[2]+.001;
+      const copies=paired ? [
+        {sign:[1,1,1],z:placement.zLower,color:0xe87722},
+        {sign:[-1,-1,-1],z:placement.zUpper,color:0x22a8a0}
+      ] : [{sign:[1,1,1],z:bottom+stock[2]/2,color:0xe87722}];
+      for (const copy of copies) {
+        const vertices=[],lines=[];
+        const point=p=>p.map((v,k)=>copy.sign[k]*(v-geometry.center[k])+(k===2?copy.z:0));
         for (const rail of geometry.rails) {
-          for (let i=1;i<rail.length;i++) {
-            const [a,b] = rail[i-1].map(transform), [c,d] = rail[i].map(transform);
-            upperVertices.push(...a,...b,...c,...b,...d,...c);
-            upperLines.push(...a,...c,...b,...d);
+          for(let i=1;i<rail.length;i++) {
+            const [a,b]=rail[i-1].map(point),[c,d]=rail[i].map(point);
+            vertices.push(...a,...b,...c,...b,...d,...c);lines.push(...a,...c,...b,...d);
           }
-          upperLines.push(...transform(rail[0][0]),...transform(rail[0][1]),...transform(rail.at(-1)[0]),...transform(rail.at(-1)[1]));
+          lines.push(...point(rail[0][0]),...point(rail[0][1]),...point(rail.at(-1)[0]),...point(rail.at(-1)[1]));
         }
-        const upperGeo = new THREE.BufferGeometry(); upperGeo.setAttribute('position',new THREE.Float32BufferAttribute(upperVertices,3));
-        const upperEdgeGeo = new THREE.BufferGeometry(); upperEdgeGeo.setAttribute('position',new THREE.Float32BufferAttribute(upperLines,3));
-        group.add(new THREE.Mesh(upperGeo,new THREE.MeshBasicMaterial({color:0x22a8a0,side:THREE.DoubleSide,transparent:true,opacity:.45,depthWrite:false})));
-        group.add(new THREE.LineSegments(upperEdgeGeo,new THREE.LineBasicMaterial({color:0x22a8a0})));
-        lowerGeo.dispose(); lowerEdges.dispose();
+        const color=fits?copy.color:0xd73333;
+        const mesh=new THREE.BufferGeometry();mesh.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));
+        group.add(new THREE.Mesh(mesh,new THREE.MeshBasicMaterial({color,side:THREE.DoubleSide,transparent:true,opacity:.45,depthWrite:false})));
+        const outline=new THREE.BufferGeometry();outline.setAttribute('position',new THREE.Float32BufferAttribute(lines,3));
+        group.add(new THREE.LineSegments(outline,new THREE.LineBasicMaterial({color})));
       }
-      fit.textContent = (paired ? 'Пара: ' : 'Модель: ') + geometry.size.map(v=>v.toFixed(2)).join(' × ') + ' мм (вдоль струны × поперёк × высота). ' +
-        (fits ? 'Помещается в заготовку. ' : 'Не помещается в заготовку. ') +
-        (paired ? 'Минимальная высота листа для пары с компенсацией струны: '+pairHeight.toFixed(1)+' мм. ' : '') +
-        (geometry.axis === 1 ? 'Размах направлен вдоль струны.' : 'Для генерации поверните размах вдоль X — струны.');
-      if (!fits || geometry.axis !== 1) fit.className = 'note crit';
+      fit.textContent=(paired?'Пара: ':'Модель: ')+geometry.size.map(v=>v.toFixed(2)).join(' × ')+
+        ' мм. '+(fits?'Помещается. ':'Не помещается. ')+(paired?'Минимальная высота: '+requiredZ.toFixed(1)+' мм. ':'')+
+        (geometry.axis===1?'Размах вдоль струны.':'Для генерации поверните размах вдоль струны.');
+      if(!fits||geometry.axis!==1) fit.className='note crit';
     } else {
       fit.textContent = error || 'Откройте STEP для проверки размещения.';
       if (error) fit.className = 'note crit';
@@ -162,7 +128,9 @@ const generatorPreview = (() => {
     const round5 = x => Math.ceil((x - 1e-7) / 5) * 5;
     const pair = document.getElementById('gnStockPair')?.checked || false;
     const kerf = n('gnKerf') || 0;
-    const requiredHeight = (pair ? 2 * geometry.size[2] + 5 + kerf : geometry.size[2]) + 20;
+    let requiredHeight;
+    try { requiredHeight = (pair ? Gen.previewPair(geometry, 100, 0, kerf).minimumHeight : geometry.size[2]) + 20; }
+    catch(e) { const fit=document.getElementById("gnFit");fit.className="note crit";fit.textContent=e.message;return; }
     const thickness = [20,50,100].find(t => t + 1e-7 >= requiredHeight);
     if (!thickness) {
       const fit = document.getElementById('gnFit');
@@ -185,5 +153,6 @@ const generatorPreview = (() => {
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change',draw);
   rebuild();
   document.getElementById('gnStockPair')?.addEventListener('change',rebuild);
+  document.getElementById('gnKerf').addEventListener('input',()=>{invalidate();rebuild();});
   return {load,rebuild};
 })();

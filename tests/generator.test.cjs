@@ -4,7 +4,7 @@ const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
 // Exercise the production generator without DOM stubs or a second implementation.
 const source=html.slice(html.indexOf('const Gen ='),html.indexOf('//  Вкладки и экран генератора'))
- .replace('return { buildProgram, CONFIG, previewGeometry, identityRotation, rotateModel };','return { buildProgram, CONFIG, previewGeometry, identityRotation, rotateModel, Model, sampleFace, Program, startBlock, endBlock };');
+ .replace('return { buildProgram, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };','return { buildProgram, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel, Model, sampleFace, Program, startBlock, endBlock };');
 const gen=vm.runInNewContext(source+';Gen');
 const fixture=fs.readFileSync(path.join(__dirname,'fixtures/split-profile.stp'),'utf8');
 // Construct a genuine two-direction ruled STEP topology: the main sheet
@@ -347,4 +347,13 @@ test('outer profile uses corner entry and 5 mm upward closing overrun',()=>{
  const coords=line=>Object.fromEntries([...line.matchAll(/([XZUY])(-?\d+(?:\.\d+)?)/g)].map(m=>[m[1],+m[2]]));
  const a=coords(previous),b=coords(last);
  assert.ok(Object.keys(a).length>0 && Object.keys(b).length>0);
+});
+
+test('pair preview uses the same height and gap as generated toolpaths',()=>{
+ const geometry=gen.previewGeometry(fixture), placement=gen.previewPair(geometry,100,10,1);
+ const result=build(options({pair:true,stock:[50,140,100],bottomZ:10,kerf:1}));
+ assert.ok(placement.minimumHeight<=100);
+ assert.ok(placement.zUpper>placement.zLower);
+ assert.match(result.program,/PROFILE 1\/2: UPPER MIRRORED PIECE/);
+ assert.throws(()=>build(options({pair:true,stock:[50,140,placement.minimumHeight-.1],bottomZ:10,kerf:1})),/Пара не помещается/);
 });

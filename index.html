@@ -1389,7 +1389,16 @@ function showWarnings() {
 //  Температура струны: пропорциональный пересчёт всех S в программе
 // ---------------------------------------------------------------------------------------------
 let original = null;        // - исходная программа: { text, name, base }
-let currentText = "", currentName = "";
+let currentText = "", currentName = "", generationStamp = null;
+function generatorSignature() {
+  return JSON.stringify([stepFile?.text, modelRotation, [...document.querySelectorAll('#panelGen input, #panelGen select')].map(e=>[e.id,e.type==='checkbox'?e.checked:e.value])]);
+}
+function requireCurrentProgram() {
+  if (generationStamp !== null && generationStamp !== generatorSignature()) {
+    showMsg("Программа устарела: сформируйте G-code заново.", true); return false;
+  }
+  return true;
+}
 
 const programBaseS = (p) => { const on = p.events.find((e) => e.type === "on"); return on ? on.S : null; };
 const programRangeS = (text) => {
@@ -1443,6 +1452,7 @@ if (!isLocalFile) {
   } catch (e) {}
 }
 async function saveProgram() {
+  if (!requireCurrentProgram()) return;
   if (prog && prog.check.warns.some((w) => w.level === "crit")) { showMsg("Экспорт заблокирован: устраните критические ошибки проверки траектории.", true); return; }
   const data = currentText.replace(/\r*\n/g, "\r\n");
   const name = currentName.replace(/^пример:\s*/, "");
@@ -1450,6 +1460,7 @@ async function saveProgram() {
   if (isLocalFile && stepFile && stepFile.handle && window.showSaveFilePicker) {
     try {
       const handle = await showSaveFilePicker({ startIn: stepFile.handle, suggestedName: name, types: [{ description: "G-code", accept: { "text/plain": [".gcode"] } }] });
+      if (!requireCurrentProgram() || data !== currentText.replace(/\r*\n/g, "\r\n")) return;
       const stream = await handle.createWritable();
       await stream.write(data);
       await stream.close();
@@ -1480,6 +1491,7 @@ async function saveProgram() {
   }
 }
 async function copyProgram() {
+  if (!requireCurrentProgram()) return;
   if (prog && prog.check.warns.some((w) => w.level === "crit")) { showMsg("Экспорт заблокирован: устраните критические ошибки проверки траектории.", true); return; }
   try { await navigator.clipboard.writeText(currentText.replace(/\r*\n/g, "\r\n")); $("tNote").textContent = "G-code скопирован. Вставьте его в новый файл .gcode."; }
   catch (e) { $("tNote").textContent = "Копирование не разрешено в этом окне. Откройте локальную копию D:\\1800mm\\wire_sim.html, там есть сохранение файла."; }
@@ -1500,6 +1512,7 @@ function loadProgram(text, name, opts = {}) {
   }
   prog = parsed;
   currentText = text; currentName = name;
+  if (!opts.keepOriginal) generationStamp = opts.generationStamp || null;
   if (!opts.keepOriginal) {
     original = { text, name, base: programBaseS(parsed) };
     if (original.base !== null) { $("tVal").value = $("tRange").value = Math.round(original.base); }
@@ -1776,6 +1789,7 @@ function startPolling() {
   }, POLL_MS);
 }
 function startJob() {
+  if (!requireCurrentProgram()) return;
   if (!mach.connected || job || !prog) return;
   const dry = $("gDry").checked, lines = buildStream(currentText, dry);
   const hasHome = lines.some((l) => /^\$H/i.test(l.text));
@@ -1843,12 +1857,30 @@ const Gen = (() => {
   function previewGeometry(text, rotation = identityRotation(), scale = 1) {
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
     const { outer, holes, secondaryContours, axis } = new Model(text, rotation, scale).build();
+    const sampled = outer.map(([face]) => sampleFace(face, face.t0, face.t1, 0.05, 5));
     const rails = [...outer, ...holes.flat(), ...secondaryContours.flatMap(g=>g.contour)].map(([face]) => sampleFace(face, face.t0, face.t1, 0.01, 2)
       .map((pair) => pair.map((p) => [-p[1], p[0], p[2]])));
-    const points = rails.flat(2);
+    const points = sampled.flat(2).map(p => [-p[1],p[0],p[2]]);
     const low = [0,1,2].map((k) => Math.min(...points.map((p) => p[k])));
     const high = [0,1,2].map((k) => Math.max(...points.map((p) => p[k])));
-    return { rails, axis, center: low.map((v,k) => (v+high[k])/2), size: low.map((v,k) => high[k]-v) };
+    return { rails, axis, sampled, secondaryCount: secondaryContours.length, center: low.map((v,k) => (v+high[k])/2), size: low.map((v,k) => high[k]-v) };
+  }
+
+  function pairPlacement(zsA, zsB, zc, span, stockHeight, bottomZ, kerf) {
+    const low = Math.min(...zsA,...zsB)-zc-kerf/2;
+    const topA = Math.max(...zsA)-zc+kerf/2, topB = Math.max(...zsB)-zc+kerf/2;
+    const outerMargin=kerf/2, minGap=5+kerf;
+    const minimumHeight=Math.max(2*(Math.max(...zsA,...zsB)-Math.min(...zsA,...zsB))+minGap,
+      -2*low+topA+topB+minGap+2*outerMargin);
+    const zLower=bottomZ+outerMargin-low,zUpper=bottomZ+stockHeight-outerMargin+low;
+    const gapMid=(zLower+zUpper)/2, tilt=(topA-topB)/2*CONFIG.FieldWidth/span;
+    return {minimumHeight,zLower,zUpper,gap:[gapMid-tilt,gapMid+tilt], gapAfterKerf:zUpper-zLower-topA-topB-kerf};
+  }
+  function previewPair(geometry, height, bottom, kerf) {
+    if (geometry.secondaryCount) throw new Error("Дополнительные направления: пара и зеркало пока не поддержаны");
+    if (geometry.axis!==1) throw new Error("Для пары поверните размах модели вдоль струны");
+    const pairs=geometry.sampled.flat();
+    return pairPlacement(pairs.map(p=>p[0][2]),pairs.map(p=>p[1][2]),geometry.center[2],geometry.size[0],height,bottom,kerf);
   }
 
   // --- Разбор текста STEP
@@ -2762,27 +2794,10 @@ const Gen = (() => {
       //   Наружный контур верхней режется первым: освобождённая нижняя деталь просела бы вместе с блоком над ней
       //   Верхняя - нижняя, отражённая по высоте и развёрнутая на 180 градусов в плане: толстый корень
       //   ложится над тонким концом, щели обеих выходят на одну сторону крыла, вход в контур - с той же кромки
-      const zA = (list) => list.map((z) => z - zc);
-      const lowA = Math.min(...zA(zsA)) - kerf / 2, lowB = Math.min(...zA(zsB)) - kerf / 2;
-      const topA = Math.max(...zA(zsA)) + kerf / 2, topB = Math.max(...zA(zsB)) + kerf / 2;
-      const low = Math.min(lowA, lowB), reach = half / (part.span / 2);
-      const free = stockHeight + 2 * low - (topA + topB);   // - сумма зазора и двух припусков, разделим поровну
-      // The preview reserves ONE 5 mm web between the parts, not three
-      // identical webs. Keep a small kerf-aware allowance at the top and
-      // bottom; all remaining foam belongs to the central intact web.
-      // This matches the visible two-part stock layout.
-      const MinGap = 5 + kerf, outerMargin = kerf / 2, space = outerMargin;
-      const previewHeight = 2 * (part.z1 - part.z0) + MinGap;
-      if (stockHeight + 1e-6 < previewHeight || free - 2 * outerMargin < MinGap - 1e-6) {
-        const minimum = Math.max(previewHeight, stockHeight - free + MinGap + 2 * outerMargin);
-        throw new Error("Пара не помещается в один лист: нужно не менее " + minimum.toFixed(1) +
-          " мм высоты (между деталями сохраняем 5 мм пенопласта после компенсации реза)");
-      }
-      const zLower = o.bottomZ + space - low, zUpper = o.bottomZ + stockHeight - space + low;
-      const lower = makeLayout(-1, 1, 1, zLower), upper = makeLayout(1, -1, -1, zUpper);
-      // - Середина зазора наклонена, как клин между деталями; на башнях она лежит на продолжении этой прямой
-      const gapMid = (zLower + zUpper) / 2, gapTilt = (topA - topB) / 2 * reach;
-      const gap = [gapMid - gapTilt, gapMid + gapTilt], yOut = o.side * (stockWidth / 2 + o.leadMargin);
+      const placement=pairPlacement(zsA,zsB,zc,part.span,stockHeight,o.bottomZ,kerf);
+      if(stockHeight+1e-6<placement.minimumHeight) throw new Error("Пара не помещается в один лист: нужно не менее "+placement.minimumHeight.toFixed(1)+" мм высоты");
+      const lower=makeLayout(-1,1,1,placement.zLower), upper=makeLayout(1,-1,-1,placement.zUpper);
+      const gap=placement.gap, yOut=o.side*(stockWidth/2+o.leadMargin);
       if (holes.length > 0) {
         program += ";" + EOL + "; *** GAP ENTRY: Z=" + fix2(gap[0]) + "/" + fix2(gap[1]) + " ***" + EOL;
         program += prog.travel("move", yOut, safe, yOut, safe) + prog.travel("cut", yOut, gap[0], yOut, gap[1]);
@@ -2811,7 +2826,7 @@ const Gen = (() => {
     if (prog.clipped) warnings.push("Мощность проволоки упёрлась в максимум S=" + fmtG(cfg.WireMaxPower) + ": проволока слишком длинная для этой формулы");
     return { program, warnings: [...new Set(warnings)], part, points: allTowers.length, holes: holes.length+secondaryContours.length, secondary: secondaryContours.length, power: [prog.minPower, prog.maxPower, prog.changes] };
   }
-  return { buildProgram, CONFIG, previewGeometry, identityRotation, rotateModel };
+  return { buildProgram, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
 })();
 
 // ---------------------------------------------------------------------------------------------
@@ -2865,7 +2880,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
     });
     const outName = stepFile.name.replace(/\.(stp|step)$/i, "") + (mode === "normal" ? "" : "_" + mode) + "_auto.gcode";
     $("gnOut").textContent = outName;
-    loadProgram(r.program, outName);
+    loadProgram(r.program, outName, {generationStamp:generatorSignature()});
     if (prog.check.warns.some((w) => w.level === "crit")) throw new Error("Траектория не прошла проверку симулятора: " + prog.check.warns.find((w) => w.level === "crit").text);
     setCamera("3d");
     const p = r.part;
