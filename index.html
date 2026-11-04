@@ -2115,9 +2115,12 @@ const Gen = (() => {
         return a.map((x,i)=>x+d*delta[i]);
       };
       for(const cap of caps) {
-        const p=intersect(cap,tDom[0]);
-        if(dist(p,cap.seam)>.05)throw new StepError("Грань #"+raw.fid+
-          ": граничная кривая не совпадает с пересечением торца ("+dist(p,cap.seam).toFixed(2)+" мм)");
+        const p=intersect(cap,tDom[0]),q=intersect(cap,tDom[1]);
+        const [v1,v2]=this.edges.get(cap.eid);
+        const forward=dist(p,v1)<.05&&dist(q,v2)<.05;
+        const reverse=dist(p,v2)<.05&&dist(q,v1)<.05;
+        if(!forward&&!reverse)throw new StepError("Грань #"+raw.fid+
+          ": концы граничной кривой не совпадают с пересечением торца");
       }
       // Use the edge's seam position to order rails, not a guessed X plane.
       const d0=opt.b.map((v,i)=>v-opt.a[i]);
