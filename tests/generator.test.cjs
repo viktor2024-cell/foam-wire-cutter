@@ -92,7 +92,7 @@ test('pair checkbox controls Create G-code, not only the stock preview',()=>{
   .map(id=>[id,{checked:false,hidden:false,textContent:'',addEventListener(type,fn){clickHandlers.set(id+':'+type,fn);}}]));
  const get=id=>nodes[id],modes=[];
  // Use only the production dispatch wiring; do not silently substitute another implementation.
- const ui=html.slice(html.indexOf('// The pair checkbox is a real machining mode'),html.indexOf('function frame(now)'));
+ const ui=html.slice(html.indexOf('// The pair checkbox is a real machining mode'),html.indexOf('$("gnToCut").addEventListener'));
  vm.runInNewContext(ui,{ $:get,generate:mode=>modes.push(mode),generatorPreview:{rebuild(){}},
    showTab(){},saveProgram(){},});
  get('gnStockPair').checked=true;
