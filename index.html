@@ -2047,31 +2047,37 @@ const Gen = (() => {
     }
     // --- Ось размаха: единственная ось, по которой вершины лежат ровно в двух плоскостях
     spanAxis() {
-      const points = [...this.edges.values()].flat();
-      const planes = (axis) => [...new Set(points.map((p) => Math.round(p[axis] * 1000) / 1000))].sort((a, b) => a - b);
-      const dirs=this.cutDirectionCandidates();
-      // The STEP end caps may also be degree-1 in their own planes, and a
-      // transverse tunnel adds an extra vote along the chord. Exclude the
-      // rotated original vertical, then break close votes in favour of the
-      // shorter horizontal stock dimension (the foam sheet thickness).
+      const points=[...this.edges.values()].flat();
+      const planes=axis=>[...new Set(points.map(p=>Math.round(p[axis]*1000)/1000))].sort((a,b)=>a-b);
+      // A thin curved wing may have its ruled direction a few degrees away
+      // from the nominal span. Count real end faces, not exactly axis-aligned
+      // B-spline parameter directions (which can vote for the wrong axis).
       const upMachine=this.rotation.map(row=>row[2]);
       const upRaw=[upMachine[1],-upMachine[0],upMachine[2]];
       const upAxis=upRaw.findIndex(v=>Math.abs(v)>.999);
-      const candidates=dirs.map(d=>({axis:d.direction.findIndex(v=>Math.abs(v)>.999),
-        count:d.faces.length})).filter(d=>d.axis>=0&&d.axis!==upAxis);
-      const count=Math.max(0,...candidates.map(d=>d.count));
-      const width=axis=>{const p=planes(axis);return p[p.length-1]-p[0];};
-      // A multi-face transverse tunnel can outvote the primary span by raw
-      // face count. Keep credible directions (at least half the strongest)
-      // then select the shorter non-vertical stock dimension.
-      const near=candidates.filter(d=>d.count>=Math.ceil(count/2));
-      near.sort((a,b)=>width(a.axis)-width(b.axis)||b.count-a.count);
-      const axis=near[0]?.axis;
-      if(axis===undefined)throw new StepError("Основное направление резки неоднозначно; G-code не создан");
-      const values = planes(axis);
-      if (values.length < 2) throw new StepError("Не найдены две торцевые плоскости");
-      // End planes are the extremes, even when intermediate vertices exist.
-      return [axis, values[0], values[values.length-1]];
+      const candidates=[0,1,2].filter(axis=>axis!==upAxis).map(axis=>{
+        const values=planes(axis),lo=values[0],hi=values[values.length-1];
+        // STEP trimming vertices, not unbounded face control points:
+        // a real end cap has at least three distinct vertices at the end.
+        const caps=[lo,hi].map(plane=>this.facesRaw.filter(raw=>{
+          const vertices=raw.edgeIds.flatMap(id=>this.edges.get(id)||[]);
+          const unique=vertices.filter((p,i)=>vertices.findIndex(q=>dist(p,q)<.01)===i);
+          return unique.length>=3&&vertices.every(p=>Math.abs(p[axis]-plane)<.01);
+        }));
+        const score=this.facesRaw.filter(raw=>{
+          const surf=this.surface(raw.surf),um=sum2(surf.udomain)/2,vm=sum2(surf.vdomain)/2;
+          return [[surf.pu,surf.at(surf.udomain[0],vm),surf.at(surf.udomain[1],vm)],
+                  [surf.pv,surf.at(um,surf.vdomain[0]),surf.at(um,surf.vdomain[1])]]
+            .some(([degree,a,b])=>degree===1&&dist(a,b)>1&&Math.abs((b[axis]-a[axis])/dist(a,b))>.99);
+        }).length;
+        return {axis,lo,hi,caps,score};
+      });
+      const capped=candidates.filter(c=>c.caps.every(faces=>faces.length>0));
+      const ranked=capped.length?capped:candidates;
+      ranked.sort((a,b)=>(a.hi-a.lo)-(b.hi-b.lo)||b.score-a.score);
+      const best=ranked[0];
+      if(!best||!best.score)throw new StepError("Не определено основное направление резки");
+      return [best.axis,best.lo,best.hi];
     }
     // A secondary ruled patch is bounded by two STEP edges shared with
     // planar end faces. The end faces need NOT be X=constant: intersect each
@@ -2210,7 +2216,7 @@ const Gen = (() => {
         if(norm>1e-6)candidate.push({u:false,alignment:Math.abs(b[axis]-a[axis])/norm});
       }
       candidate.sort((a,b)=>b.alignment-a.alignment);
-      if(!candidate.length||candidate[0].alignment<.999)return null;
+      if(!candidate.length||candidate[0].alignment<.995)return null;
       const spanIsU=candidate[0].u;
 
       const sDom = spanIsU ? surf.udomain : surf.vdomain, tDom = spanIsU ? surf.vdomain : surf.udomain;
