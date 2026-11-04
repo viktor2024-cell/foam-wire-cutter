@@ -2499,8 +2499,8 @@ const Gen = (() => {
       const topA = Math.max(...zA(zsA)) + kerf / 2, topB = Math.max(...zA(zsB)) + kerf / 2;
       const low = Math.min(lowA, lowB), reach = half / (part.span / 2);
       const free = stockHeight + 2 * low - (topA + topB);   // - сумма зазора и двух припусков, разделим поровну
-      const MinGap = 3, space = free / 3;
-      if (space < MinGap) throw new Error("Две детали не помещаются по высоте: нужна заготовка от " + Math.ceil(stockHeight - free + 3 * MinGap) + " мм");
+      const MinGap = 5 + kerf, space = free / 3; // 5 mm of intact foam between compensated cuts
+      if (space < MinGap) throw new Error("Пара не помещается в один лист: необходимо не менее " + Math.ceil(stockHeight - free + 3 * MinGap) + " мм высоты (зазор 5 мм и компенсация струны)");
       const zLower = o.bottomZ + space - low, zUpper = o.bottomZ + stockHeight - space + low;
       const lower = makeLayout(-1, 1, 1, zLower), upper = makeLayout(1, -1, -1, zUpper);
       // - Середина зазора наклонена, как клин между деталями; на башнях она лежит на продолжении этой прямой
