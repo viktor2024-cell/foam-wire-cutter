@@ -8,10 +8,13 @@ const generatorPreview = (() => {
   const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 10000);
   camera.up.set(0, 0, 1);
   const controls = new THREE.OrbitControls(camera, renderer.domElement);
-  let group = null, geometry = null, error = '', mode = '3d';
+  let group = null, geometry = null, envelope = null, error = '', mode = '3d';
+  const machine = Gen.CONFIG;
+  document.getElementById('gnEnvelopeLegend').textContent = `Пунктир — рабочая область станка: ${machine.HorizontalTravel} мм поперёк струны × ${machine.VerticalTravel} мм по высоте × ${machine.FieldWidth} мм вдоль струны.`;
   const n = id => Number(document.getElementById(id).value);
   const draw = () => {
     scene.background = new THREE.Color(getComputedStyle(document.documentElement).getPropertyValue('--view').trim());
+    if (envelope) envelope.material.color.set(getComputedStyle(document.documentElement).getPropertyValue('--muted').trim());
     if (!document.getElementById('panelGen').hidden) renderer.render(scene, camera);
   };
   controls.addEventListener('change', draw);
@@ -21,10 +24,13 @@ const generatorPreview = (() => {
     document.getElementById('gnStatus').textContent = '';
   };
   function aim() {
-    const size = Math.max(n('gnL') || 1, n('gnW') || 1, n('gnH') || 1, ...(geometry?.size || [1]));
-    const z = (n('gnZ') || 0) + (n('gnH') || 0) / 2;
+    const bottom = n('gnZ') || 0, height = n('gnH') || 0, modelHeight = geometry?.size[2] || 0;
+    const low = Math.min(0, bottom, bottom + (height - modelHeight) / 2);
+    const high = Math.max(machine.VerticalTravel, bottom + height, bottom + (height + modelHeight) / 2);
+    const size = Math.max(machine.FieldWidth, machine.HorizontalTravel, high - low, n('gnL') || 1, n('gnW') || 1, ...(geometry?.size || [1]));
+    const z = (low + high) / 2;
     // Fit both portrait and landscape canvases; preserve the chosen view when dimensions change.
-    const d = size * 1.8 / Math.min(1, camera.aspect);
+    const d = size * 2.2 / Math.min(1, camera.aspect);
     controls.target.set(0, 0, z);
     camera.up.set(0, 0, 1);
     if (mode === 'top') { camera.position.set(0, 0, z + d); camera.up.set(0, 1, 0); }
@@ -43,11 +49,17 @@ const generatorPreview = (() => {
   function rebuild() {
     document.getElementById('gnStockFromModel').disabled = !geometry;
     clear(); group = new THREE.Group(); scene.add(group);
+    const machineBox = new THREE.BoxGeometry(machine.FieldWidth, machine.HorizontalTravel, machine.VerticalTravel);
+    envelope = new THREE.LineSegments(new THREE.EdgesGeometry(machineBox), new THREE.LineDashedMaterial({color:0x667788, dashSize:7, gapSize:5}));
+    machineBox.dispose();
+    envelope.computeLineDistances();
+    envelope.position.z = machine.VerticalTravel / 2;
+    group.add(envelope);
     const stock = [n('gnL'), n('gnW'), n('gnH')], bottom = n('gnZ');
     const valid = stock.every(v => Number.isFinite(v) && v > 0) && Number.isFinite(bottom) && bottom >= 0;
     const fit = document.getElementById('gnFit');
     fit.className = 'note';
-    if (!valid) { fit.className = 'note crit'; fit.textContent = 'Введите положительные размеры заготовки и неотрицательный низ Z.'; draw(); return; }
+    if (!valid) { fit.className = 'note crit'; fit.textContent = 'Введите положительные размеры заготовки и неотрицательный низ Z.'; aim(); return; }
     const box = new THREE.BoxGeometry(...stock);
     const foam = new THREE.Mesh(box, new THREE.MeshBasicMaterial({color: 0x4499cc, transparent:true, opacity:.12, depthWrite:false}));
     foam.position.z = bottom + stock[2]/2; group.add(foam);
@@ -55,7 +67,21 @@ const generatorPreview = (() => {
     edge.position.copy(foam.position); group.add(edge);
     const axes = new THREE.AxesHelper(Math.max(...stock)*.35); axes.position.set(-stock[0]/2,-stock[1]/2,bottom); group.add(axes);
     if (geometry) {
-      const fits = geometry.size.every((v,k) => v <= stock[k] + .001);
+      const paired = document.getElementById('gnStockPair')?.checked === true;
+      const kerf = n('gnKerf') || 0;
+      const minGap = 5 + kerf;
+      // Use the same kerf-aware pair-height constraint as the G-code
+      // generator. A green stock preview must not promise a pair that the
+      // generator immediately rejects (especially for different A/B tips).
+      const zsA = geometry.rails.flatMap(rail => rail.map(pair => pair[0][2]));
+      const zsB = geometry.rails.flatMap(rail => rail.map(pair => pair[1][2]));
+      const zLow = Math.min(...zsA, ...zsB);
+      const pairHeight = Math.max(
+        2 * geometry.size[2] + minGap,
+        Math.max(...zsA) + Math.max(...zsB) - 2*zLow + 5 + 4*kerf
+      );
+      const requiredZ = paired ? pairHeight : geometry.size[2];
+      const fits = geometry.size[0] <= stock[0] + .001 && geometry.size[1] <= stock[1] + .001 && requiredZ <= stock[2] + .001;
       const vertices = [], lines = [];
       const point = p => p.map((v,k) => v - geometry.center[k] + (k===2 ? bottom+stock[2]/2 : 0));
       for (const rail of geometry.rails) {
@@ -71,8 +97,39 @@ const generatorPreview = (() => {
       group.add(new THREE.Mesh(mesh,new THREE.MeshBasicMaterial({color,side:THREE.DoubleSide,transparent:true,opacity:.45,depthWrite:false})));
       const outline = new THREE.BufferGeometry(); outline.setAttribute('position',new THREE.Float32BufferAttribute(lines,3));
       group.add(new THREE.LineSegments(outline,new THREE.LineBasicMaterial({color})));
-      fit.textContent = 'Модель: ' + geometry.size.map(v=>v.toFixed(2)).join(' × ') + ' мм (вдоль струны × поперёк × высота). ' +
+      if (paired) {
+        // Upper copy: reflect across horizontal plane and rotate 180 degrees about Z.
+        // This is a conservative envelope preview; actual paired toolpath uses per-tower placement.
+        const offset = (geometry.size[2] + minGap) / 2;
+        const transform = p => {
+          const q = point(p);
+          return [-q[0],-q[1],2*(bottom+stock[2]/2)-q[2]+offset];
+        };
+        const lowerOffset = -offset;
+        const lowerVertices = vertices.map((value,i)=>i%3===2 ? value+lowerOffset : value);
+        const lowerLines = lines.map((value,i)=>i%3===2 ? value+lowerOffset : value);
+        const lowerGeo = new THREE.BufferGeometry(); lowerGeo.setAttribute('position',new THREE.Float32BufferAttribute(lowerVertices,3));
+        const lowerEdges = new THREE.BufferGeometry(); lowerEdges.setAttribute('position',new THREE.Float32BufferAttribute(lowerLines,3));
+        mesh.setAttribute('position',new THREE.Float32BufferAttribute(lowerVertices,3));
+        outline.setAttribute('position',new THREE.Float32BufferAttribute(lowerLines,3));
+        const upperVertices = [], upperLines = [];
+        for (const rail of geometry.rails) {
+          for (let i=1;i<rail.length;i++) {
+            const [a,b] = rail[i-1].map(transform), [c,d] = rail[i].map(transform);
+            upperVertices.push(...a,...b,...c,...b,...d,...c);
+            upperLines.push(...a,...c,...b,...d);
+          }
+          upperLines.push(...transform(rail[0][0]),...transform(rail[0][1]),...transform(rail.at(-1)[0]),...transform(rail.at(-1)[1]));
+        }
+        const upperGeo = new THREE.BufferGeometry(); upperGeo.setAttribute('position',new THREE.Float32BufferAttribute(upperVertices,3));
+        const upperEdgeGeo = new THREE.BufferGeometry(); upperEdgeGeo.setAttribute('position',new THREE.Float32BufferAttribute(upperLines,3));
+        group.add(new THREE.Mesh(upperGeo,new THREE.MeshBasicMaterial({color:0x22a8a0,side:THREE.DoubleSide,transparent:true,opacity:.45,depthWrite:false})));
+        group.add(new THREE.LineSegments(upperEdgeGeo,new THREE.LineBasicMaterial({color:0x22a8a0})));
+        lowerGeo.dispose(); lowerEdges.dispose();
+      }
+      fit.textContent = (paired ? 'Пара: ' : 'Модель: ') + geometry.size.map(v=>v.toFixed(2)).join(' × ') + ' мм (вдоль струны × поперёк × высота). ' +
         (fits ? 'Помещается в заготовку. ' : 'Не помещается в заготовку. ') +
+        (paired ? 'Минимальная высота листа для пары с компенсацией струны: '+pairHeight.toFixed(1)+' мм. ' : '') +
         (geometry.axis === 1 ? 'Размах направлен вдоль струны.' : 'Для генерации поверните размах вдоль X — струны.');
       if (!fits || geometry.axis !== 1) fit.className = 'note crit';
     } else {
@@ -102,10 +159,20 @@ const generatorPreview = (() => {
   document.getElementById('gnStockFromModel').addEventListener('click',()=>{
     load(); // Use the current orientation and scale, including a just-edited scale field.
     if (!geometry) return;
-    ['gnL','gnW','gnH'].forEach((id,k)=>{
-      // Round up to 0.01 mm; ignore floating-point noise at exact hundredths.
-      document.getElementById(id).value = Math.ceil((geometry.size[k] + 20) * 100 - 1e-7) / 100;
-    });
+    const round5 = x => Math.ceil((x - 1e-7) / 5) * 5;
+    const pair = document.getElementById('gnStockPair')?.checked || false;
+    const kerf = n('gnKerf') || 0;
+    const requiredHeight = (pair ? 2 * geometry.size[2] + 5 + kerf : geometry.size[2]) + 20;
+    const thickness = [20,50,100].find(t => t + 1e-7 >= requiredHeight);
+    if (!thickness) {
+      const fit = document.getElementById('gnFit');
+      fit.className = 'note crit';
+      fit.textContent = 'Нужна высота ' + requiredHeight.toFixed(1) + ' мм; один стандартный лист (20/50/100 мм) не подходит.';
+      return;
+    }
+    document.getElementById('gnL').value = round5(geometry.size[0] + 20);
+    document.getElementById('gnW').value = round5(geometry.size[1] + 20);
+    document.getElementById('gnH').value = thickness;
     invalidate(); rebuild();
   });
   document.getElementById('gnScale').addEventListener('change',load);
@@ -117,5 +184,6 @@ const generatorPreview = (() => {
   new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change',draw);
   rebuild();
-  return {load};
+  document.getElementById('gnStockPair')?.addEventListener('change',rebuild);
+  return {load,rebuild};
 })();
