@@ -2627,7 +2627,7 @@ const Gen = (() => {
     }
     const scale = o.scale === undefined ? 1 : o.scale;
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
-    const model = new Model(text, o.rotation, scale), { outer, holes, axis, planeA, planeB } = model.build();
+    const model = new Model(text, o.rotation, scale), { outer, holes, secondaryContours, axis, planeA, planeB } = model.build();
     if (axis !== 1) throw new StepError("Поверните модель: размах должен идти вдоль струны (сейчас ось модели " + "XYZ"[axis] + ")");
 
     // - Габарит детали по направляющим
@@ -2654,6 +2654,7 @@ const Gen = (() => {
     const trim = { Length: stockLength, Width: stockWidth, Height: stockHeight, TrimEnds: (stockLength - part.span) / 2 - kerf / 2, BottomZ: o.bottomZ, RetractOffset: o.retract };
     const hasTrim = o.trim !== false && trim.TrimEnds > 0;
     const sideEntry = o.sideEntry === true;
+    if (secondaryContours.length && (o.pair || o.mirror || sideEntry)) throw new StepError("Дополнительные направления: режим пары, зеркала и бокового входа ещё не поддержан; G-code заблокирован");
     if (sideEntry && (o.trim !== false || o.pair || holes.length || o.side !== 1)) throw new Error("Боковой вход справа требует одну деталь без отверстий, торцевания и входа слева");
     if (sideEntry && (stockWidth / 2 + o.leadMargin > cfg.ParkX || o.leadMargin <= 0)) throw new Error("Нет внешнего коридора между правым краем заготовки и парковкой");
     const errors = checkTrim(cfg, hasTrim ? trim : { ...trim, TrimEnds: 0 }, !sideEntry);
@@ -2677,6 +2678,49 @@ const Gen = (() => {
       program += trimBlock(cfg, trim, prog);
       // - После торцевания возвращаем стол в 0°: основной профиль всегда режется в этой позиции
       program += ";" + EOL + "; - Return table to 0 for profile cutting" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe) + rotate(cfg, 0);
+    }
+    // Cross-direction operations run BEFORE the outer profile releases the
+    // part. B rotates the original (X,Y) stock frame, not the foam geometry.
+    // For a rotation theta, along-wire = X*sin(theta)-Y*cos(theta),
+    // and the toolpath chord = X*cos(theta)+Y*sin(theta).
+    if(secondaryContours.length) {
+      const radius90=Math.hypot(stockWidth,stockLength)/2;
+      if(cfg.ParkX-radius90<RadialMargin)
+        throw new StepError("При повороте для второго реза заготовка задевает парковочный коридор (радиус "+radius90.toFixed(1)+" мм)");
+      if(stockWidth>cfg.FieldWidth-2)
+        throw new StepError("Ширина заготовки "+stockWidth+" мм не помещается между башнями после поворота стола");
+      const zMid=o.bottomZ+stockHeight/2;
+      for(const op of secondaryContours) {
+        const [dx,dy]=op.dir;
+        let angle=Math.atan2(dx,-dy)*180/Math.PI;
+        // A straight hot wire has no preferred direction along its span.
+        // Keep table angles in [0,180) and transform points consistently.
+        if(angle<0)angle+=180;
+        if(angle>=180)angle-=180;
+        const radians=angle*Math.PI/180, cs=Math.cos(radians),sn=Math.sin(radians);
+        const remap=p=>{
+          const x=p[0]-xc,y=p[1]-yc;
+          return [x*cs+y*sn,x*sn-y*cs,p[2]];
+        };
+        const faces=op.contour.map(([face,forward])=>[{
+          ...face,A:t=>remap(face.A(t)),B:t=>remap(face.B(t))
+        },forward]);
+        // Reject any generator that changes chord: it cannot be followed by
+        // a single straight wire at this fixed B angle.
+        for(const [face] of faces)for(let i=0;i<=32;i++){
+          const t=face.t0+(face.t1-face.t0)*i/32,a=face.A(t),b=face.B(t);
+          if(Math.abs(a[0]-b[0])>.05)
+            throw new StepError("Грань #"+face.source+": образующая не совпадает с направлением струны при B="+angle.toFixed(2));
+        }
+        const layout={machine:p=>[p[1],p[0],p[2]-zc+zMid],
+          towers:makeLayout(-1,1,1,zMid).towers};
+        program+=";"+EOL+"; *** SECONDARY CUT: STEP faces #"+op.faces.join(", #")+
+          " B="+angle.toFixed(3)+" before outer profile ***"+EOL;
+        program+=prog.travel("move",cfg.ParkX,safe,cfg.ParkX,safe)+rotate(cfg,angle);
+        const [block,towers]=holeBlock(safe,prog,faces,layout,1,kerf,warnings,sag,maxStep);
+        program+=block;allTowers.push(...towers);
+        program+=prog.travel("move",cfg.ParkX,safe,cfg.ParkX,safe)+rotate(cfg,0);
+      }
     }
     const addHole = (hole, layout, gap, fromBelow) => {
       const [block, towers] = holeBlock(safe, prog, hole, layout, axis, kerf, warnings, sag, maxStep, gap, fromBelow);
@@ -2727,7 +2771,7 @@ const Gen = (() => {
       }
     }
     if (prog.clipped) warnings.push("Мощность проволоки упёрлась в максимум S=" + fmtG(cfg.WireMaxPower) + ": проволока слишком длинная для этой формулы");
-    return { program, warnings: [...new Set(warnings)], part, points: allTowers.length, holes: holes.length, power: [prog.minPower, prog.maxPower, prog.changes] };
+    return { program, warnings: [...new Set(warnings)], part, points: allTowers.length, holes: holes.length+secondaryContours.length, secondary: secondaryContours.length, power: [prog.minPower, prog.maxPower, prog.changes] };
   }
   return { buildProgram, CONFIG, previewGeometry, identityRotation, rotateModel };
 })();
@@ -2776,7 +2820,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
     const p = r.part;
     status.className = "note";
     status.textContent = { normal: "Деталь", mirror: "Зеркальная деталь", pair: "Пара, зеркальная над обычной" }[mode] + ": размах " + p.span.toFixed(1) + ", хорда " + (p.x1 - p.x0).toFixed(1) + ", толщина " + (p.z1 - p.z0).toFixed(1) +
-      "; отверстий: " + r.holes + ". Точек контуров: " + r.points + ", строк: " + (r.program.split("\n").length - 1) +
+      "; внутренних контуров: " + r.holes + ". Точек контуров: " + r.points + ", строк: " + (r.program.split("\n").length - 1) +
       ". Мощность S " + r.power[0].toFixed(0) + "…" + r.power[1].toFixed(0) + ", изменений: " + r.power[2] + ". Время ≈ " + fmtTime(prog.total) + ".";
     for (const w of r.warnings) { const li = document.createElement("li"); li.className = "warn"; const d = document.createElement("div"); d.textContent = w; li.appendChild(d); ul.appendChild(li); }
     $("gnDone").hidden = false;
