@@ -170,6 +170,32 @@ test('transverse straight generators support non-right-angle table rotations',()
  assert.ok(match,r.program);
  assert.ok(+match[1]>90 && +match[1]<95);
 });
+test('sloping secondary end face: intersect actual STEP face, not X constant',()=>{
+ let text=transverseFixture();
+ for(const [id,x] of [[9,49],[11,51],[13,49],[15,51]]) {
+  const re=new RegExp('(#'+id+" = CARTESIAN_POINT\\('',\\()50\\.");
+  assert.match(text,re);
+  text=text.replace(re,'$1'+x+'.');
+ }
+ for(let id=110;id<=116;id++) {
+  const re=new RegExp('(#'+id+" = CARTESIAN_POINT\\('',\\()50\\.");
+  assert.match(text,re);
+  text=text.replace(re,'$1'+'52.');
+ }
+ text=text.replace("#121 = VERTEX_POINT('',#110);",
+  "#140 = CARTESIAN_POINT('',(50.,-5.,20.));\n#121 = VERTEX_POINT('',#140);");
+ const m=new gen.Model(text),build=m.build();
+ assert.equal(build.secondaryContours.length,1);
+ const face=build.secondaryContours[0].contour[0][0];
+ const xs=[];
+ for(let i=0;i<=50;i++)xs.push(face.B(face.t0+(face.t1-face.t0)*i/50)[0]);
+ assert.ok(Math.max(...xs)-Math.min(...xs)>.5,'slanted end curve varies in X');
+ const r=gen.buildProgram(text,'sloped.stp',options());
+ assert.equal(r.secondary,1);
+ assert.match(r.program,/SECONDARY CUT:.*B=90\.000/);
+ const parsed=sim.parseGcode(r.program),check=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
+});
 test('external F2: two-direction path and safe tower motions',{skip:!process.env.F2_STEP},()=>{
  const text=fs.readFileSync(process.env.F2_STEP,'utf8');
  const model=new gen.Model(text),shape=model.build();
