@@ -2139,7 +2139,7 @@ const Gen = (() => {
     }
     build() {
       const [axis, planeA, planeB] = this.spanAxis();
-      const outer = [], holes = [];
+      const outer = [], holes = [], handled = new Set();
       for (const raw of this.facesRaw) {
         // A cross-cut surface may be ruled along a different axis.  Do not
         // interpret its partial-span edges as rails of the main profile.
@@ -2149,22 +2149,20 @@ const Gen = (() => {
         });
         if (!hasEndEdge(planeA) || !hasEndEdge(planeB)) continue;
         const face = this.ruledFace(this.surface(raw.surf), axis, planeA, planeB, raw.edgeIds);
-        if (face !== null) (face.closed ? holes : outer).push(face);
+        if(face !== null) {
+          (face.closed ? holes : outer).push(face);
+          handled.add(raw.fid);
+        }
       }
-      // A second cutting direction cannot be silently discarded.
-      // Interior surface patches are not equivalent to end caps.
-      const secondary = this.facesRaw.filter(raw => {
-        const surf = this.surface(raw.surf);
-        const p = [
-          surf.at(surf.udomain[0],surf.vdomain[0]),
-          surf.at(surf.udomain[1],surf.vdomain[0]),
-          surf.at(surf.udomain[0],surf.vdomain[1]),
-          surf.at(surf.udomain[1],surf.vdomain[1])
-        ];
-        const ys = p.map(q=>q[axis]);
-        const onEnd = ys.every(y=>Math.abs(y-planeA)<0.01) || ys.every(y=>Math.abs(y-planeB)<0.01);
-        return !onEnd && Math.max(...ys)-Math.min(...ys)<planeB-planeA-0.01;
-      });
+      // Classify using STEP topology, NOT the span of four surface corners:
+      // that shortcut can miss curved cross-direction faces, including open
+      // channels that span the entire sheet thickness.
+      const onEndCap=(raw)=>{
+        const vertices=raw.edgeIds.flatMap(id=>this.edges.get(id)||[]);
+        return vertices.length>0&&[planeA,planeB].some(plane=>
+          vertices.every(p=>Math.abs(p[axis]-plane)<.01));
+      };
+      const secondary=this.facesRaw.filter(raw=>!handled.has(raw.fid)&&!onEndCap(raw));
       const secondaryContours=[];
       if(secondary.length) {
         const byFid=new Map(secondary.map(raw=>[raw.fid,this.secondaryRuledFace(raw)]));
