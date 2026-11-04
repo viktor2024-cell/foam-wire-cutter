@@ -230,7 +230,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       <button id="gnGo" class="primary" disabled>Создать G-code</button>
       <button id="gnMirror" disabled>Зеркало</button>
       <button id="gnPair" disabled>Пара: зеркало над обычной</button>
-      <label><input id="gnStockPair" type="checkbox"> Подбирать заготовку для пары</label>
+      <label><input id="gnStockPair" type="checkbox"> Режим ПАРА — предпросмотр и G-code для двух деталей</label>
     </div>
     <div class="file-name" id="gnOut"></div>
     <div class="note" id="gnStatus"></div>
@@ -2692,6 +2692,7 @@ const Gen = (() => {
 
     // - Шапка: сведения для симулятора и для человека
     let program = "; FM_step2gcode: " + fileName + (o.pair ? " (pair: upper reflected over gap, turned 180)" : o.mirror ? " (mirror)" : "") + EOL;
+    program += "; CUT MODE=" + (o.pair ? "PAIR PIECES=2" : o.mirror ? "MIRROR PIECES=1" : "SINGLE PIECES=1") + EOL;
     program += "; STOCK L=" + fmtG(stockWidth) + " W=" + fmtG(stockLength) + " H=" + fmtG(stockHeight) + " Z0=" + fmtG(o.bottomZ) + EOL;
     program += "; CUT F=" + fmtG(cfg.FeedRateCut) + " mm/s S=" + fmtG(cfg.WireMinPower) + ".." + fmtG(cfg.WireMaxPower) + " kerf=" + fmtG(kerf) + EOL;
     const prog = new Program(cfg, o.powerComp, 5);
@@ -2789,7 +2790,9 @@ const Gen = (() => {
         for (const hole of holes) { addHole(hole, upper, gap, true); addHole(hole, lower, gap, false); }
         program += prog.travel("cut", yOut, gap[0], yOut, gap[1]) + prog.travel("cut", yOut, safe, yOut, safe);
       }
+      program += ";" + EOL + "; *** PROFILE 1/2: UPPER MIRRORED PIECE ***" + EOL;
       addProfile(upper, -o.side);
+      program += ";" + EOL + "; *** PROFILE 2/2: LOWER ORIGINAL PIECE ***" + EOL;
       addProfile(lower, o.side);
     } else {
       const layout = makeLayout(o.mirror ? 1 : -1, 1, 1, o.bottomZ + stockHeight / 2);   // - зеркало: корень и конец меняются башнями
@@ -2841,6 +2844,7 @@ function openStep(file, handle = null) {
       $("gnSide").value = "+";
     }
     $("gnGo").disabled = $("gnMirror").disabled = $("gnPair").disabled = false;
+    refreshGenerateMode();
     $("gnStatus").textContent = ""; $("gnOut").textContent = ""; $("gnWarn").innerHTML = ""; $("gnDone").hidden = true;
   };
   rd.addEventListener("load", () => { generatorPreview.load(); });
@@ -2897,9 +2901,25 @@ $("panelGen").addEventListener("drop", async (e) => {
   const pending = item && item.getAsFileSystemHandle ? item.getAsFileSystemHandle() : null;   // - только синхронно, в самом событии
   if (f) openStep(f, await Promise.resolve(pending).catch(() => null));
 });
-$("gnGo").addEventListener("click", () => generate("normal"));
+// The pair checkbox is a real machining mode, not just a stock preview.
+function selectedGenerateMode() { return $("gnStockPair").checked ? "pair" : "normal"; }
+function refreshGenerateMode() {
+  $("gnGo").textContent = $("gnStockPair").checked ? "Создать G-code: ПАРА (2 детали)" : "Создать G-code: 1 деталь";
+  // A previous file must not be presented as the output of a newly selected mode.
+  $("gnDone").hidden = true;
+  $("gnOut").textContent = "";
+  $("gnStatus").textContent = "";
+}
+$("gnStockPair").addEventListener("change", refreshGenerateMode);
+$("gnGo").addEventListener("click", () => generate(selectedGenerateMode()));
 $("gnMirror").addEventListener("click", () => generate("mirror"));
-$("gnPair").addEventListener("click", () => { $("gnStockPair").checked = true; generatorPreview.rebuild(); generate("pair"); });
+$("gnPair").addEventListener("click", () => {
+  $("gnStockPair").checked = true;
+  refreshGenerateMode();
+  generatorPreview.rebuild();
+  generate("pair");
+});
+refreshGenerateMode();
 $("gnToCut").addEventListener("click", () => showTab("cut"));
 $("gnSave").addEventListener("click", async () => { await saveProgram(); $("gnStatus").textContent = $("tNote").textContent; });
 showTab("gen");
