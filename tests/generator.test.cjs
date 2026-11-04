@@ -71,6 +71,32 @@ function twoFaceTransverseFixture() {
 }
 const options=(extra={})=>({stock:[50,140,60],bottomZ:10,kerf:1,feed:7,minS:500,maxS:1000,clearance:20,retract:30,leadMargin:5,trim:false,side:1,powerComp:true,...extra});
 const build=(o={})=>gen.buildProgram(fixture,'synthetic.stp',options(o));
+// A swept wing can have a slightly oblique Y generator while its STEP end
+// caps remain exactly at two Y planes. Old axis-count heuristics chose X and
+// tried to cut a main skin as a transverse bore (#255 in external W1).
+test('swept wing keeps the real end-cap span even with oblique generators',()=>{
+ const swept=fixture.replace(/(CARTESIAN_POINT\\('',\\()\\s*(-?[\\d.]+),\\s*(-?[\\d.]+),\\s*(-?[\\d.]+)(\\)\\))/g,
+  (_,prefix,x,y,z,suffix)=>prefix+(+x*2.3+(+y)*.04)+','+(+y*6)+','+(+z)+suffix);
+ const m=new gen.Model(swept),shape=m.build();
+ assert.equal(shape.axis,1);
+ assert.equal(shape.planeA,-150);assert.equal(shape.planeB,150);
+ assert.equal(shape.outer.length,4);assert.equal(shape.secondaryContours.length,0);
+ const r=gen.buildProgram(swept,'swept.stp',options({stock:[300,250,60]}));
+ assert.equal(r.secondary,0);
+ assert.doesNotMatch(r.program,/SECONDARY CUT/);
+});
+test('external W1: no false transverse operation from STEP end caps',{skip:!process.env.W1_STEP},()=>{
+ const text=fs.readFileSync(process.env.W1_STEP,'utf8');
+ const m=new gen.Model(text),shape=m.build();
+ assert.equal(shape.axis,1);assert.equal(shape.planeA,0);assert.equal(shape.planeB,300);
+ assert.equal(shape.outer.length,3);assert.equal(shape.holes.length,1);
+ assert.equal(shape.secondaryContours.length,0);
+ const r=gen.buildProgram(text,'W1.stp',options({stock:[300,230,40]}));
+ const p=sim.parseGcode(r.program);
+ const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
+ assert.doesNotMatch(r.program,/SECONDARY CUT/);
+});
 test('split coedges yield the complete trimmed rectangular profile',()=>{
  const m=new gen.Model(fixture), b=m.build();
  assert.equal(b.axis,1);assert.equal(b.planeA,-25);assert.equal(b.planeB,25);
