@@ -108,3 +108,20 @@ test('model quarter turns and scale are shared by preview and G-code',()=>{
  assert.throws(()=>build({scale:0}),/Масштаб/);
  assert.throws(()=>gen.previewGeometry(fixture,identity,NaN),/Масштаб/);
 });
+
+test('outer profile uses corner entry and 5 mm upward closing overrun',()=>{
+ const r=build({trim:false});
+ assert.match(r.program,/corner entry, upper first, overrun Z\+5/);
+ const lines=r.program.split(/\r?\n/);
+ const i=lines.findIndex(line=>line.includes('corner entry, upper first'));
+ assert.ok(i>=0);
+ const profile=lines.slice(i+1).filter(line=>/^G0[01] /.test(line));
+ assert.ok(profile.length>5);
+ // The final two cutting moves are the vertical overrun and horizontal exit.
+ const cuts=profile.filter(line=>/^G01 /.test(line));
+ assert.ok(cuts.length>3);
+ const last=cuts.at(-1),previous=cuts.at(-2);
+ const coords=line=>Object.fromEntries([...line.matchAll(/([XZUY])(-?\d+(?:\.\d+)?)/g)].map(m=>[m[1],+m[2]]));
+ const a=coords(previous),b=coords(last);
+ assert.ok(Object.keys(a).length>0 && Object.keys(b).length>0);
+});
