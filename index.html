@@ -2813,7 +2813,7 @@ function openStep(file, handle = null) {
     // Preliminary validated F2 setup. The 250 mm vertical travel allows
     // only 10 mm overhead above a 240 mm high blank with bottom at Z=0.
     // Apply only when a new F2 file is opened; all controls remain editable.
-    if (/^F2-50-325-240(?:\\(\\d+\\))?\\.(?:stp|step)$/i.test(file.name)) {
+    if (/^F2-50-325-240(?:\(\d+\))?\.(?:stp|step)$/i.test(file.name)) {
       for (const [id, value] of [["gnL",50],["gnW",325],["gnH",240],
                                   ["gnZ",0],["gnClear",10],["gnKerf",1]]) {
         $(id).value = value;
