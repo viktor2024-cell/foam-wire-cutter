@@ -55,7 +55,11 @@ const generatorPreview = (() => {
     edge.position.copy(foam.position); group.add(edge);
     const axes = new THREE.AxesHelper(Math.max(...stock)*.35); axes.position.set(-stock[0]/2,-stock[1]/2,bottom); group.add(axes);
     if (geometry) {
-      const fits = geometry.size.every((v,k) => v <= stock[k] + .001);
+      const paired = document.getElementById('gnStockPair')?.checked === true;
+      const kerf = n('gnKerf') || 0;
+      const minGap = 5 + kerf;
+      const requiredZ = paired ? 2 * geometry.size[2] + minGap : geometry.size[2];
+      const fits = geometry.size[0] <= stock[0] + .001 && geometry.size[1] <= stock[1] + .001 && requiredZ <= stock[2] + .001;
       const vertices = [], lines = [];
       const point = p => p.map((v,k) => v - geometry.center[k] + (k===2 ? bottom+stock[2]/2 : 0));
       for (const rail of geometry.rails) {
@@ -71,7 +75,37 @@ const generatorPreview = (() => {
       group.add(new THREE.Mesh(mesh,new THREE.MeshBasicMaterial({color,side:THREE.DoubleSide,transparent:true,opacity:.45,depthWrite:false})));
       const outline = new THREE.BufferGeometry(); outline.setAttribute('position',new THREE.Float32BufferAttribute(lines,3));
       group.add(new THREE.LineSegments(outline,new THREE.LineBasicMaterial({color})));
-      fit.textContent = 'Модель: ' + geometry.size.map(v=>v.toFixed(2)).join(' × ') + ' мм (вдоль струны × поперёк × высота). ' +
+      if (paired) {
+        // Upper copy: reflect across horizontal plane and rotate 180 degrees about Z.
+        // This is a conservative envelope preview; actual paired toolpath uses per-tower placement.
+        const offset = (geometry.size[2] + minGap) / 2;
+        const transform = p => {
+          const q = point(p);
+          return [-q[0],-q[1],2*(bottom+stock[2]/2)-q[2]+offset];
+        };
+        const lowerOffset = -offset;
+        const lowerVertices = vertices.map((value,i)=>i%3===2 ? value+lowerOffset : value);
+        const lowerLines = lines.map((value,i)=>i%3===2 ? value+lowerOffset : value);
+        const lowerGeo = new THREE.BufferGeometry(); lowerGeo.setAttribute('position',new THREE.Float32BufferAttribute(lowerVertices,3));
+        const lowerEdges = new THREE.BufferGeometry(); lowerEdges.setAttribute('position',new THREE.Float32BufferAttribute(lowerLines,3));
+        mesh.setAttribute('position',new THREE.Float32BufferAttribute(lowerVertices,3));
+        outline.setAttribute('position',new THREE.Float32BufferAttribute(lowerLines,3));
+        const upperVertices = [], upperLines = [];
+        for (const rail of geometry.rails) {
+          for (let i=1;i<rail.length;i++) {
+            const [a,b] = rail[i-1].map(transform), [c,d] = rail[i].map(transform);
+            upperVertices.push(...a,...b,...c,...b,...d,...c);
+            upperLines.push(...a,...c,...b,...d);
+          }
+          upperLines.push(...transform(rail[0][0]),...transform(rail[0][1]),...transform(rail.at(-1)[0]),...transform(rail.at(-1)[1]));
+        }
+        const upperGeo = new THREE.BufferGeometry(); upperGeo.setAttribute('position',new THREE.Float32BufferAttribute(upperVertices,3));
+        const upperEdgeGeo = new THREE.BufferGeometry(); upperEdgeGeo.setAttribute('position',new THREE.Float32BufferAttribute(upperLines,3));
+        group.add(new THREE.Mesh(upperGeo,new THREE.MeshBasicMaterial({color:0x22a8a0,side:THREE.DoubleSide,transparent:true,opacity:.45,depthWrite:false})));
+        group.add(new THREE.LineSegments(upperEdgeGeo,new THREE.LineBasicMaterial({color:0x22a8a0})));
+        lowerGeo.dispose(); lowerEdges.dispose();
+      }
+      fit.textContent = (paired ? 'Пара: ' : 'Модель: ') + geometry.size.map(v=>v.toFixed(2)).join(' × ') + ' мм (вдоль струны × поперёк × высота). ' +
         (fits ? 'Помещается в заготовку. ' : 'Не помещается в заготовку. ') +
         (geometry.axis === 1 ? 'Размах направлен вдоль струны.' : 'Для генерации поверните размах вдоль X — струны.');
       if (!fits || geometry.axis !== 1) fit.className = 'note crit';
@@ -127,5 +161,6 @@ const generatorPreview = (() => {
   new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change',draw);
   rebuild();
-  return {load};
+  document.getElementById('gnStockPair')?.addEventListener('change',rebuild);
+  return {load,rebuild};
 })();
