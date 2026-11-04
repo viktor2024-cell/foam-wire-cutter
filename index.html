@@ -2049,12 +2049,22 @@ const Gen = (() => {
     spanAxis() {
       const points = [...this.edges.values()].flat();
       const planes = (axis) => [...new Set(points.map((p) => Math.round(p[axis] * 1000) / 1000))].sort((a, b) => a - b);
-      const dirs = this.cutDirectionCandidates();
-      const dominant = dirs[0];
-      // Model and preview may be rotated to any Cartesian axis. Only the
-      // machine G-code path requires the span along Y (checked in buildProgram).
-      const axis = dominant && dominant.direction.findIndex(v=>Math.abs(v)>0.999);
-      if (axis === undefined || axis < 0) throw new StepError("Основное направление резки не совпадает с осью XYZ; G-code не создан");
+      const dirs=this.cutDirectionCandidates();
+      // The STEP end caps may also be degree-1 in their own planes, and a
+      // transverse tunnel adds an extra vote along the chord. Exclude the
+      // rotated original vertical, then break close votes in favour of the
+      // shorter horizontal stock dimension (the foam sheet thickness).
+      const upMachine=this.rotation.map(row=>row[2]);
+      const upRaw=[upMachine[1],-upMachine[0],upMachine[2]];
+      const upAxis=upRaw.findIndex(v=>Math.abs(v)>.999);
+      const candidates=dirs.map(d=>({axis:d.direction.findIndex(v=>Math.abs(v)>.999),
+        count:d.faces.length})).filter(d=>d.axis>=0&&d.axis!==upAxis);
+      const count=Math.max(0,...candidates.map(d=>d.count));
+      const width=axis=>{const p=planes(axis);return p[p.length-1]-p[0];};
+      const near=candidates.filter(d=>d.count>=count-1);
+      near.sort((a,b)=>width(a.axis)-width(b.axis)||b.count-a.count);
+      const axis=near[0]?.axis;
+      if(axis===undefined)throw new StepError("Основное направление резки неоднозначно; G-code не создан");
       const values = planes(axis);
       if (values.length < 2) throw new StepError("Не найдены две торцевые плоскости");
       // End planes are the extremes, even when intermediate vertices exist.
