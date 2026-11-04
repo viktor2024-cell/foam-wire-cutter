@@ -1842,8 +1842,8 @@ const Gen = (() => {
   }
   function previewGeometry(text, rotation = identityRotation(), scale = 1) {
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
-    const { outer, holes, axis } = new Model(text, rotation, scale).build();
-    const rails = [...outer, ...holes.flat()].map(([face]) => sampleFace(face, face.t0, face.t1, 0.01, 2)
+    const { outer, holes, secondaryContours, axis } = new Model(text, rotation, scale).build();
+    const rails = [...outer, ...holes.flat(), ...secondaryContours.flatMap(g=>g.contour)].map(([face]) => sampleFace(face, face.t0, face.t1, 0.01, 2)
       .map((pair) => pair.map((p) => [-p[1], p[0], p[2]])));
     const points = rails.flat(2);
     const low = [0,1,2].map((k) => Math.min(...points.map((p) => p[k])));
@@ -2060,6 +2060,73 @@ const Gen = (() => {
       // End planes are the extremes, even when intermediate vertices exist.
       return [axis, values[0], values[values.length-1]];
     }
+    // A secondary ruled patch is bounded by two STEP edges shared with
+    // planar end faces. The end faces need NOT be X=constant: intersect each
+    // generator with the actual end planes (e.g. F2's sloped tip).
+    secondaryRuledFace(raw) {
+      const surf=this.surface(raw.surf), uMid=sum2(surf.udomain)/2, vMid=sum2(surf.vdomain)/2;
+      const options=[
+        {degree:surf.pu,spanU:true,a:surf.at(surf.udomain[0],vMid),b:surf.at(surf.udomain[1],vMid)},
+        {degree:surf.pv,spanU:false,a:surf.at(uMid,surf.vdomain[0]),b:surf.at(uMid,surf.vdomain[1])}
+      ].filter(x=>x.degree===1 && Math.hypot(x.b[0]-x.a[0],x.b[1]-x.a[1])>5);
+      if(options.length!==1)throw new StepError("Дополнительная грань #"+raw.fid+": неоднозначное линейчатое направление");
+      const opt=options[0], sDom=opt.spanU?surf.udomain:surf.vdomain, tDom=opt.spanU?surf.vdomain:surf.udomain;
+      const at=(u,t)=>opt.spanU?surf.at(u,t):surf.at(t,u);
+      const planeOf=(host)=>{
+        const h=this.surface(host.surf),[u0,u1]=h.udomain,[v0,v1]=h.vdomain;
+        const a=h.at(u0,v0),b=h.at(u1,v0),c=h.at(u0,v1);
+        const cross=(x,y)=>[x[1]*y[2]-x[2]*y[1],x[2]*y[0]-x[0]*y[2],x[0]*y[1]-x[1]*y[0]];
+        const sub=(x,y)=>x.map((v,i)=>v-y[i]);
+        const n=cross(sub(b,a),sub(c,a)), mag=Math.hypot(...n);
+        if(mag<1e-8)return null;
+        const unit=n.map(v=>v/mag), dot=p=>p.reduce((v,x,i)=>v+x*unit[i],0), d=dot(a);
+        for(const p of [h.at(u1,v1),h.at(sum2(h.udomain)/2,sum2(h.vdomain)/2)])
+          if(Math.abs(dot(p)-d)>.02)return null;
+        return {n:unit,d};
+      };
+      const caps=[];
+      for(const eid of raw.edgeIds) {
+        const edge=this.edges.get(eid);
+        if(!edge)continue;
+        const hosts=this.facesRaw.filter(f=>f.fid!==raw.fid && f.edgeIds.includes(eid));
+        for(const host of hosts) {
+          const plane=planeOf(host);
+          if(plane)caps.push({eid,host:host.fid,plane,seam:edge[0]});
+        }
+      }
+      if(caps.length!==2)throw new StepError("Дополнительная грань #"+raw.fid+
+        ": нужны две граничные кривые на плоских торцах, найдено "+caps.length);
+      const intersect=(cap,t)=>{
+        const a=at(sDom[0],t),b=at(sDom[1],t),delta=a.map((x,i)=>b[i]-x);
+        const den=delta.reduce((v,x,i)=>v+x*cap.plane.n[i],0);
+        if(Math.abs(den)<1e-8)throw new StepError("Грань #"+raw.fid+": образующая параллельна торцу");
+        const d=(cap.plane.d-a.reduce((v,x,i)=>v+x*cap.plane.n[i],0))/den;
+        if(d<-.0001||d>1.0001)throw new StepError("Грань #"+raw.fid+": пересечение вне B-spline поверхности");
+        return a.map((x,i)=>x+d*delta[i]);
+      };
+      for(const cap of caps) {
+        const p=intersect(cap,tDom[0]);
+        if(dist(p,cap.seam)>.05)throw new StepError("Грань #"+raw.fid+
+          ": граничная кривая не совпадает с пересечением торца ("+dist(p,cap.seam).toFixed(2)+" мм)");
+      }
+      // Use the edge's seam position to order rails, not a guessed X plane.
+      const d0=opt.b.map((v,i)=>v-opt.a[i]);
+      const projection=cap=>cap.seam.reduce((sum,v,i)=>sum+v*d0[i],0);
+      caps.sort((a,b)=>projection(a)-projection(b));
+      const A=t=>intersect(caps[0],t), B=t=>intersect(caps[1],t);
+      const pA=A(tDom[0]),pB=B(tDom[0]),dx=pB[0]-pA[0],dy=pB[1]-pA[1],horizontal=Math.hypot(dx,dy);
+      if(horizontal<5||Math.abs(pB[2]-pA[2])>horizontal*.2)
+        throw new StepError("Грань #"+raw.fid+": направление струны не горизонтальное");
+      const dir=[dx/horizontal,dy/horizontal];
+      for(let i=0;i<=24;i++) {
+        const t=tDom[0]+(tDom[1]-tDom[0])*i/24, a=A(t),b=B(t);
+        const x=b[0]-a[0],y=b[1]-a[1];
+        if(Math.abs(x*dir[1]-y*dir[0])>.05)
+          throw new StepError("Грань #"+raw.fid+": образующие не параллельны одной оси поворота стола");
+      }
+      const closed=dist(A(tDom[0]),A(tDom[1]))<.02&&dist(B(tDom[0]),B(tDom[1]))<.02;
+      return {A,B,t0:tDom[0],t1:tDom[1],closed,dir,source:raw.fid};
+    }
     build() {
       const [axis, planeA, planeB] = this.spanAxis();
       const outer = [], holes = [];
@@ -2088,20 +2155,29 @@ const Gen = (() => {
         const onEnd = ys.every(y=>Math.abs(y-planeA)<0.01) || ys.every(y=>Math.abs(y-planeB)<0.01);
         return !onEnd && Math.max(...ys)-Math.min(...ys)<planeB-planeA-0.01;
       });
-      if (secondary.length) {
-        const ids=new Set(secondary.map(f=>f.fid));
-        const groups=this.cuttingGroups().map(g=>({...g,faces:g.faces.filter(id=>ids.has(id))})).filter(g=>g.faces.length);
-        const detail=groups.map(g=>"["+g.direction.map(x=>x.toFixed(3)).join("/")+
-          ": грани #"+g.faces.join(", #")+"]").join("; ");
-        throw new StepError("Дополнительные связные группы: "+detail+
-          ". Торцы основного профиля Y="+planeA.toFixed(3)+" / "+planeB.toFixed(3)+
-          ". Для этих групп пока не доказана допустимость резки; неполный G-code заблокирован.");
+      const secondaryContours=[];
+      if(secondary.length) {
+        const byFid=new Map(secondary.map(raw=>[raw.fid,this.secondaryRuledFace(raw)]));
+        const ids=new Set(byFid.keys());
+        // Connected components by shared STEP edges; each component must
+        // close in both end profiles or the machine must not emit G-code.
+        for(const group of this.cuttingGroups()) {
+          const found=group.faces.filter(fid=>ids.has(fid));
+          if(!found.length)continue;
+          const faces=found.map(fid=>byFid.get(fid));
+          const dir=faces[0].dir;
+          if(faces.some(f=>Math.abs(f.dir[0]*dir[1]-f.dir[1]*dir[0])>.0001))
+            throw new StepError("Дополнительные грани имеют несовместимые направления резки");
+          secondaryContours.push({dir,contour:Model.chain(faces),faces:found});
+          found.forEach(fid=>ids.delete(fid));
+        }
+        if(ids.size)throw new StepError("Не восстановлены дополнительные грани #"+[...ids].join(", #"));
       }
       // Multiple connected ruled patches can form a single internal contour.
       // A closed face is a contour by itself; open patches are chained by
       // matching both endpoint rails rather than treated as separate holes.
       const innerContours = holes.map(h=>[[h,true]]);
-      return { outer: Model.chain(outer), holes: innerContours, axis, planeA, planeB };
+      return { outer: Model.chain(outer), holes: innerContours, secondaryContours, axis, planeA, planeB };
     }
     ruledFace(surf, axis, planeA, planeB, edgeIds) {
       // - Параметр размаха: степень 1 и координата по оси размаха меняется вдоль него
