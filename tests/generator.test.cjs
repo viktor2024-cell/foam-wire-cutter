@@ -7,6 +7,40 @@ const source=html.slice(html.indexOf('const Gen ='),html.indexOf('//  Вклад
  .replace('return { buildProgram, CONFIG, previewGeometry, identityRotation, rotateModel };','return { buildProgram, CONFIG, previewGeometry, identityRotation, rotateModel, Model, sampleFace, Program, startBlock, endBlock };');
 const gen=vm.runInNewContext(source+';Gen');
 const fixture=fs.readFileSync(path.join(__dirname,'fixtures/split-profile.stp'),'utf8');
+// Construct a genuine two-direction ruled STEP topology: the main sheet
+// is spanned along Y, while a curved bore runs from X=-50 to X=+50.
+// Both bore-end edges belong to the planar end faces.
+function transverseFixture(yShift=0,twist=0) {
+ const yz=[[-5,20],[-5,35],[5,35],[5,20],[5,5],[-5,5],[-5,20]];
+ const left=[],right=[];let extra='';
+ yz.forEach(([y,z],k)=>{
+  left.push('#'+(100+k));right.push('#'+(110+k));
+  extra+='#'+(100+k)+" = CARTESIAN_POINT('',(-50.,"+y+'.,'+z+".));\n";
+  const y2=y+yShift+(k===3?twist:0);
+  extra+='#'+(110+k)+" = CARTESIAN_POINT('',(50.,"+y2+'.,'+z+".));\n";
+ });
+ extra+=
+ `#120 = VERTEX_POINT('',#100);
+#121 = VERTEX_POINT('',#110);
+#122 = EDGE_CURVE('',#120,#120,$,.T.);
+#123 = EDGE_CURVE('',#121,#121,$,.T.);
+#124 = EDGE_CURVE('',#120,#121,$,.T.);
+#125 = ORIENTED_EDGE('',*,*,#122,.T.);
+#126 = ORIENTED_EDGE('',*,*,#123,.T.);
+#127 = ORIENTED_EDGE('',*,*,#124,.T.);
+#128 = EDGE_LOOP('',(#125));
+#129 = FACE_BOUND('',#128,.T.);
+#130 = EDGE_LOOP('',(#126));
+#131 = FACE_BOUND('',#130,.T.);
+#132 = EDGE_LOOP('',(#125,#127,#126));
+#133 = FACE_OUTER_BOUND('',#132,.T.);
+#134 = B_SPLINE_SURFACE_WITH_KNOTS('',1,3,((${left.join(',')}),(${right.join(',')})),.UNSPECIFIED.,.F.,.F.,.F.,(2,2),(4,3,4),(0.,1.),(0.,0.5,1.),.UNSPECIFIED.);
+#135 = ADVANCED_FACE('',(#133),#134,.T.);
+`;
+ return fixture.replace("#28 = ADVANCED_FACE('',(#26),#27,.T.);","#28 = ADVANCED_FACE('',(#26,#129),#27,.T.);")
+  .replace("#48 = ADVANCED_FACE('',(#46),#47,.T.);","#48 = ADVANCED_FACE('',(#46,#131),#47,.T.);")
+  .replace('ENDSEC;\nEND-ISO',extra+'ENDSEC;\nEND-ISO');
+}
 const options=(extra={})=>({stock:[50,140,60],bottomZ:10,kerf:1,feed:7,minS:500,maxS:1000,clearance:20,retract:30,leadMargin:5,trim:false,side:1,powerComp:true,...extra});
 const build=(o={})=>gen.buildProgram(fixture,'synthetic.stp',options(o));
 test('split coedges yield the complete trimmed rectangular profile',()=>{
@@ -107,6 +141,47 @@ test('model quarter turns and scale are shared by preview and G-code',()=>{
  }
  assert.throws(()=>build({scale:0}),/Масштаб/);
  assert.throws(()=>gen.previewGeometry(fixture,identity,NaN),/Масштаб/);
+});
+
+
+test('transverse curved bore is cut at B90 before outer profile, with guarded topology',()=>{
+ const text=transverseFixture(),m=new gen.Model(text),shape=m.build();
+ assert.equal(shape.axis,1);
+ assert.equal(shape.secondaryContours.length,1);
+ assert.equal(shape.secondaryContours[0].contour.length,1);
+ assert.equal(shape.secondaryContours[0].contour[0][0].closed,true);
+ const r=gen.buildProgram(text,'transverse.stp',options({stock:[50,140,60]}));
+ assert.equal(r.secondary,1);
+ assert.equal(r.holes,1);
+ assert.match(r.program,/SECONDARY CUT: STEP faces #135 B=90.000 before outer profile/);
+ assert.ok(r.program.indexOf('SECONDARY CUT')<r.program.indexOf('corner entry, upper first'));
+ assert.deepEqual([...r.program.matchAll(/^G00 B([-\d.]+)/gm)].map(m=>+m[1]),[0,90,0,0]);
+ const simR=sim.parseGcode(r.program);
+ const check=sim.analyse(simR,{...simR.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
+ assert.throws(()=>gen.buildProgram(text.replace("ADVANCED_FACE('',(#26,#129)","ADVANCED_FACE('',(#26)"),'incomplete.stp',options()),/нужны две граничные/);
+ assert.throws(()=>gen.buildProgram(text,'pair.stp',options({pair:true})),/Дополнительные направления/);
+ assert.throws(()=>gen.buildProgram(transverseFixture(0,12),'twisted.stp',options()),/образующие|не совпадает/);
+});
+test('transverse straight generators support non-right-angle table rotations',()=>{
+ const text=transverseFixture(4);
+ const r=gen.buildProgram(text,'diagonal.stp',options());
+ const match=r.program.match(/SECONDARY CUT:.*B=(\d+\.\d+)/);
+ assert.ok(match,r.program);
+ assert.ok(+match[1]>90 && +match[1]<95);
+});
+test('external F2: two-direction path and safe tower motions',{skip:!process.env.F2_STEP},()=>{
+ const text=fs.readFileSync(process.env.F2_STEP,'utf8');
+ const model=new gen.Model(text),shape=model.build();
+ assert.equal(shape.axis,1);
+ assert.equal(shape.secondaryContours.length,1);
+ const r=gen.buildProgram(text,'F2.stp',options({stock:[50,325,240],bottomZ:0,clearance:10,trim:false}));
+ assert.equal(r.secondary,1);
+ assert.match(r.program,/SECONDARY CUT:.* B=90\.000/);
+ assert.ok(r.program.indexOf('SECONDARY CUT')<r.program.indexOf('corner entry, upper first'));
+ const p=sim.parseGcode(r.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
+ if(process.env.F2_GCODE_OUT)fs.writeFileSync(process.env.F2_GCODE_OUT,r.program);
 });
 
 test('outer profile uses corner entry and 5 mm upward closing overrun',()=>{
