@@ -2062,7 +2062,11 @@ const Gen = (() => {
         secondary.map(f=>f.fid).join(", #")+
         ". Торцы основной детали Y="+planeA.toFixed(3)+" / "+planeB.toFixed(3)+
         ". Вторая операция ещё не реализована; неполный G-code заблокирован.");
-      return { outer: Model.chain(outer), holes: holes.map((h) => [[h, true]]), axis, planeA, planeB };
+      // Multiple connected ruled patches can form a single internal contour.
+      // A closed face is a contour by itself; open patches are chained by
+      // matching both endpoint rails rather than treated as separate holes.
+      const innerContours = holes.map(h=>[[h,true]]);
+      return { outer: Model.chain(outer), holes: innerContours, axis, planeA, planeB };
     }
     ruledFace(surf, axis, planeA, planeB, edgeIds) {
       // - Параметр размаха: степень 1 и координата по оси размаха меняется вдоль него
@@ -2427,8 +2431,10 @@ const Gen = (() => {
   }
   // - gap: высоты [левая башня, правая] в зазоре между деталями пары, откуда струна подходит к отверстию;
   //   null - подход сверху. fromBelow: вход снизу, в самую низкую точку контура (верхняя деталь пары)
-  function holeBlock(safe, prog, face, layout, axis, kerf, notes, sag, maxStep, gap = null, fromBelow = false) {
-    const segments = prepareContour([faceSegment(face)], axis, kerf, false, notes);
+  function holeBlock(safe, prog, contour, layout, axis, kerf, notes, sag, maxStep, gap = null, fromBelow = false) {
+    // An internal contour can consist of many ruled faces, not just one
+    // closed B-spline surface. Preserve the topology and traversal direction.
+    const segments = prepareContour(contour.map(([face,forward])=>faceSegment(face,forward)), axis, kerf, false, notes);
     // - Старт: точка, в которой контур наивысший на станке (при входе снизу - наинизший)
     let best = [0, 0], bestZ = -1e18;
     segments.forEach((seg, k) => {
@@ -2562,7 +2568,7 @@ const Gen = (() => {
       program += ";" + EOL + "; - Return table to 0 for profile cutting" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe) + rotate(cfg, 0);
     }
     const addHole = (hole, layout, gap, fromBelow) => {
-      const [block, towers] = holeBlock(safe, prog, hole[0][0], layout, axis, kerf, warnings, sag, maxStep, gap, fromBelow);
+      const [block, towers] = holeBlock(safe, prog, hole, layout, axis, kerf, warnings, sag, maxStep, gap, fromBelow);
       program += block; allTowers.push(...towers);
     };
     const addProfile = (layout, side) => {
