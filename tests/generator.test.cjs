@@ -75,7 +75,7 @@ const build=(o={})=>gen.buildProgram(fixture,'synthetic.stp',options(o));
 // caps remain exactly at two Y planes. Old axis-count heuristics chose X and
 // tried to cut a main skin as a transverse bore (#255 in external W1).
 test('swept wing keeps the real end-cap span even with oblique generators',()=>{
- const swept=fixture.replace(/(CARTESIAN_POINT\\('',\\()\\s*(-?[\\d.]+),\\s*(-?[\\d.]+),\\s*(-?[\\d.]+)(\\)\\))/g,
+ const swept=fixture.replace(/(CARTESIAN_POINT\('',\()\s*(-?[\d.]+),\s*(-?[\d.]+),\s*(-?[\d.]+)(\)\))/g,
   (_,prefix,x,y,z,suffix)=>prefix+(+x*2.3+(+y)*.04)+','+(+y*6)+','+(+z)+suffix);
  const m=new gen.Model(swept),shape=m.build();
  assert.equal(shape.axis,1);
