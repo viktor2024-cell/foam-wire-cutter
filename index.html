@@ -1994,12 +1994,39 @@ const Gen = (() => {
       }
       if (this.facesRaw.length === 0) throw new StepError("В файле нет граней: ожидается твёрдое тело (MANIFOLD_SOLID_BREP)");
     }
+    // Identify distinct cutting directions from the STEP ruled surfaces.  This
+    // is diagnostic only: a direction is not yet an executable cutting operation.
+    cutDirectionCandidates() {
+      const candidates = [];
+      for (const raw of this.facesRaw) {
+        const surf = this.surface(raw.surf);
+        const um = sum2(surf.udomain) / 2, vm = sum2(surf.vdomain) / 2;
+        for (const [degree, a, b] of [
+          [surf.pu, surf.at(surf.udomain[0], vm), surf.at(surf.udomain[1], vm)],
+          [surf.pv, surf.at(um, surf.vdomain[0]), surf.at(um, surf.vdomain[1])]
+        ]) {
+          if (degree !== 1) continue;
+          const delta = b.map((v,i)=>v-a[i]);
+          const length = Math.hypot(...delta);
+          if (length < 1e-4) continue;
+          const direction = delta.map(v=>v/length);
+          const match = candidates.find(c=>Math.abs(c.direction.reduce((sum,v,i)=>sum+v*direction[i],0))>0.9999);
+          if (match) { match.faces.push(raw.fid); }
+          else candidates.push({direction, faces:[raw.fid]});
+        }
+      }
+      return candidates.sort((a,b)=>b.faces.length-a.faces.length);
+    }
     // --- Ось размаха: единственная ось, по которой вершины лежат ровно в двух плоскостях
     spanAxis() {
       const points = [...this.edges.values()].flat();
       const planes = (axis) => [...new Set(points.map((p) => Math.round(p[axis] * 1000) / 1000))].sort((a, b) => a - b);
       const candidates = [0, 1, 2].filter((axis) => planes(axis).length === 2);
-      if (candidates.length !== 1) throw new StepError("Не удалось определить ось размаха (вершины должны лежать в двух плоскостях профилей)");
+      if (candidates.length !== 1) {
+        const dirs = this.cutDirectionCandidates();
+        const info = dirs.map(c=>c.direction.map(v=>v.toFixed(3)).join("/")+" ("+c.faces.length+" граней)").join("; ");
+        throw new StepError("STEP содержит несколько направлений или промежуточные плоскости. Обнаружены направления линейчатых граней: "+(info||"нет")+". Автоматическая многооперационная резка пока не поддерживается; G-code не создан.");
+      }
       const values = planes(candidates[0]);
       return [candidates[0], values[0], values[values.length - 1]];
     }
