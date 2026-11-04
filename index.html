@@ -2425,26 +2425,48 @@ const Gen = (() => {
   }
   function profileBlock(safe, prog, contour, layout, axis, kerf, notes, side, stockWidth, margin, sag, maxStep, sideEntry = false) {
     const segments = prepareContour(contour.map(([f, fw]) => faceSegment(f, fw)), axis, kerf, true, notes);
-    // - Участок грани, лежащий дальше всех в сторону входа; середина его - точка входа
-    let start = -1, bestY = -Infinity;
+    // Enter at a contour corner on the entry side, rather than the midpoint of a face.
+    // Choose traversal so the upper branch is cut before the lower branch.
+    const height = p => layout.machine(p)[2];
+    const edge = p => side * layout.machine(p)[1];
+    let start = -1, bestY = -Infinity, bestZ = -Infinity;
     segments.forEach((seg, k) => {
       if (seg.kind !== "face") return;
-      const y = side * layout.machine(seg.A(0.5))[1];
-      if (y > bestY) { bestY = y; start = k; }
+      const y = (edge(seg.A(0)) + edge(seg.B(0))) / 2;
+      const z = (height(seg.A(0)) + height(seg.B(0))) / 2;
+      if (y > bestY + 1e-5 || (Math.abs(y-bestY)<1e-5 && z>bestZ)) {
+        bestY = y; bestZ = z; start = k;
+      }
     });
-    const towers = sampleSequence(startSequence(segments, start, 0.5), sag, maxStep).map(([a, b]) => layout.towers(a, b));
+    if (start < 0) throw new StepError("Не найден угол для входа в наружный контур");
+    // Reversing the complete loop preserves kerf-compensated coordinates.
+    const reverse = segments.map(seg => segment(u=>seg.A(1-u),u=>seg.B(1-u),seg.kind)).reverse();
+    const prev = segments[(start + segments.length - 1) % segments.length];
+    const next = segments[start];
+    const forwardUpper = (height(next.A(Math.min(0.02,1))) + height(next.B(Math.min(0.02,1)))) / 2;
+    const backwardUpper = (height(prev.A(Math.max(0.98,0))) + height(prev.B(Math.max(0.98,0)))) / 2;
+    const ordered = backwardUpper > forwardUpper + 1e-5 ? reverse : segments;
+    const startIndex = ordered === segments ? start : segments.length - 1 - ((start + segments.length - 1) % segments.length);
+    const towers = sampleSequence(startSequence(ordered, startIndex, 0), sag, maxStep).map(([a, b]) => layout.towers(a, b));
     const yOut = side * (stockWidth / 2 + margin);
     const [[yl, zl], [yr, zr]] = towers[0];
-    let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", lead-in from Y=" + yOut.toFixed(1) + " ***" + EOL;
+    const overrun = 5;
+    let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", corner entry, upper first, overrun Z+" + overrun + " ***" + EOL;
+    // Move to the entry height outside the block, then enter horizontally.
+    // With normal overhead mode, descend only OUTSIDE the stock.
     if (sideEntry) g += prog.travel("move", yOut, zl, yOut, zr);
     else {
       g += prog.travel("move", yOut, safe, yOut, safe);
-      g += prog.travel("cut", yOut, zl, yOut, zr);
-    }           // - вниз снаружи заготовки
-    g += prog.travel("cut", yl, zl, yr, zr);               // - подход к контуру по щели
+      g += prog.travel("move", yOut, zl, yOut, zr);
+    }
+    g += prog.travel("cut", yl, zl, yr, zr);
     for (const [[yl2, zl2], [yr2, zr2]] of towers.slice(1)) g += prog.travel("cut", yl2, zl2, yr2, zr2);
-    g += prog.travel("cut", yOut, zl, yOut, zr);           // - обратно по щели наружу
-    if (!sideEntry) g += prog.travel("cut", yOut, safe, yOut, safe);       // - вверх вне детали
+    // Close the profile by crossing the original corner 5 mm upward.
+    // This is an intentional additional cut, not kerf compensation.
+    g += prog.travel("cut", yl, zl + overrun, yr, zr + overrun);
+    // Horizontal exit from the block at the overrun height.
+    g += prog.travel("cut", yOut, zl + overrun, yOut, zr + overrun);
+    if (!sideEntry) g += prog.travel("move", yOut, safe, yOut, safe);
     return [g, towers];
   }
 
