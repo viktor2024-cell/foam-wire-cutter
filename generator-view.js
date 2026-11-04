@@ -8,10 +8,13 @@ const generatorPreview = (() => {
   const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 10000);
   camera.up.set(0, 0, 1);
   const controls = new THREE.OrbitControls(camera, renderer.domElement);
-  let group = null, geometry = null, error = '', mode = '3d';
+  let group = null, geometry = null, envelope = null, error = '', mode = '3d';
+  const machine = Gen.CONFIG;
+  document.getElementById('gnEnvelopeLegend').textContent = `Пунктир — рабочая область станка: ${machine.HorizontalTravel} мм поперёк струны × ${machine.VerticalTravel} мм по высоте × ${machine.FieldWidth} мм вдоль струны.`;
   const n = id => Number(document.getElementById(id).value);
   const draw = () => {
     scene.background = new THREE.Color(getComputedStyle(document.documentElement).getPropertyValue('--view').trim());
+    if (envelope) envelope.material.color.set(getComputedStyle(document.documentElement).getPropertyValue('--muted').trim());
     if (!document.getElementById('panelGen').hidden) renderer.render(scene, camera);
   };
   controls.addEventListener('change', draw);
@@ -21,10 +24,13 @@ const generatorPreview = (() => {
     document.getElementById('gnStatus').textContent = '';
   };
   function aim() {
-    const size = Math.max(n('gnL') || 1, n('gnW') || 1, n('gnH') || 1, ...(geometry?.size || [1]));
-    const z = (n('gnZ') || 0) + (n('gnH') || 0) / 2;
+    const bottom = n('gnZ') || 0, height = n('gnH') || 0, modelHeight = geometry?.size[2] || 0;
+    const low = Math.min(0, bottom, bottom + (height - modelHeight) / 2);
+    const high = Math.max(machine.VerticalTravel, bottom + height, bottom + (height + modelHeight) / 2);
+    const size = Math.max(machine.FieldWidth, machine.HorizontalTravel, high - low, n('gnL') || 1, n('gnW') || 1, ...(geometry?.size || [1]));
+    const z = (low + high) / 2;
     // Fit both portrait and landscape canvases; preserve the chosen view when dimensions change.
-    const d = size * 1.8 / Math.min(1, camera.aspect);
+    const d = size * 2.2 / Math.min(1, camera.aspect);
     controls.target.set(0, 0, z);
     camera.up.set(0, 0, 1);
     if (mode === 'top') { camera.position.set(0, 0, z + d); camera.up.set(0, 1, 0); }
@@ -43,11 +49,17 @@ const generatorPreview = (() => {
   function rebuild() {
     document.getElementById('gnStockFromModel').disabled = !geometry;
     clear(); group = new THREE.Group(); scene.add(group);
+    const machineBox = new THREE.BoxGeometry(machine.FieldWidth, machine.HorizontalTravel, machine.VerticalTravel);
+    envelope = new THREE.LineSegments(new THREE.EdgesGeometry(machineBox), new THREE.LineDashedMaterial({color:0x667788, dashSize:7, gapSize:5}));
+    machineBox.dispose();
+    envelope.computeLineDistances();
+    envelope.position.z = machine.VerticalTravel / 2;
+    group.add(envelope);
     const stock = [n('gnL'), n('gnW'), n('gnH')], bottom = n('gnZ');
     const valid = stock.every(v => Number.isFinite(v) && v > 0) && Number.isFinite(bottom) && bottom >= 0;
     const fit = document.getElementById('gnFit');
     fit.className = 'note';
-    if (!valid) { fit.className = 'note crit'; fit.textContent = 'Введите положительные размеры заготовки и неотрицательный низ Z.'; draw(); return; }
+    if (!valid) { fit.className = 'note crit'; fit.textContent = 'Введите положительные размеры заготовки и неотрицательный низ Z.'; aim(); return; }
     const box = new THREE.BoxGeometry(...stock);
     const foam = new THREE.Mesh(box, new THREE.MeshBasicMaterial({color: 0x4499cc, transparent:true, opacity:.12, depthWrite:false}));
     foam.position.z = bottom + stock[2]/2; group.add(foam);
