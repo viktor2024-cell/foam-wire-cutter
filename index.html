@@ -2017,6 +2017,34 @@ const Gen = (() => {
       }
       return candidates.sort((a,b)=>b.faces.length-a.faces.length);
     }
+    // Connected components are constructed *within* a candidate cutting
+    // direction. Adjacent faces from different operations must never be
+    // merged just because they share an edge in the solid BREP.
+    cuttingGroups() {
+      const groups=[];
+      for(const candidate of this.cutDirectionCandidates()) {
+        const direction=candidate.direction;
+        const faces=this.facesRaw.filter(raw=>candidate.faces.includes(raw.fid));
+        const unseen=new Set(faces.map(f=>f.fid));
+        while(unseen.size) {
+          const first=unseen.values().next().value;
+          unseen.delete(first);
+          const ids=[first], edgeSet=new Set(this.facesRaw.find(f=>f.fid===first).edgeIds);
+          let changed=true;
+          while(changed) {
+            changed=false;
+            for(const face of faces) {
+              if(!unseen.has(face.fid)||!face.edgeIds.some(e=>edgeSet.has(e)))continue;
+              unseen.delete(face.fid);ids.push(face.fid);
+              face.edgeIds.forEach(e=>edgeSet.add(e));
+              changed=true;
+            }
+          }
+          groups.push({direction,faces:ids});
+        }
+      }
+      return groups;
+    }
     // --- Ось размаха: единственная ось, по которой вершины лежат ровно в двух плоскостях
     spanAxis() {
       const points = [...this.edges.values()].flat();
@@ -2058,10 +2086,15 @@ const Gen = (() => {
         const onEnd = ys.every(y=>Math.abs(y-planeA)<0.01) || ys.every(y=>Math.abs(y-planeB)<0.01);
         return !onEnd && Math.max(...ys)-Math.min(...ys)<planeB-planeA-0.01;
       });
-      if (secondary.length) throw new StepError("Обнаружены дополнительные внутренние грани #"+
-        secondary.map(f=>f.fid).join(", #")+
-        ". Торцы основной детали Y="+planeA.toFixed(3)+" / "+planeB.toFixed(3)+
-        ". Вторая операция ещё не реализована; неполный G-code заблокирован.");
+      if (secondary.length) {
+        const ids=new Set(secondary.map(f=>f.fid));
+        const groups=this.cuttingGroups().map(g=>({...g,faces:g.faces.filter(id=>ids.has(id))})).filter(g=>g.faces.length);
+        const detail=groups.map(g=>"["+g.direction.map(x=>x.toFixed(3)).join("/")+
+          ": грани #"+g.faces.join(", #")+"]").join("; ");
+        throw new StepError("Дополнительные связные группы: "+detail+
+          ". Торцы основного профиля Y="+planeA.toFixed(3)+" / "+planeB.toFixed(3)+
+          ". Для этих групп пока не доказана допустимость резки; неполный G-code заблокирован.");
+      }
       // Multiple connected ruled patches can form a single internal contour.
       // A closed face is a contour by itself; open patches are chained by
       // matching both endpoint rails rather than treated as separate holes.
