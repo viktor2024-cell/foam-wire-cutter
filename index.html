@@ -116,6 +116,10 @@ pre.code .ln { color: var(--muted); display: inline-block; min-width: 4.5ch; }
 #panelGen { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-content: start; }
 #panelGen .gn-preview { grid-column: 1 / -1; }
 #gnView { height: 420px; min-height: 260px; position: relative; border-radius: 8px; overflow: hidden; background: var(--view); }
+#gnRotate [data-axis="0"] .axis-letter { color: #ff0000; }
+#gnRotate [data-axis="1"] .axis-letter { color: #00ff00; }
+#gnRotate [data-axis="2"] .axis-letter { color: #0000ff; }
+#gnRotate .axis-letter { font-weight: 800; }
 #gnView canvas { display: block; width: 100%; height: 100%; }
 #panelGen .gn-result { grid-column: 1 / -1; }
 .fields select { width: 100%; padding: 4px 6px; font-family: var(--font-num); font-size: 13px; }
@@ -165,15 +169,16 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
         <button id="gnViewSide" aria-pressed="false">Сбоку · вдоль струны</button>
       </div>
     </div>
-    <div id="gnView" aria-label="Модель и заготовка"></div>
+    <div id="gnView" aria-label="Модель, заготовка и рабочая область станка"></div>
+    <div class="note" id="gnEnvelopeLegend"></div>
     <div class="row" id="gnRotate" aria-label="Поворот модели">
       <span>Модель, шаг 90°:</span>
-      <button data-axis="0" data-turn="-1" aria-label="Повернуть модель вокруг X на минус 90 градусов">X ↶</button>
-      <button data-axis="0" data-turn="1" aria-label="Повернуть модель вокруг X на 90 градусов">X ↷</button>
-      <button data-axis="1" data-turn="-1" aria-label="Повернуть модель вокруг Y на минус 90 градусов">Y ↶</button>
-      <button data-axis="1" data-turn="1" aria-label="Повернуть модель вокруг Y на 90 градусов">Y ↷</button>
-      <button data-axis="2" data-turn="-1" aria-label="Повернуть модель вокруг Z на минус 90 градусов">Z ↶</button>
-      <button data-axis="2" data-turn="1" aria-label="Повернуть модель вокруг Z на 90 градусов">Z ↷</button>
+      <button data-axis="0" data-turn="-1" aria-label="Повернуть модель вокруг X на минус 90 градусов"><span class="axis-letter">X</span> ↶</button>
+      <button data-axis="0" data-turn="1" aria-label="Повернуть модель вокруг X на 90 градусов"><span class="axis-letter">X</span> ↷</button>
+      <button data-axis="1" data-turn="-1" aria-label="Повернуть модель вокруг Y на минус 90 градусов"><span class="axis-letter">Y</span> ↶</button>
+      <button data-axis="1" data-turn="1" aria-label="Повернуть модель вокруг Y на 90 градусов"><span class="axis-letter">Y</span> ↷</button>
+      <button data-axis="2" data-turn="-1" aria-label="Повернуть модель вокруг Z на минус 90 градусов"><span class="axis-letter">Z</span> ↶</button>
+      <button data-axis="2" data-turn="1" aria-label="Повернуть модель вокруг Z на 90 градусов"><span class="axis-letter">Z</span> ↷</button>
       <button id="gnResetRotation">Сбросить поворот</button>
       <label>Масштаб, % <input id="gnScale" type="number" min="0.01" step="1" value="100" style="width:85px"></label>
     </div>
