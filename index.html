@@ -2034,6 +2034,13 @@ const Gen = (() => {
       const [axis, planeA, planeB] = this.spanAxis();
       const outer = [], holes = [];
       for (const raw of this.facesRaw) {
+        // A cross-cut surface may be ruled along a different axis.  Do not
+        // interpret its partial-span edges as rails of the main profile.
+        const hasEndEdge = (plane) => raw.edgeIds.some(id => {
+          const pair = this.edges.get(id);
+          return pair && pair.every(p => Math.abs(p[axis] - plane) < 0.001);
+        });
+        if (!hasEndEdge(planeA) || !hasEndEdge(planeB)) continue;
         const face = this.ruledFace(this.surface(raw.surf), axis, planeA, planeB, raw.edgeIds);
         if (face !== null) (face.closed ? holes : outer).push(face);
       }
