@@ -30,7 +30,7 @@ const generatorPreview = (() => {
     const size = Math.max(machine.FieldWidth, machine.HorizontalTravel, high - low, n('gnL') || 1, n('gnW') || 1, ...(geometry?.size || [1]));
     const z = (low + high) / 2;
     // Fit both portrait and landscape canvases; preserve the chosen view when dimensions change.
-    const d = size * 1.8 / Math.min(1, camera.aspect);
+    const d = size * 2.2 / Math.min(1, camera.aspect);
     controls.target.set(0, 0, z);
     camera.up.set(0, 0, 1);
     if (mode === 'top') { camera.position.set(0, 0, z + d); camera.up.set(0, 1, 0); }
