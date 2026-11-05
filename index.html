@@ -1871,13 +1871,14 @@ const Gen = (() => {
     const model = new Model(text, rotation, scale, tolerance);
     const { outer, holes, secondaryContours, axis, wireframe } = model.build();
     const auxiliaryCurves = model.wireframe ? [] : model.auxiliaryCurves();
+    const guideAnalysis = model.wireframe ? null : model.guideAnalysis();
     const sampled = outer.map(([face]) => sampleFace(face, face.t0, face.t1, 0.05, 5));
     const rails = [...outer, ...holes.flat(), ...secondaryContours.flatMap(g=>g.contour)].map(([face]) => sampleFace(face, face.t0, face.t1, 0.01, 2)
       .map((pair) => pair.map((p) => [-p[1], p[0], p[2]])));
     const points = sampled.flat(2).map(p => [-p[1],p[0],p[2]]);
     const low = [0,1,2].map((k) => Math.min(...points.map((p) => p[k])));
     const high = [0,1,2].map((k) => Math.max(...points.map((p) => p[k])));
-    return { rails, axis, sampled, wireframe: !!wireframe, auxiliaryCurves, secondaryCount: secondaryContours.length, center: low.map((v,k) => (v+high[k])/2), size: low.map((v,k) => high[k]-v) };
+    return { rails, axis, sampled, wireframe: !!wireframe, auxiliaryCurves, guideAnalysis, secondaryCount: secondaryContours.length, center: low.map((v,k) => (v+high[k])/2), size: low.map((v,k) => high[k]-v) };
   }
 
   function pairPlacement(zsA, zsB, zc, span, stockHeight, bottomZ, kerf) {
@@ -2076,6 +2077,44 @@ const Gen = (() => {
         return {id,points:samples,closed:dist(samples[0],samples.at(-1))<.05,
           fixedAxis,range:ranges};
       });
+    }
+    // STEP guide curves describe toolpath end sections, not extra solids.
+    // Pair only sections on parallel planes. A pairing is diagnostic until
+    // a volumetric stock-removal and collision check has certified it.
+    guideAnalysis() {
+      const curves=this.auxiliaryCurves();
+      const pairs=[],unpaired=[],ambiguous=[];
+      for(const axis of [0,1,2]) {
+        const group=curves.filter(c=>c.fixedAxis===axis);
+        if(!group.length)continue;
+        if(group.length!==2) {ambiguous.push({axis,ids:group.map(c=>c.id),reason:"Ожидаются ровно две направляющие в параллельных плоскостях"});continue;}
+        const [a,b]=group,va=a.points[0][axis],vb=b.points[0][axis],span=Math.abs(va-vb);
+        if(span<.1){ambiguous.push({axis,ids:[a.id,b.id],reason:"Плоскости направляющих совпадают"});continue;}
+        if(a.closed!==b.closed){ambiguous.push({axis,ids:[a.id,b.id],reason:"Одна кривая замкнута, другая разомкнута"});continue;}
+        // Profiles may have different STEP seams/directions. Compare centered
+        // shapes to choose a suggested correspondence, not an approved cut.
+        const count=128, sample=(c,i)=>c.points[Math.round(i*(c.points.length-1)/count)];
+        const coords=[0,1,2].filter(i=>i!==axis);
+        const center=c=>coords.map(k=>c.points.reduce((v,p)=>v+p[k],0)/c.points.length);
+        const ca=center(a),cb=center(b);
+        const normalized=(c,ctr,i)=>coords.map((k,j)=>sample(c,i)[k]-ctr[j]);
+        const shifts=a.closed?Array.from({length:count},(_,i)=>i):[0];
+        let best=null;
+        for(const reverse of [false,true])for(const shift of shifts){
+          let loss=0;
+          for(let i=0;i<count;i+=4){
+            const j=a.closed?(reverse?(shift-i+count)%count:(shift+i)%count):(reverse?count-i:i);
+            const x=normalized(a,ca,i),y=normalized(b,cb,j);
+            loss+=(x[0]-y[0])**2+(x[1]-y[1])**2;
+          }
+          if(!best||loss<best.loss)best={loss,reverse,shift};
+        }
+        pairs.push({axis,ids:[a.id,b.id],planes:[va,vb],span,closed:a.closed,
+          correspondence:{reverse:best.reverse,shift:best.shift,shapeRms:Math.sqrt(best.loss/(count/4))},
+          status:"candidate"});
+      }
+      for(const c of curves)if(c.fixedAxis<0)unpaired.push({id:c.id,reason:"Кривая не лежит в координатной плоскости"});
+      return {pairs,unpaired,ambiguous,count:curves.length};
     }
     // Identify distinct cutting directions from the STEP ruled surfaces.  This
     // is diagnostic only: a direction is not yet an executable cutting operation.
