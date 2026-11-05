@@ -2586,9 +2586,9 @@ const Gen = (() => {
         return [[face,true]];
       });
       const entries=matchByPosition(A.bridges,B.bridges,c=>{
-        const attached=c.a===c.b?c.start:A.nodes[
-          A.outer.some(item=>item.from===c.a||item.to===c.a)?c.a:c.b];
-        return attached;
+        const section=A.bridges.includes(c)?A:B;
+        const attached=section.outer.some(item=>item.from===c.a||item.to===c.a)?c.a:c.b;
+        return section.nodes[attached];
       });
       // Two circular holes and their bridge access paths are model features:
       // do not discard them as decorative geometry.
