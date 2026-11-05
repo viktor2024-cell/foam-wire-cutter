@@ -643,6 +643,9 @@ test('paired planar STEP guides extrapolate to both towers at B0 without releasi
  const op=motion.operations[0];
  assert.equal(op.angle,0);
  assert.equal(op.samples.length,129);
+ assert.equal(op.fitsHorizontalTravel,true);
+ assert.equal(op.fitsVerticalTravel,true);
+ assert.ok(op.requiredVerticalTravel>=0);
  assert.ok(op.samples.every(p=>Math.abs(p.left[0]-p.right[0])<1e-7));
  assert.ok(op.samples.every(p=>Math.abs(p.left[1]-p.right[1])<1e-7));
  assert.equal(motion.safeForGcode,false);
