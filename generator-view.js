@@ -112,7 +112,9 @@ const generatorPreview = (() => {
         (geometry.auxiliaryCurves?.length?' Найдены '+geometry.auxiliaryCurves.length+
           ' вспомогательные кривые (розовые), пар направляющих: '+
           (geometry.guideAnalysis?.pairs.length||0)+
-          '. Это кандидаты, не проверенные станочные операции.':'');
+          '. Предварительные углы стола: '+
+          (geometry.guideKinematics?.operations.map(op=>'B'+op.angle).join(', ')||'нет')+
+          '. Траектории диагностические, резка запрещена до проверки объёма.':'');
       if(!fits||unsupported||trimConflict||geometry.axis!==1||geometry.auxiliaryCurves?.length) fit.className='note crit';
     } else {
       fit.textContent = error || 'Откройте STEP для проверки размещения.';
