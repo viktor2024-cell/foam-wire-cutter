@@ -1872,13 +1872,14 @@ const Gen = (() => {
     const { outer, holes, secondaryContours, axis, wireframe } = model.build();
     const auxiliaryCurves = model.wireframe ? [] : model.auxiliaryCurves();
     const guideAnalysis = model.wireframe ? null : model.guideAnalysis();
+    const guideKinematics = model.wireframe || !auxiliaryCurves.length ? null : model.guideKinematics(CONFIG.FieldWidth);
     const sampled = outer.map(([face]) => sampleFace(face, face.t0, face.t1, 0.05, 5));
     const rails = [...outer, ...holes.flat(), ...secondaryContours.flatMap(g=>g.contour)].map(([face]) => sampleFace(face, face.t0, face.t1, 0.01, 2)
       .map((pair) => pair.map((p) => [-p[1], p[0], p[2]])));
     const points = sampled.flat(2).map(p => [-p[1],p[0],p[2]]);
     const low = [0,1,2].map((k) => Math.min(...points.map((p) => p[k])));
     const high = [0,1,2].map((k) => Math.max(...points.map((p) => p[k])));
-    return { rails, axis, sampled, wireframe: !!wireframe, auxiliaryCurves, guideAnalysis, secondaryCount: secondaryContours.length, center: low.map((v,k) => (v+high[k])/2), size: low.map((v,k) => high[k]-v) };
+    return { rails, axis, sampled, wireframe: !!wireframe, auxiliaryCurves, guideAnalysis, guideKinematics, secondaryCount: secondaryContours.length, center: low.map((v,k) => (v+high[k])/2), size: low.map((v,k) => high[k]-v) };
   }
 
   function pairPlacement(zsA, zsB, zc, span, stockHeight, bottomZ, kerf) {
@@ -2115,6 +2116,62 @@ const Gen = (() => {
       }
       for(const c of curves)if(c.fixedAxis<0)unpaired.push({id:c.id,reason:"Кривая не лежит в координатной плоскости"});
       return {pairs,unpaired,ambiguous,count:curves.length};
+    }
+    // Candidate hot-wire kinematics for paired planar guides. All motions are
+    // diagnostic only: stock removal, entry paths and swept-volume safety have
+    // NOT been certified. Do not feed these samples into Program.travel.
+    guideKinematics(fieldWidth = 370, sampleCount = 128) {
+      if(!Number.isFinite(fieldWidth)||fieldWidth<=0||!Number.isInteger(sampleCount)||sampleCount<8||sampleCount>4096)
+        throw new StepError("Некорректные параметры расчёта направляющих");
+      const analysis=this.guideAnalysis(),curves=new Map(this.auxiliaryCurves().map(c=>[c.id,c]));
+      const result=[];
+      const at=(curve,u)=>{
+        const index=Math.min(curve.points.length-1,Math.max(0,u*(curve.points.length-1)));
+        const i=Math.floor(index),f=index-i;
+        const a=curve.points[i],b=curve.points[Math.min(i+1,curve.points.length-1)];
+        return a.map((x,k)=>x+(b[k]-x)*f);
+      };
+      for(const pair of analysis.pairs){
+        // The two machine towers are at -FW/2 and +FW/2 along the wire.
+        // Rotation B90 makes model X the wire direction; B0 uses model Y.
+        const [a,b]=pair.ids.map(id=>curves.get(id));
+        const along=pair.axis,cross=along===1?0:1;
+        if(along===2)continue; // horizontal hot wire cannot span vertical Z
+        const aPlane=pair.planes[0],bPlane=pair.planes[1];
+        const center=(aPlane+bPlane)/2,den=bPlane-aPlane;
+        const midpoint=(c,k)=>c.points.reduce((sum,p)=>sum+p[k],0)/c.points.length;
+        const transverseCenter=(midpoint(a,cross)+midpoint(b,cross))/2;
+        const zCenter=(midpoint(a,2)+midpoint(b,2))/2;
+        const samples=[],sequenceLength=pair.closed?sampleCount:sampleCount+1;
+        const mapB=u=>{
+          const {reverse,shift}=pair.correspondence;
+          if(pair.closed) {
+            const offset=shift/128;
+            return ((reverse?offset-u:offset+u)%1+1)%1;
+          }
+          return reverse?1-u:u;
+        };
+        let maxDifferential=0,maxCross=0,maxHeight=0;
+        for(let i=0;i<sequenceLength;i++) {
+          const u=i/sampleCount,pa=at(a,u),pb=at(b,mapB(u));
+          const crossA=pa[cross]-transverseCenter,crossB=pb[cross]-transverseCenter;
+          const za=pa[2]-zCenter,zb=pb[2]-zCenter;
+          const interp=(v0,v1,alongPosition)=>v0+(v1-v0)*(alongPosition-aPlane)/den;
+          const left=[interp(crossA,crossB,center-fieldWidth/2),interp(za,zb,center-fieldWidth/2)];
+          const right=[interp(crossA,crossB,center+fieldWidth/2),interp(za,zb,center+fieldWidth/2)];
+          if(![...left,...right].every(Number.isFinite))
+            throw new StepError("Направляющие #"+pair.ids.join("/")+": некорректная экстраполяция струны");
+          maxDifferential=Math.max(maxDifferential,Math.hypot(left[0]-right[0],left[1]-right[1]));
+          maxCross=Math.max(maxCross,Math.abs(left[0]),Math.abs(right[0]));
+          maxHeight=Math.max(maxHeight,Math.abs(left[1]),Math.abs(right[1]));
+          samples.push({u,left,right,profileA:pa,profileB:pb});
+        }
+        result.push({ids:pair.ids,axis:along,angle:along===1?0:90,closed:pair.closed,
+          span:pair.span,wireFieldWidth:fieldWidth,transverseCenter,zCenter,
+          samples,maxDifferential,maxCross,maxHeight,status:"diagnostic_only"});
+      }
+      return {operations:result,ambiguous:analysis.ambiguous,unpaired:analysis.unpaired,
+        safeForGcode:false};
     }
     // Identify distinct cutting directions from the STEP ruled surfaces.  This
     // is diagnostic only: a direction is not yet an executable cutting operation.
