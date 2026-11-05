@@ -2623,7 +2623,7 @@ const Gen = (() => {
     g += prog.travel("cut", yl, levelL, yr, levelR);       // - обратно по той же щели
     return [g, towers];
   }
-  function profileBlock(safe, prog, contour, layout, axis, kerf, notes, side, stockWidth, margin, sag, maxStep, sideEntry = false) {
+  function profileBlock(safe, prog, contour, layout, axis, kerf, notes, side, stockWidth, margin, sag, maxStep, sideEntry = false, exitDirection = -1) {
     const segments = prepareContour(contour.map(([f, fw]) => faceSegment(f, fw)), axis, kerf, true, notes);
     // Enter at a contour corner on the entry side, rather than the midpoint of a face.
     // Choose traversal so the upper branch is cut before the lower branch.
@@ -2670,11 +2670,9 @@ const Gen = (() => {
     }
     if(!orderedPath) throw new StepError("Не удалось однозначно выбрать верхний обход наружного контура");
     const towers=orderedPath;
-    const overlap=atDistance(towers,5);
-    if(!overlap) throw new StepError("Контур слишком короткий для перекрытия 5 мм");
     const yOut = side * (stockWidth / 2 + margin);
     const [[yl, zl], [yr, zr]] = towers[0];
-    let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", corner entry, upper first, overlap 5 mm along contour ***" + EOL;
+    let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", corner entry, upper first, exit Z" + (exitDirection > 0 ? "+" : "-") + "5 mm ***" + EOL;
     // Move to the entry height outside the block, then enter horizontally.
     // With normal overhead mode, descend only OUTSIDE the stock.
     if (sideEntry) g += prog.travel("move", yOut, zl, yOut, zr);
@@ -2684,12 +2682,9 @@ const Gen = (() => {
     }
     g += prog.travel("cut", yl, zl, yr, zr);
     for (const [[yl2, zl2], [yr2, zr2]] of towers.slice(1)) g += prog.travel("cut", yl2, zl2, yr2, zr2);
-    // Continue on the first 5 mm of the already cut contour, then retrace
-    // that same kerf to the corner before leaving through the entry slit.
-    const repeated=[...towers.slice(1,overlap.index),overlap.point];
-    for (const [[y1,z1],[y2,z2]] of repeated) g += prog.travel("cut",y1,z1,y2,z2);
-    for (const [[y1,z1],[y2,z2]] of [...repeated.slice(0,-1).reverse(),towers[0]]) g += prog.travel("cut",y1,z1,y2,z2);
-    g += prog.travel("cut", yOut, zl, yOut, zr);
+    // Cross the entry slit into waste, then leave the stock at the new height.
+    g += prog.travel("cut", yl, zl+5*exitDirection, yr, zr+5*exitDirection);
+    g += prog.travel("cut", yOut, zl+5*exitDirection, yOut, zr+5*exitDirection);
     if (!sideEntry) g += prog.travel("move", yOut, safe, yOut, safe);
     return [g, towers];
   }
@@ -2809,8 +2804,8 @@ const Gen = (() => {
       const [block, towers] = holeBlock(safe, prog, hole, layout, axis, kerf, warnings, sag, maxStep, gap, fromBelow);
       program += block; allTowers.push(...towers);
     };
-    const addProfile = (layout, side) => {
-      const [block, towers] = profileBlock(safe, prog, outer, layout, axis, kerf, warnings, side, stockWidth, o.leadMargin, sag, maxStep, sideEntry);
+    const addProfile = (layout, side, exitDirection = -1) => {
+      const [block, towers] = profileBlock(safe, prog, outer, layout, axis, kerf, warnings, side, stockWidth, o.leadMargin, sag, maxStep, sideEntry, exitDirection);
       program += block; allTowers.push(...towers);
     };
     if (o.pair) {
@@ -2830,9 +2825,9 @@ const Gen = (() => {
         program += prog.travel("cut", yOut, gap[0], yOut, gap[1]) + prog.travel("cut", yOut, safe, yOut, safe);
       }
       program += ";" + EOL + "; *** PROFILE 1/2: UPPER MIRRORED PIECE ***" + EOL;
-      addProfile(upper, -o.side);
+      addProfile(upper, -o.side, 1);
       program += ";" + EOL + "; *** PROFILE 2/2: LOWER ORIGINAL PIECE ***" + EOL;
-      addProfile(lower, o.side);
+      addProfile(lower, o.side, 1);
     } else {
       const layout = makeLayout(o.mirror ? 1 : -1, 1, 1, o.bottomZ + stockHeight / 2);   // - зеркало: корень и конец меняются башнями
       for (const hole of holes) addHole(hole, layout, null, false);
