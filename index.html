@@ -2623,22 +2623,25 @@ const Gen = (() => {
     g += prog.travel("cut", yl, levelL, yr, levelR);       // - обратно по той же щели
     return [g, towers];
   }
-  function profileBlock(safe, prog, contour, layout, axis, kerf, notes, side, stockWidth, margin, sag, maxStep, sideEntry = false, exitDirection = -1) {
+  function profileBlock(safe, prog, contour, layout, axis, kerf, notes, side, stockWidth, margin, sag, maxStep, sideEntry = false) {
     const segments = prepareContour(contour.map(([f, fw]) => faceSegment(f, fw)), axis, kerf, true, notes);
     // Enter at a contour corner on the entry side, rather than the midpoint of a face.
     // Choose traversal so the upper branch is cut before the lower branch.
     const height = p => layout.machine(p)[2];
     const edge = p => side * layout.machine(p)[1];
-    let start = -1, bestY = -Infinity, bestZ = -Infinity;
-    segments.forEach((seg, k) => {
-      if (seg.kind !== "face") return;
-      const y = (edge(seg.A(0)) + edge(seg.B(0))) / 2;
-      const z = (height(seg.A(0)) + height(seg.B(0))) / 2;
-      if (y > bestY + 1e-5 || (Math.abs(y-bestY)<1e-5 && z>bestZ)) {
-        bestY = y; bestZ = z; start = k;
-      }
+    const corners=[];
+    segments.forEach((seg,k)=>{
+      if(seg.kind!=="face") return;
+      corners.push({k,y:(edge(seg.A(0))+edge(seg.B(0)))/2,z:(height(seg.A(0))+height(seg.B(0)))/2});
     });
-    if (start < 0) throw new StepError("Не найден угол для входа в наружный контур");
+    if(!corners.length) throw new StepError("Не найден угол для входа в наружный контур");
+    const bestY=Math.max(...corners.map(c=>c.y));
+    // Adjacent ends of the same vertical edge can differ by a kerf radius
+    // after compensation; treat them as a shared side of the profile.
+    const sideCorners=corners.filter(c=>bestY-c.y<=Math.max(1,2*kerf));
+    sideCorners.sort((a,b)=>b.z-a.z);
+    const hasUpperCorner=sideCorners.length>1 && sideCorners[0].z-sideCorners.at(-1).z>Math.max(1,2*kerf);
+    const start=hasUpperCorner?sideCorners[0].k:corners.reduce((best,c)=>c.y>best.y?c:best).k;
     // Reversing the complete loop preserves kerf-compensated coordinates.
     const reverse = segments.map(seg => segment(u=>seg.A(1-u),u=>seg.B(1-u),seg.kind)).reverse();
     const reverseIndex = segments.length - 1 - ((start + segments.length - 1) % segments.length);
@@ -2672,7 +2675,7 @@ const Gen = (() => {
     const towers=orderedPath;
     const yOut = side * (stockWidth / 2 + margin);
     const [[yl, zl], [yr, zr]] = towers[0];
-    let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", corner entry, upper first, exit Z" + (exitDirection > 0 ? "+" : "-") + "5 mm ***" + EOL;
+    let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", corner entry, upper first, " + (hasUpperCorner ? "exit Z+5 mm" : "exit via entry slit") + " ***" + EOL;
     // Move to the entry height outside the block, then enter horizontally.
     // With normal overhead mode, descend only OUTSIDE the stock.
     if (sideEntry) g += prog.travel("move", yOut, zl, yOut, zr);
@@ -2682,9 +2685,10 @@ const Gen = (() => {
     }
     g += prog.travel("cut", yl, zl, yr, zr);
     for (const [[yl2, zl2], [yr2, zr2]] of towers.slice(1)) g += prog.travel("cut", yl2, zl2, yr2, zr2);
-    // Cross the entry slit into waste, then leave the stock at the new height.
-    g += prog.travel("cut", yl, zl+5*exitDirection, yr, zr+5*exitDirection);
-    g += prog.travel("cut", yOut, zl+5*exitDirection, yOut, zr+5*exitDirection);
+    // With a distinct upper corner cross into waste; a single side corner
+    // returns through the existing entry slit as requested for such profiles.
+    if (hasUpperCorner) g += prog.travel("cut", yl, zl+5, yr, zr+5);
+    g += prog.travel("cut", yOut, zl+(hasUpperCorner?5:0), yOut, zr+(hasUpperCorner?5:0));
     if (!sideEntry) g += prog.travel("move", yOut, safe, yOut, safe);
     return [g, towers];
   }
@@ -2804,8 +2808,8 @@ const Gen = (() => {
       const [block, towers] = holeBlock(safe, prog, hole, layout, axis, kerf, warnings, sag, maxStep, gap, fromBelow);
       program += block; allTowers.push(...towers);
     };
-    const addProfile = (layout, side, exitDirection = -1) => {
-      const [block, towers] = profileBlock(safe, prog, outer, layout, axis, kerf, warnings, side, stockWidth, o.leadMargin, sag, maxStep, sideEntry, exitDirection);
+    const addProfile = (layout, side) => {
+      const [block, towers] = profileBlock(safe, prog, outer, layout, axis, kerf, warnings, side, stockWidth, o.leadMargin, sag, maxStep, sideEntry);
       program += block; allTowers.push(...towers);
     };
     if (o.pair) {
@@ -2825,9 +2829,9 @@ const Gen = (() => {
         program += prog.travel("cut", yOut, gap[0], yOut, gap[1]) + prog.travel("cut", yOut, safe, yOut, safe);
       }
       program += ";" + EOL + "; *** PROFILE 1/2: UPPER MIRRORED PIECE ***" + EOL;
-      addProfile(upper, -o.side, 1);
+      addProfile(upper, -o.side);
       program += ";" + EOL + "; *** PROFILE 2/2: LOWER ORIGINAL PIECE ***" + EOL;
-      addProfile(lower, o.side, 1);
+      addProfile(lower, o.side);
     } else {
       const layout = makeLayout(o.mirror ? 1 : -1, 1, 1, o.bottomZ + stockHeight / 2);   // - зеркало: корень и конец меняются башнями
       for (const hole of holes) addHole(hole, layout, null, false);

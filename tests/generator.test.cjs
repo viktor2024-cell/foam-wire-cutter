@@ -332,7 +332,7 @@ test('external F2: two-direction path and safe tower motions',{skip:!process.env
  if(process.env.F2_GCODE_OUT)fs.writeFileSync(process.env.F2_GCODE_OUT,r.program);
 });
 
-function checkProfileOverlap(program, expectedDirection = -1, requireRise = true) {
+function checkProfileOverlap(program, expectedDirection = 1, requireRise = true) {
  const lines=program.split(/\r?\n/),i=lines.findIndex(line=>line.includes('corner entry, upper first'));
  assert.ok(i>=0);
  const count=+lines[i].match(/PROFILE: (\d+) points/)[1];
@@ -340,20 +340,24 @@ function checkProfileOverlap(program, expectedDirection = -1, requireRise = true
  const coords=line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?\d+(?:\.\d+)?)/g)].map(m=>[m[1],+m[2]]));
  const points=moves.map(coords),start=points[0],closed=points[count-1];
  for(const axis of ['X','Y','Z','A']) assert.ok(Math.abs(start[axis]-closed[axis])<.03,'contour returns to entry '+axis);
- const exit=points[count],outside=points[count+1];
- assert.ok(Math.abs(exit.X-start.X)<.03 && Math.abs(exit.Z-start.Z)<.03);
- assert.ok(Math.abs(exit.Y-start.Y-5*expectedDirection)<.03 && Math.abs(exit.A-start.A-5*expectedDirection)<.03,'exit crosses entry by 5 mm');
- assert.ok(Math.abs(outside.Y-exit.Y)<.03 && Math.abs(outside.A-exit.A)<.03,'horizontal exit');
+ const exit=points[count],outside=points[count+(expectedDirection?1:0)];
+ if(expectedDirection) {
+  assert.ok(Math.abs(exit.X-start.X)<.03 && Math.abs(exit.Z-start.Z)<.03);
+  assert.ok(Math.abs(exit.Y-start.Y-5*expectedDirection)<.03 && Math.abs(exit.A-start.A-5*expectedDirection)<.03,'exit crosses entry by 5 mm');
+ }
+ assert.ok(Math.abs(outside.Y-start.Y-5*expectedDirection)<.03 && Math.abs(outside.A-start.A-5*expectedDirection)<.03,'horizontal exit');
+ const approach=coords(lines.slice(i+1).find(line=>/^G00 /.test(line)));
+ assert.ok(Math.abs(outside.X-approach.X)<.03 && Math.abs(outside.Z-approach.Z)<.03,'exit reaches the entry corridor');
  const upper=points.slice(1,Math.min(count,35)).map(p=>(p.Y+p.A)/2);
  if(requireRise) assert.ok(Math.max(...upper)>(start.Y+start.A)/2+2,'first contour branch goes upwards');
 }
-test('outer profile crosses its entry by 5 mm down without retracing',()=>{
- checkProfileOverlap(build({trim:false}).program);
+test('outer profile leaves its upper corner 5 mm upwards',()=>{
+ checkProfileOverlap(build({trim:false}).program,1,false);
 });
-test('external F2: upper branch first and exit crosses entry by 5 mm',{skip:!process.env.F2_STEP},()=>{
+test('external F2: upper branch first and exit through entry slit',{skip:!process.env.F2_STEP},()=>{
  const text=fs.readFileSync(process.env.F2_STEP,'utf8');
  const r=gen.buildProgram(text,'F2.stp',options({stock:[50,325,240],bottomZ:0,clearance:10,trim:false}));
- checkProfileOverlap(r.program);
+ checkProfileOverlap(r.program,0);
  const p=sim.parseGcode(r.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
 });
