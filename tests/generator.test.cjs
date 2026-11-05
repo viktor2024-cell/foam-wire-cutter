@@ -594,6 +594,9 @@ test('solid STEP keeps separate guide curves and refuses incomplete G-code',()=>
  assert.ok(Math.abs(curves[0].points.at(-1)[0]-10)<1e-6);
  const preview=gen.previewGeometry(solidWithCurves);
  assert.equal(preview.auxiliaryCurves.length,1);
+ assert.equal(preview.guideAnalysis.count,1);
+ assert.equal(preview.guideAnalysis.pairs.length,0);
+ assert.equal(preview.guideAnalysis.ambiguous.length,1);
  assert.throws(()=>gen.buildProgram(solidWithCurves,'solid-guides.stp',options()),
   /вспомогательных кривых.*заблокирована/);
 });
@@ -604,6 +607,11 @@ test('external F4-1: retains all four design B-splines without unsafe G-code',
  assert.equal(m.wireframe,false);
  assert.equal(curves.length,4);
  assert.deepEqual(Array.from(curves,c=>c.fixedAxis).sort(),[0,0,1,1]);
+ const groups=m.guideAnalysis();
+ assert.equal(groups.pairs.length,2);
+ assert.equal(groups.ambiguous.length,0);
+ assert.deepEqual(groups.pairs.map(p=>p.ids),[[544,681],[197,406]]);
+ assert.ok(groups.pairs.every(p=>p.span>1));
  assert.throws(()=>gen.buildProgram(step,'F4-1.stp',options()),
   /вспомогательных кривых.*заблокирована/);
 });
