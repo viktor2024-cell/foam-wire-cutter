@@ -2919,6 +2919,102 @@ const Gen = (() => {
     g+=prog.travel("move",outside,safe,outside,safe);
     return [g,[...lead,...ring]];
   }
+  // A wireframe U-shaped part may have two circular features accessed from
+  // the OPEN CENTER of the arch. Enter that sacrificial core once, use only
+  // the short bridge from the inner wall into each hole, then traverse the
+  // core to the other hole. A separate bottom-to-hole entry on each leg
+  // leaves an unwanted slit across the finished wall.
+  function wireframeConnectedHolesBlock(safe, prog, holes, outer, layout,
+                                        axis, kerf, notes, sag, maxStep,
+                                        stockWidth, leadMargin, bottomZ, side) {
+    if(holes.length!==2 || holes.some(h=>h.entry?.length!==2))
+      throw new StepError("Общий проход к отверстиям: ожидаются две щели с двумя участками каждая");
+    if(bottomZ<2)throw new StepError("Проход снизу требует поднять заготовку минимум на 2 мм");
+    const underZ=bottomZ-1;
+    const contours=holes.map((hole,i)=>{
+      const [bridgeFace,forward]=hole.entry.at(-1);
+      const bridge=sampleSequence([faceSegment(bridgeFace,forward)],sag,maxStep);
+      const [rootA,rootB]=bridge[0];
+      const ringParts=prepareContour(hole.map(([face,fw])=>faceSegment(face,fw)),axis,kerf,false,notes);
+      const ring=sampleSequence(startSequence(ringParts,0,0),sag,maxStep);
+      if(bridge.length<2||ring.length<8)
+        throw new StepError("Недостаточная детализация щели или отверстия #"+(i+1));
+      return {bridge,ring,rootA,rootB,towerRoot:layout.towers(rootA,rootB)};
+    });
+    const [left,right]=contours.slice().sort((a,b)=>a.rootA[0]-b.rootA[0]);
+    const mid=(a,b)=>a.map((v,i)=>(v+b[i])/2);
+    const centerA=mid(left.rootA,right.rootA),centerB=mid(left.rootB,right.rootB);
+    const center=layout.towers(centerA,centerB);
+    const polyAt=t=>{
+      const poly=[];
+      for(const [face,fw] of outer){
+        for(let i=0;i<40;i++){
+          const u=fw?i/40:1-i/40;
+          const a=face.A(u),b=face.B(u);
+          poly.push([a[0]*(1-t)+b[0]*t,a[2]*(1-t)+b[2]*t]);
+        }
+      }
+      return poly;
+    };
+    const inside=(poly,[x,z])=>{
+      let hit=false;
+      for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+        const a=poly[i],b=poly[j];
+        if((a[1]>z)!==(b[1]>z)&&x<(b[0]-a[0])*(z-a[1])/(b[1]-a[1])+a[0])hit=!hit;
+      }
+      return hit;
+    };
+    const outerMinZ=Math.min(...outer.flatMap(([face])=>
+      Array.from({length:21},(_,i)=>Math.min(face.A(i/20)[2],face.B(i/20)[2]))));
+    const checkCorridor=(startA,startB,endA,endB,label,from=0.03,to=0.97)=>{
+      for(const t of [0,.25,.5,.75,1]){
+        const poly=polyAt(t);
+        const start=[startA[0]*(1-t)+startB[0]*t,startA[2]*(1-t)+startB[2]*t];
+        const end=[endA[0]*(1-t)+endB[0]*t,endA[2]*(1-t)+endB[2]*t];
+        for(let i=0;i<=80;i++){
+          const u=from+(to-from)*i/80;
+          const p=[start[0]+(end[0]-start[0])*u,start[1]+(end[1]-start[1])*u];
+          if(inside(poly,p))throw new StepError("Небезопасный путь к отверстиям ("+label+
+            "): траектория пересекает сохраняемый профиль. Рез заблокирован");
+        }
+      }
+    };
+    // The center line is a waste/void corridor in the final U profile.
+    // It is cut with G1, not rapid G0: the uncut stock initially fills it.
+    const lowA=[centerA[0],centerA[1],outerMinZ-3];
+    const lowB=[centerB[0],centerB[1],outerMinZ-3];
+    checkCorridor(lowA,lowB,centerA,centerB,"центральный вход");
+    checkCorridor(centerA,centerB,left.rootA,left.rootB,"левый проход");
+    checkCorridor(centerA,centerB,right.rootA,right.rootB,"правый проход");
+    checkCorridor(left.rootA,left.rootB,right.rootA,right.rootB,"между отверстиями",.02,.98);
+    const outside=side*(stockWidth/2+leadMargin);
+    const atUnder=[[center[0][0],underZ],[center[1][0],underZ]];
+    const travelTo=(kind,pair)=>prog.travel(kind,pair[0][0],pair[0][1],pair[1][0],pair[1][1]);
+    const points=[center,...contours.flatMap(h=>h.bridge.concat(h.ring).map(([a,b])=>layout.towers(a,b)))];
+    let g=";"+EOL+"; *** WIREFRAME HOLES: SHARED INNER-ARCH WASTE CORRIDOR ***"+EOL;
+    g+=prog.travel("move",outside,safe,outside,safe);
+    g+=prog.travel("move",outside,underZ,outside,underZ);
+    g+=travelTo("move",atUnder);
+    g+=travelTo("cut",center);
+    let current=center;
+    for(const [i,h] of contours.slice().sort((a,b)=>{
+      const length=x=>Math.max(...[0,1].map(k=>Math.hypot(x.towerRoot[k][0]-center[k][0],x.towerRoot[k][1]-center[k][1])));
+      return length(a)-length(b);
+    }).entries()){
+      g+=";"+EOL+"; *** HOLE "+(i+1)+"/2: ENTRY THROUGH INNER ARCH ***"+EOL;
+      g+=travelTo("cut",h.towerRoot);
+      for(const [a,b] of h.bridge.slice(1))g+=travelTo("cut",layout.towers(a,b));
+      for(const [a,b] of h.ring)g+=travelTo("cut",layout.towers(a,b));
+      for(const [a,b] of h.bridge.slice().reverse())g+=travelTo("cut",layout.towers(a,b));
+      current=h.towerRoot;
+    }
+    g+=travelTo("cut",center);
+    g+=travelTo("cut",atUnder);
+    g+=prog.travel("move",outside,underZ,outside,underZ);
+    g+=prog.travel("move",outside,safe,outside,safe);
+    return [g,points];
+  }
+
   function holeBlock(safe, prog, contour, layout, axis, kerf, notes, sag, maxStep, gap = null, fromBelow = false) {
     // An internal contour can consist of many ruled faces, not just one
     // closed B-spline surface. Preserve the topology and traversal direction.
@@ -3159,7 +3255,12 @@ const Gen = (() => {
       addProfile(lower, o.side);
     } else {
       const layout = makeLayout(o.mirror ? 1 : -1, 1, 1, o.bottomZ + stockHeight / 2);   // - зеркало: корень и конец меняются башнями
-      for (const hole of holes) addHole(hole, layout, null, false);
+      if (model.wireframe && holes.length===2 && holes.every(h=>h.entry?.length===2)) {
+        const [block,towers]=wireframeConnectedHolesBlock(
+          safe,prog,holes,outer,layout,axis,kerf,warnings,sag,maxStep,
+          stockWidth,o.leadMargin,o.bottomZ,o.side);
+        program+=block;allTowers.push(...towers);
+      } else for (const hole of holes) addHole(hole, layout, null, false);
       addProfile(layout, o.side);
     }
     program += endBlock(cfg, prog);
