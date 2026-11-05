@@ -153,6 +153,34 @@ test('external W1: no false transverse operation from STEP end caps',{skip:!proc
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
  assert.doesNotMatch(r.program,/SECONDARY CUT/);
 });
+test('curve-only STEP reconstructs matched end sections and emits G-code safely',()=>{
+ const text=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-profile.stp'),'utf8');
+ const m=new gen.Model(text),built=m.build();
+ assert.equal(built.wireframe,true);
+ assert.equal(built.axis,1);
+ assert.equal(built.outer.length,6);
+ assert.equal(built.holes.length,1);
+ assert.equal(built.holes[0].entry.length,2);
+ const opts=options({stock:[50,130,100],bottomZ:10,clearance:20});
+ const r=gen.buildProgram(text,'wireframe-profile.stp',opts);
+ assert.match(r.program,/STEP GEOMETRY=CURVES_ONLY/);
+ assert.match(r.program,/WIREFRAME HOLE VIA EXPLICIT STEP SLIT/);
+ assert.equal(r.holes,1);
+ const p=sim.parseGcode(r.program);
+ const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+ assert.throws(()=>gen.buildProgram(text,'pair.stp',options({pair:true,stock:[50,130,200]})),/пока поддержана одна обычная деталь/);
+});
+test('external curves STEP: double-hole wireframe safely emits program',{skip:!process.env.CURVES_STEP},()=>{
+ const text=fs.readFileSync(process.env.CURVES_STEP,'utf8');
+ const m=new gen.Model(text),built=m.build();
+ assert.equal(built.axis,1);
+ assert.equal(built.outer.length,13);
+ assert.equal(built.holes.length,2);
+ const r=gen.buildProgram(text,'curves.stp',options({stock:[50,160,175],bottomZ:10,clearance:20}));
+ const p=sim.parseGcode(r.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+});
 test('split coedges yield the complete trimmed rectangular profile',()=>{
  const m=new gen.Model(fixture), b=m.build();
  assert.equal(b.axis,1);assert.equal(b.planeA,-25);assert.equal(b.planeB,25);
