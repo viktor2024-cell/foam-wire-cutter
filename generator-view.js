@@ -122,26 +122,83 @@ const generatorPreview = (() => {
     modelRotation=Gen.rotateModel(modelRotation,Number(button.dataset.axis),Number(button.dataset.turn)); load();
   });
   document.getElementById('gnResetRotation').addEventListener('click',()=>{modelRotation=Gen.identityRotation();load();});
+  // Evaluate the actual model at every 90-degree orientation around the
+  // wire axis, without rotating the span away from the wire. Choose stock
+  // thickness first (20/50/100 if possible), then the smallest footprint.
+  // A model that cannot fit any standard sheet gets a custom blank, subject
+  // to the machine envelope and safe clearance.
+  function autoStockOptions() {
+    if (!stepFile) return [];
+    const scale=n('gnScale')/100, paired=document.getElementById('gnStockPair').checked;
+    const kerf=n('gnKerf'), bottom=n('gnZ'), clearance=n('gnClear');
+    const round5=x=>Math.ceil((x-1e-7)/5)*5;
+    const results=[];
+    const rotations=[];
+    const queue=[{matrix:modelRotation,turns:0,description:'текущее положение'}];
+    const seen=new Set();
+    for(let i=0;i<queue.length;i++){
+      const state=queue[i],key=state.matrix.flat().map(v=>Math.round(v*1e6)).join(',');
+      if(seen.has(key))continue;
+      seen.add(key);rotations.push(state);
+      for(let axis=0;axis<3;axis++){
+        queue.push({matrix:Gen.rotateModel(state.matrix,axis,1),turns:state.turns+1,
+          description:state.description==='текущее положение'?
+            'поворот '+('XYZ'[axis])+' +90°':state.description+', '+('XYZ'[axis])+' +90°'});
+      }
+      if(rotations.length>=24)break;
+    }
+    for(let turn=0;turn<rotations.length;turn++){
+      const rotation=rotations[turn].matrix;
+      try{
+        const g=turn===0&&geometry ? geometry : Gen.previewGeometry(stepFile.text,rotation,scale,n('gnTolerance'));
+        // Both machine and generator require the span to lie along the wire.
+        if(g.axis!==1)continue;
+        const required=paired ? Gen.previewPair(g,0,0,kerf).minimumHeight : g.size[2];
+        const minimumHeight=required+20; // 10 mm foam margin above and below
+        // Standard 20/50/100 mm is the foam SHEET THICKNESS ALONG
+        // THE WIRE (gnL / stock X), not the upright Z dimension.
+        // Keep 5 mm on each wire-side end; vertical and transverse
+        // cutting allowance remains 10 mm per side.
+        const minimumLength=g.size[0]+10;
+        const sheet=[20,50,100].find(t=>t+1e-7>=minimumLength);
+        const length=sheet||round5(minimumLength);
+        const height=round5(minimumHeight),width=round5(g.size[1]+20);
+        if(length>machine.FieldWidth+1e-7 || width>machine.HorizontalTravel+1e-7 ||
+           width/2+n('gnLead')>machine.ParkX+1e-7 ||
+           bottom+height+clearance>machine.VerticalTravel+1e-7)continue;
+        results.push({rotation,geometry:g,length,width,height,standard:Boolean(sheet),turn,
+          description:rotations[turn].description,area:width*height,minimumHeight,minimumLength});
+      }catch(e){/* A candidate may not form valid cutting geometry at this orientation. */}
+    }
+    // First use the thinnest standard sheet, then preserve current
+    // orientation if it already fits. Never rotate just to shave Z.
+    results.sort((a,b)=>a.length-b.length||a.turn-b.turn||a.area-b.area||a.height-b.height);
+    return results;
+  }
   document.getElementById('gnStockFromModel').addEventListener('click',()=>{
-    load(); // Use the current orientation and scale, including a just-edited scale field.
-    if (!geometry) return;
-    const round5 = x => Math.ceil((x - 1e-7) / 5) * 5;
-    const pair = document.getElementById('gnStockPair')?.checked || false;
-    const kerf = n('gnKerf') || 0;
-    let requiredHeight;
-    try { requiredHeight = (pair ? Gen.previewPair(geometry, 100, 0, kerf).minimumHeight : geometry.size[2]) + 20; }
-    catch(e) { const fit=document.getElementById("gnFit");fit.className="note crit";fit.textContent=e.message;return; }
-    const thickness = [20,50,100].find(t => t + 1e-7 >= requiredHeight);
-    if (!thickness) {
-      const fit = document.getElementById('gnFit');
-      fit.className = 'note crit';
-      fit.textContent = 'Нужна высота ' + requiredHeight.toFixed(1) + ' мм; один стандартный лист (20/50/100 мм) не подходит.';
+    load(); // refresh orientation, model scale and geometry
+    if(!geometry)return;
+    const choices=autoStockOptions();
+    if(!choices.length){
+      const fit=document.getElementById('gnFit');
+      fit.className='note crit';
+      fit.textContent='Ни одно положение модели не помещается в рабочую область с заданным нижним Z и безопасным зазором. Уменьшите масштаб или измените установку.';
       return;
     }
-    document.getElementById('gnL').value = round5(geometry.size[0] + 20);
-    document.getElementById('gnW').value = round5(geometry.size[1] + 20);
-    document.getElementById('gnH').value = thickness;
-    invalidate(); rebuild();
+    const best=choices[0];
+    modelRotation=best.rotation;
+    geometry=best.geometry;
+    document.getElementById('gnL').value=best.length;
+    document.getElementById('gnW').value=best.width;
+    document.getElementById('gnH').value=best.height;
+    invalidate();rebuild();
+    const fit=document.getElementById('gnFit');
+    // The stock check above has validated dimensions; append actionable
+    // explanation without hiding its own "fits" status.
+    const info='Автоподбор: '+best.description+', толщина листа вдоль струны '+
+      best.length+' мм ('+(best.standard?'стандартная':'нестандартная')+
+      '), заготовка '+best.length+' × '+best.width+' × '+best.height+' мм.';
+    fit.textContent+=' '+info;
   });
   document.getElementById('gnScale').addEventListener('change',load);
   document.getElementById('gnTolerance').addEventListener('change',load);
