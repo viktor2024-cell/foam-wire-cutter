@@ -2968,6 +2968,17 @@ const Gen = (() => {
     const pos=(pair,t)=>[
       pair[0][0]*(1-t)+pair[1][0]*t,pair[0][2]*(1-t)+pair[1][2]*t];
     const freePoint=(pair)=>stations.every((t,i)=>!inside(profiles[i],pos(pair,t)));
+    const nearWall=(poly,p,r)=>{
+      const r2=r*r;
+      for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+        const a=poly[j],b=poly[i],dx=b[0]-a[0],dz=b[1]-a[1];
+        if(p[0]<Math.min(a[0],b[0])-r||p[0]>Math.max(a[0],b[0])+r||
+           p[1]<Math.min(a[1],b[1])-r||p[1]>Math.max(a[1],b[1])+r)continue;
+        const t=Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dz)/Math.max(1e-14,dx*dx+dz*dz)));
+        if((p[0]-a[0]-t*dx)**2+(p[1]-a[1]-t*dz)**2<r2)return true;
+      }
+      return false;
+    };
     // Endpoint points are allowed on the exact wall, but ALL intermediate
     // samples must be outside the saved part. This test prevents the previous
     // wall-cutting regression, which the stock-box simulator cannot detect.
@@ -2977,6 +2988,12 @@ const Gen = (() => {
         for(let j=1;j<24;j++){
           const u=j/24,p=[pa[0]+(pb[0]-pa[0])*u,pa[1]+(pb[1]-pa[1])*u];
           if(inside(poly,p))return false;
+          // The wire is not infinitely thin. Away from an intentional
+          // start/end boundary contact, reserve half the kerf as clearance.
+          const limit=Math.min(kerf/2,Math.min(
+            Math.hypot(p[0]-pa[0],p[1]-pa[1]),
+            Math.hypot(p[0]-pb[0],p[1]-pb[1]))*.6);
+          if(limit>.02 && nearWall(poly,p,limit))return false;
         }
       }
       return true;
