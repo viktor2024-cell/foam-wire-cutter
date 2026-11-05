@@ -2933,8 +2933,8 @@ const Gen = (() => {
   function wireframeRoutePlannerBlock(safe, prog, holes, outer, layout,
                                       axis, kerf, notes, sag, maxStep,
                                       stockWidth, leadMargin, bottomZ, side) {
-    if(holes.length<2 || holes.some(h=>!h.entry?.length))
-      throw new StepError("Автомаршрут: нужны хотя бы два отверстия с отдельными граничными щелями STEP");
+    if(holes.length<1 || holes.some(h=>!h.entry?.length))
+      throw new StepError("Автомаршрут: отверстия должны иметь отдельные входные щели STEP");
     if(bottomZ<2)throw new StepError("Автомаршрут: низ заготовки должен быть не ниже Z=2");
     if(holes.length>16)throw new StepError("Автомаршрут: больше 16 отверстий; требуется разбиение на операции");
     const underZ=bottomZ-1, planeA=holes[0][0][0].A(0)[1],planeB=holes[0][0][0].B(0)[1];
@@ -3096,7 +3096,7 @@ const Gen = (() => {
             return prog.travel(kind,t[0][0],t[0][1],t[1][0],t[1][1]);
           };
     const underTower=tower(entry.bottom),outside=side*(stockWidth/2+leadMargin);
-    let g=";"+EOL+"; *** WIREFRAME ROUTE PLANNER: "+n+" HOLES, VERIFIED WASTE GRAPH ***"+EOL;
+    let g=";"+EOL+"; *** WIREFRAME ROUTE PLANNER: "+n+" "+(n===1?"HOLE":"HOLES")+", VERIFIED WASTE GRAPH ***"+EOL;
     g+="; WASTE PATH ORDER: "+order.map(i=>i+1).join(" -> ")+EOL;
     g+=prog.travel("move",outside,safe,outside,safe);
     g+=prog.travel("move",outside,underZ,outside,underZ);
@@ -3365,7 +3365,7 @@ const Gen = (() => {
       addProfile(lower, o.side);
     } else {
       const layout = makeLayout(o.mirror ? 1 : -1, 1, 1, o.bottomZ + stockHeight / 2);   // - зеркало: корень и конец меняются башнями
-      if (model.wireframe && holes.length>=2) {
+      if (model.wireframe && holes.length>=1) {
         const [block,towers]=wireframeRoutePlannerBlock(
           safe,prog,holes,outer,layout,axis,kerf,warnings,sag,maxStep,
           stockWidth,o.leadMargin,o.bottomZ,o.side);
