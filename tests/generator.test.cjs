@@ -410,3 +410,10 @@ test('external stab2: synchronized STEP sections and kerf-aware simulation',{ski
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
  assert.ok(r.points>100);assert.ok(r.warnings.some(w=>w.includes('не дойдёт до вершины')));
 });
+
+test('external F1-1: resolve the closed seam before checking ruled-surface accuracy',{skip:!process.env.F11_STEP},()=>{
+ const text=fs.readFileSync(process.env.F11_STEP,'utf8');
+ // The actual cross-edge parameters are on a different scale from the
+ // surface; the geometry-based seam resolver must reach the accuracy check.
+ assert.throws(()=>gen.previewGeometry(text),/Грань #1807: синхронная струна отклоняется от STEP-поверхности/);
+});

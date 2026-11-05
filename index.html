@@ -2306,6 +2306,22 @@ const Gen = (() => {
             const e=this.entities.get(id), c=this.get(e.args[3]);
             if(!isTyped(c) || c.name!=="B_SPLINE_CURVE_WITH_KNOTS") continue;
             const knots=c.args[7]; if(!Array.isArray(knots)||!knots.length)continue;
+            // The edge may use a completely different parameter scale than
+            // the surface. Evaluate its geometry instead of comparing scales.
+            const degree=c.args[1], refs=c.args[2], multiplicities=c.args[6];
+            if(Array.isArray(refs)&&Array.isArray(multiplicities)) {
+              const U=expandKnots(knots,multiplicities), n=refs.length-1;
+              const u=(U[degree]+U[n+1])/2, span=findSpan(n,degree,u,U), N=basis(span,u,degree,U);
+              const midpoint=[0,0,0];
+              for(let j=0;j<=degree;j++){const p=this.point(refs[span-degree+j]);for(let k=0;k<3;k++)midpoint[k]+=N[j]*p[k];}
+              const other=dist(ends[0],point)<.01?ends[1]:ends[0];
+              try {
+                const mid=Model.project(rail,tDom,midpoint), end=Model.project(rail,tDom,other), eps=1e-6;
+                const first=mid>=Math.min(tDom[0],end)-eps && mid<=Math.max(tDom[0],end)+eps;
+                const last=mid>=Math.min(tDom[1],end)-eps && mid<=Math.max(tDom[1],end)+eps;
+                if(first!==last) choices.push(first?tDom[0]:tDom[1]);
+              } catch (_) { /* fall back to matching parameter domains below */ }
+            }
             const limits=[knots[0],knots.at(-1)];
             for(const u of limits) if(u>=tDom[0]-1e-8 && u<=tDom[1]+1e-8 && dist(rail(u),point)<.01) choices.push(u);
           }
