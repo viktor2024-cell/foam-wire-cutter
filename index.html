@@ -2124,6 +2124,8 @@ const Gen = (() => {
       if(!Number.isFinite(fieldWidth)||fieldWidth<=0||!Number.isInteger(sampleCount)||sampleCount<8||sampleCount>4096)
         throw new StepError("Некорректные параметры расчёта направляющих");
       const analysis=this.guideAnalysis(),curves=new Map(this.auxiliaryCurves().map(c=>[c.id,c]));
+      const allPoints=[...this.edges.values()].flat().concat([...curves.values()].flatMap(c=>c.points));
+      const origin=[0,1,2].map(k=>{const v=allPoints.map(p=>p[k]);return (Math.min(...v)+Math.max(...v))/2;});
       const result=[];
       const at=(curve,u)=>{
         const index=Math.min(curve.points.length-1,Math.max(0,u*(curve.points.length-1)));
@@ -2137,11 +2139,9 @@ const Gen = (() => {
         const [a,b]=pair.ids.map(id=>curves.get(id));
         const along=pair.axis,cross=along===1?0:1;
         if(along===2)continue; // horizontal hot wire cannot span vertical Z
-        const aPlane=pair.planes[0],bPlane=pair.planes[1];
-        const center=(aPlane+bPlane)/2,den=bPlane-aPlane;
-        const midpoint=(c,k)=>c.points.reduce((sum,p)=>sum+p[k],0)/c.points.length;
-        const transverseCenter=(midpoint(a,cross)+midpoint(b,cross))/2;
-        const zCenter=(midpoint(a,2)+midpoint(b,2))/2;
+        const aPlane=pair.planes[0]-origin[along],bPlane=pair.planes[1]-origin[along];
+        const den=bPlane-aPlane;
+        const transverseCenter=origin[cross],zCenter=origin[2];
         const samples=[],sequenceLength=pair.closed?sampleCount:sampleCount+1;
         const mapB=u=>{
           const {reverse,shift}=pair.correspondence;
@@ -2157,8 +2157,8 @@ const Gen = (() => {
           const crossA=pa[cross]-transverseCenter,crossB=pb[cross]-transverseCenter;
           const za=pa[2]-zCenter,zb=pb[2]-zCenter;
           const interp=(v0,v1,alongPosition)=>v0+(v1-v0)*(alongPosition-aPlane)/den;
-          const left=[interp(crossA,crossB,center-fieldWidth/2),interp(za,zb,center-fieldWidth/2)];
-          const right=[interp(crossA,crossB,center+fieldWidth/2),interp(za,zb,center+fieldWidth/2)];
+          const left=[interp(crossA,crossB,-fieldWidth/2),interp(za,zb,-fieldWidth/2)];
+          const right=[interp(crossA,crossB,fieldWidth/2),interp(za,zb,fieldWidth/2)];
           if(![...left,...right].every(Number.isFinite))
             throw new StepError("Направляющие #"+pair.ids.join("/")+": некорректная экстраполяция струны");
           maxDifferential=Math.max(maxDifferential,Math.hypot(left[0]-right[0],left[1]-right[1]));
@@ -2170,7 +2170,7 @@ const Gen = (() => {
           span:pair.span,wireFieldWidth:fieldWidth,transverseCenter,zCenter,
           samples,maxDifferential,maxCross,maxHeight,status:"diagnostic_only"});
       }
-      return {operations:result,ambiguous:analysis.ambiguous,unpaired:analysis.unpaired,
+      return {operations:result,origin,ambiguous:analysis.ambiguous,unpaired:analysis.unpaired,
         safeForGcode:false};
     }
     // Identify distinct cutting directions from the STEP ruled surfaces.  This
