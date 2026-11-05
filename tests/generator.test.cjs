@@ -573,3 +573,37 @@ test('external F1-1 offset toward tower fixes travel limits',{skip:!process.env.
  const p=sim.parseGcode(result.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
 });
+
+test('solid STEP keeps separate guide curves and refuses incomplete G-code',()=>{
+ const extra=[
+  "#900001 = CARTESIAN_POINT('',(0.,0.,0.));",
+  "#900002 = CARTESIAN_POINT('',(10.,0.,0.));",
+  "#900003 = B_SPLINE_CURVE_WITH_KNOTS ('guide',1,(#900001,#900002),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
+  "#900004 = GEOMETRIC_CURVE_SET ('guides',(#900003));"
+ ].join('\\n');
+ const idx=fixture.lastIndexOf('ENDSEC;');
+ assert.ok(idx>0);
+ const solidWithCurves=fixture.slice(0,idx)+extra+'\\n'+fixture.slice(idx);
+ const model=new gen.Model(solidWithCurves);
+ assert.equal(model.wireframe,false);
+ const curves=model.auxiliaryCurves();
+ assert.equal(curves.length,1);
+ assert.equal(curves[0].id,900003);
+ assert.equal(curves[0].fixedAxis,1);
+ assert.equal(curves[0].closed,false);
+ assert.ok(Math.abs(curves[0].points.at(-1)[0]-10)<1e-6);
+ const preview=gen.previewGeometry(solidWithCurves);
+ assert.equal(preview.auxiliaryCurves.length,1);
+ assert.throws(()=>gen.buildProgram(solidWithCurves,'solid-guides.stp',options()),
+  /вспомогательных кривых.*заблокирована/);
+});
+test('external F4-1: retains all four design B-splines without unsafe G-code',
+ {skip:!process.env.F4_STEP},()=>{
+ const step=fs.readFileSync(process.env.F4_STEP,'utf8');
+ const m=new gen.Model(step),curves=m.auxiliaryCurves();
+ assert.equal(m.wireframe,false);
+ assert.equal(curves.length,4);
+ assert.deepEqual(curves.map(c=>c.fixedAxis).sort(),[0,0,1,1]);
+ assert.throws(()=>gen.buildProgram(step,'F4-1.stp',options()),
+  /вспомогательных кривых.*заблокирована/);
+});
