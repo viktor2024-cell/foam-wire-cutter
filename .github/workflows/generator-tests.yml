@@ -1,0 +1,22 @@
+name: Generator regression
+on:
+  push:
+    branches:
+      - feat/f4-auxiliary-curves-import
+  pull_request:
+    paths:
+      - 'index.html'
+      - 'generator-view.js'
+      - 'tests/**'
+      - '.github/workflows/generator-tests.yml'
+jobs:
+  generator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run generator tests (no CNC hardware)
+        run: node --test tests/generator.test.cjs
