@@ -160,7 +160,7 @@ test('auto stock takes standard sheet thickness along wire, not vertical Z',()=>
  assert.ok(begin>0&&end>begin);
  const text=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-profile.stp'),'utf8');
  const state={
-  Gen:gen,stepFile:{text},modelRotation:gen.identityRotation(),
+  Gen:gen,stepFile:{text},modelRotation:gen.identityRotation(),modelOffset:[0,0,0],
   geometry:gen.previewGeometry(text),machine:gen.CONFIG,
   document:{getElementById:()=>({checked:false})},
   n:id=>({gnScale:100,gnKerf:1,gnZ:10,gnClear:20,gnLead:5,gnTolerance:.6})[id]
@@ -551,4 +551,25 @@ test('external F1-1: explicit 0.6 mm tolerance, tower travel and simulation',{sk
 test('surface deviation tolerance must be finite and nonnegative',()=>{
  assert.throws(()=>gen.previewGeometry(fixture,gen.identityRotation(),1,-.1),/Допуск/);
  assert.throws(()=>gen.buildProgram(fixture,'invalid.stp',options({tolerance:NaN})),/Допуск/);
+});
+
+test('model offset is bounded by stock and moves both tower profiles',()=>{
+ const base=build({stock:[80,160,100],bottomZ:10,trim:false}), shifted=build({stock:[80,160,100],bottomZ:10,trim:false,offset:[0,5,5]});
+ assert.match(shifted.program,/MODEL OFFSET X=0 Y=5 Z=5 mm/);
+ const contour=r=>sim.parseGcode(r.program.split('corner entry, upper first')[1]).moves.filter(m=>m.type==='G1').slice(0,12);
+ const a=contour(base),b=contour(shifted);assert.equal(a.length,b.length);
+ for(let i=0;i<a.length;i++)for(const axis of ['X','Y','Z','A'])assert.ok(Math.abs(b[i].to[axis]-a[i].to[axis]-5)<.03,axis);
+ assert.throws(()=>build({stock:[80,160,100],offset:[20,0,0],trim:false}),/не помещается/);
+ assert.throws(()=>build({stock:[80,160,100],offset:[5,0,0],trim:true}),/Торцевание со смещением/);
+ assert.throws(()=>build({stock:[80,160,100],offset:[5,0,0],pair:true,trim:false}),/Смещение пока/);
+});
+
+test('external F1-1 offset toward tower fixes travel limits',{skip:!process.env.F11_STEP},()=>{
+ const text=fs.readFileSync(process.env.F11_STEP,'utf8'),rotation=gen.rotateModel(gen.identityRotation(),2,1);
+ const opts=options({rotation,tolerance:.6,stock:[100,145,135],bottomZ:40,clearance:20,trim:false,powerComp:false});
+ assert.throws(()=>gen.buildProgram(text,'F1-1.stp',opts),/ход кареток/);
+ const result=gen.buildProgram(text,'F1-1.stp',{...opts,offset:[-25,0,0]});
+ assert.match(result.program,/MODEL OFFSET X=-25 Y=0 Z=0/);
+ const p=sim.parseGcode(result.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
 });

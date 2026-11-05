@@ -73,14 +73,17 @@ const generatorPreview = (() => {
       try { if (paired) placement=Gen.previewPair(geometry,stock[2],bottom,kerf); }
       catch(e) { fit.className='note crit';fit.textContent=e.message;aim();return; }
       const requiredZ=paired ? placement.minimumHeight : geometry.size[2];
-      const fits=geometry.size[0]<=stock[0]+.001 && geometry.size[1]<=stock[1]+.001 && requiredZ<=stock[2]+.001;
+      const fits=geometry.size[0]+2*Math.abs(modelOffset[0])<=stock[0]+.001 && geometry.size[1]+2*Math.abs(modelOffset[1])<=stock[1]+.001 && requiredZ+2*Math.abs(modelOffset[2])<=stock[2]+.001;
+      const shifted=modelOffset.some(v=>v!==0);
+      const unsupported=shifted && (paired || geometry.secondaryCount>0 || geometry.wireframe);
+      const trimConflict=modelOffset[0]!==0 && document.getElementById('gnTrim').checked && stock[0]>geometry.size[0]+kerf+1e-6;
       const copies=paired ? [
         {sign:[1,1,1],z:placement.zLower,color:0xe87722},
         {sign:[-1,-1,-1],z:placement.zUpper,color:0x22a8a0}
       ] : [{sign:[1,1,1],z:bottom+stock[2]/2,color:0xe87722}];
       for (const copy of copies) {
         const vertices=[],lines=[];
-        const point=p=>p.map((v,k)=>copy.sign[k]*(v-geometry.center[k])+(k===2?copy.z:0));
+        const point=p=>p.map((v,k)=>copy.sign[k]*(v-geometry.center[k])+(k===2?copy.z:0)+modelOffset[k]);
         for (const rail of geometry.rails) {
           for(let i=1;i<rail.length;i++) {
             const [a,b]=rail[i-1].map(point),[c,d]=rail[i].map(point);
@@ -88,16 +91,16 @@ const generatorPreview = (() => {
           }
           lines.push(...point(rail[0][0]),...point(rail[0][1]),...point(rail.at(-1)[0]),...point(rail.at(-1)[1]));
         }
-        const color=fits?copy.color:0xd73333;
+        const color=fits&&!unsupported&&!trimConflict?copy.color:0xd73333;
         const mesh=new THREE.BufferGeometry();mesh.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));
         group.add(new THREE.Mesh(mesh,new THREE.MeshBasicMaterial({color,side:THREE.DoubleSide,transparent:true,opacity:.45,depthWrite:false})));
         const outline=new THREE.BufferGeometry();outline.setAttribute('position',new THREE.Float32BufferAttribute(lines,3));
         group.add(new THREE.LineSegments(outline,new THREE.LineBasicMaterial({color})));
       }
       fit.textContent=(paired?'Пара: ':'Модель: ')+geometry.size.map(v=>v.toFixed(2)).join(' × ')+
-        ' мм. '+(fits?'Помещается. ':'Не помещается. ')+(paired?'Минимальная высота: '+requiredZ.toFixed(1)+' мм. ':'')+
+        ' мм. '+(unsupported?'Смещение этой комбинации операций пока не поддерживается. ':trimConflict?'Смещение X с торцеванием пока не поддерживается. ':fits?'Помещается. ':'Не помещается. ')+(paired?'Минимальная высота: '+requiredZ.toFixed(1)+' мм. ':'')+
         (geometry.axis===1?'Размах вдоль струны.':'Для генерации поверните размах вдоль струны.');
-      if(!fits||geometry.axis!==1) fit.className='note crit';
+      if(!fits||unsupported||trimConflict||geometry.axis!==1) fit.className='note crit';
     } else {
       fit.textContent = error || 'Откройте STEP для проверки размещения.';
       if (error) fit.className = 'note crit';
@@ -122,6 +125,12 @@ const generatorPreview = (() => {
     modelRotation=Gen.rotateModel(modelRotation,Number(button.dataset.axis),Number(button.dataset.turn)); load();
   });
   document.getElementById('gnResetRotation').addEventListener('click',()=>{modelRotation=Gen.identityRotation();load();});
+  const showOffset=()=>{document.getElementById('gnOffset').textContent=modelOffset.map((v,k)=>'XYZ'[k]+' '+(v>0?'+':'')+v).join(' · ')+' мм';};
+  document.getElementById('gnMove').addEventListener('click',e=>{
+    const button=e.target.closest('button[data-axis]');if(!button||!stepFile)return;
+    modelOffset[Number(button.dataset.axis)]+=5*Number(button.dataset.step);showOffset();invalidate();rebuild();
+  });
+  document.getElementById('gnResetOffset').addEventListener('click',()=>{modelOffset=[0,0,0];showOffset();invalidate();rebuild();});
   // Evaluate the actual model at every 90-degree orientation around the
   // wire axis, without rotating the span away from the wire. Choose stock
   // thickness first (20/50/100 if possible), then the smallest footprint.
@@ -154,15 +163,15 @@ const generatorPreview = (() => {
         // Both machine and generator require the span to lie along the wire.
         if(g.axis!==1)continue;
         const required=paired ? Gen.previewPair(g,0,0,kerf).minimumHeight : g.size[2];
-        const minimumHeight=required+20; // 10 mm foam margin above and below
+        const minimumHeight=required+20+2*Math.abs(modelOffset[2]); // 10 mm foam margin above and below
         // Standard 20/50/100 mm is the foam SHEET THICKNESS ALONG
         // THE WIRE (gnL / stock X), not the upright Z dimension.
         // Keep 5 mm on each wire-side end; vertical and transverse
         // cutting allowance remains 10 mm per side.
-        const minimumLength=g.size[0]+10;
+        const minimumLength=g.size[0]+10+2*Math.abs(modelOffset[0]);
         const sheet=[20,50,100].find(t=>t+1e-7>=minimumLength);
         const length=sheet||round5(minimumLength);
-        const height=round5(minimumHeight),width=round5(g.size[1]+20);
+        const height=round5(minimumHeight),width=round5(g.size[1]+20+2*Math.abs(modelOffset[1]));
         if(length>machine.FieldWidth+1e-7 || width>machine.HorizontalTravel+1e-7 ||
            width/2+n('gnLead')>machine.ParkX+1e-7 ||
            bottom+height+clearance>machine.VerticalTravel+1e-7)continue;
@@ -212,5 +221,6 @@ const generatorPreview = (() => {
   rebuild();
   document.getElementById('gnStockPair')?.addEventListener('change',rebuild);
   document.getElementById('gnKerf').addEventListener('input',()=>{invalidate();rebuild();});
+  document.getElementById('gnTrim').addEventListener('change',()=>{invalidate();rebuild();});
   return {load,rebuild};
 })();
