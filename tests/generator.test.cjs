@@ -171,17 +171,62 @@ test('auto stock takes standard sheet thickness along wire, not vertical Z',()=>
  assert.equal(best.length,50);
  assert.equal(best.turn,0);
  assert.equal(best.standard,true);
- assert.ok(best.height>=100);
+ assert.ok(best.height+1e-7>=state.geometry.size[2]+20); // geometrically required allowance
  assert.ok(best.width>best.length);
 });
 test('wireframe U-arch uses one safe waste corridor to both openings',()=>{
  const step=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-two-holes.stp'),'utf8');
  const opts=options({stock:[50,165,165],bottomZ:10,clearance:20,trim:false});
  const result=gen.buildProgram(step,'wireframe-two-holes.stp',opts);
- assert.match(result.program,/SHARED INNER-ARCH WASTE CORRIDOR/);
- assert.equal((result.program.match(/ENTRY THROUGH INNER ARCH/g)||[]).length,2);
+ assert.match(result.program,/WIREFRAME ROUTE PLANNER: 2 HOLES/);
+ assert.equal((result.program.match(/FROM VERIFIED WASTE ROUTE/g)||[]).length,2);
  assert.doesNotMatch(result.program,/WIREFRAME HOLE VIA EXPLICIT STEP SLIT/);
  assert.equal(result.holes,2);
+ const p=sim.parseGcode(result.program);
+ const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+});
+test('safe entry adapts to rotation around wire axis on multi-hole profiles',()=>{
+ const stock=[50,165,165];
+ for(const file of ['wireframe-two-holes.stp','wireframe-three-holes.stp']){
+  const text=fs.readFileSync(path.join(__dirname,'fixtures',file),'utf8');
+  for(const [angle,side] of [[-1,'LEFT'],[0,'BOTTOM'],[1,'RIGHT']]){
+   const rotation=angle===0?gen.identityRotation():gen.rotateModel(gen.identityRotation(),0,angle);
+   const result=gen.buildProgram(text,file,options({stock,bottomZ:10,clearance:20,
+     rotation,trim:false}));
+   assert.match(result.program,new RegExp('SAFE ENTRY SIDE: '+side));
+   const p=sim.parseGcode(result.program);
+   const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+   assert.equal(check.warns.filter(w=>w.level==='crit').length,0,
+    file+' X rotation '+angle+': '+JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+  }
+ }
+});
+test('external curves STEP: negative X rotation uses a safe lateral entry',
+ {skip:!process.env.CURVES_STEP},()=>{
+ const text=fs.readFileSync(process.env.CURVES_STEP,'utf8');
+ const rotation=gen.rotateModel(gen.identityRotation(),0,-1);
+ const result=gen.buildProgram(text,'curves.stp',
+   options({stock:[50,165,165],bottomZ:10,clearance:20,rotation,trim:false}));
+ assert.match(result.program,/SAFE ENTRY SIDE: LEFT/);
+ const p=sim.parseGcode(result.program);
+ const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,
+   JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+});
+test('route planner handles 3 openings with independent STEP access chains',()=>{
+ const step=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-three-holes.stp'),'utf8');
+ const built=new gen.Model(step).build();
+ assert.equal(built.holes.length,3);
+ assert.ok(built.holes.some(h=>h.entry.length===3)); // nontrivial access topology
+ const result=gen.buildProgram(step,'wireframe-three-holes.stp',
+  options({stock:[50,165,165],bottomZ:10,clearance:20,trim:false}));
+ assert.match(result.program,/WIREFRAME ROUTE PLANNER: 3 HOLES/);
+ assert.equal((result.program.match(/FROM VERIFIED WASTE ROUTE/g)||[]).length,3);
+ assert.doesNotMatch(result.program,/WIREFRAME HOLE VIA EXPLICIT STEP SLIT/);
+ const order=result.program.match(/WASTE PATH ORDER: ([^\r\n]+)/);
+ assert.ok(order);
+ assert.equal(new Set(order[1].match(/\d+/g)).size,3);
  const p=sim.parseGcode(result.program);
  const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns.filter(w=>w.level==='crit')));
@@ -189,7 +234,7 @@ test('wireframe U-arch uses one safe waste corridor to both openings',()=>{
 test('external curves STEP: internal corridor must pass stock simulator',{skip:!process.env.CURVES_STEP},()=>{
  const step=fs.readFileSync(process.env.CURVES_STEP,'utf8');
  const result=gen.buildProgram(step,'curves.stp',options({stock:[50,165,165],bottomZ:10,clearance:20,trim:false}));
- assert.match(result.program,/SHARED INNER-ARCH WASTE CORRIDOR/);
+ assert.match(result.program,/WIREFRAME ROUTE PLANNER: 2 HOLES/);
  assert.equal(result.holes,2);
  const p=sim.parseGcode(result.program);
  const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
@@ -206,7 +251,7 @@ test('curve-only STEP reconstructs matched end sections and emits G-code safely'
  const opts=options({stock:[50,130,100],bottomZ:10,clearance:20});
  const r=gen.buildProgram(text,'wireframe-profile.stp',opts);
  assert.match(r.program,/STEP GEOMETRY=CURVES_ONLY/);
- assert.match(r.program,/WIREFRAME HOLE VIA EXPLICIT STEP SLIT/);
+ assert.match(r.program,/WIREFRAME ROUTE PLANNER: 1 HOLE/);
  assert.equal(r.holes,1);
  const p=sim.parseGcode(r.program);
  const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});

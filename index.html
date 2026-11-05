@@ -2924,38 +2924,39 @@ const Gen = (() => {
   // the short bridge from the inner wall into each hole, then traverse the
   // core to the other hole. A separate bottom-to-hole entry on each leg
   // leaves an unwanted slit across the finished wall.
-  function wireframeConnectedHolesBlock(safe, prog, holes, outer, layout,
-                                        axis, kerf, notes, sag, maxStep,
-                                        stockWidth, leadMargin, bottomZ, side) {
-    if(holes.length!==2 || holes.some(h=>h.entry?.length!==2))
-      throw new StepError("Общий проход к отверстиям: ожидаются две щели с двумя участками каждая");
-    if(bottomZ<2)throw new StepError("Проход снизу требует поднять заготовку минимум на 2 мм");
-    const underZ=bottomZ-1;
+  // Visibility-graph CAM planner for ANY number of spline openings sharing
+  // the same accessible exterior/waste region of a ruled wireframe profile.
+  // Every edge is checked on BOTH ends of the wire AND three intermediate
+  // span stations. No route through the finished profile is accepted.
+  // Uncut waste is traversed at G1 with the wire on; G0 is confined to
+  // below the stock and above its safe height.
+  function wireframeRoutePlannerBlock(safe, prog, holes, outer, layout,
+                                      axis, kerf, notes, sag, maxStep,
+                                      stockWidth, leadMargin, bottomZ, side) {
+    if(holes.length<1 || holes.some(h=>!h.entry?.length))
+      throw new StepError("Автомаршрут: отверстия должны иметь отдельные входные щели STEP");
+    if(bottomZ<2)throw new StepError("Автомаршрут: низ заготовки должен быть не ниже Z=2");
+    if(holes.length>16)throw new StepError("Автомаршрут: больше 16 отверстий; требуется разбиение на операции");
+    const underZ=bottomZ-1, planeA=holes[0][0][0].A(0)[1],planeB=holes[0][0][0].B(0)[1];
     const contours=holes.map((hole,i)=>{
-      const [bridgeFace,forward]=hole.entry.at(-1);
-      const bridge=sampleSequence([faceSegment(bridgeFace,forward)],sag,maxStep);
-      const [rootA,rootB]=bridge[0];
-      const ringParts=prepareContour(hole.map(([face,fw])=>faceSegment(face,fw)),axis,kerf,false,notes);
-      const ring=sampleSequence(startSequence(ringParts,0,0),sag,maxStep);
+      const [bridgeFace,fw]=hole.entry.at(-1);
+      const bridge=sampleSequence([faceSegment(bridgeFace,fw)],sag,maxStep);
+      const ringSeg=prepareContour(hole.map(([f,d])=>faceSegment(f,d)),axis,kerf,false,notes);
+      const ring=sampleSequence(startSequence(ringSeg,0,0),sag,maxStep);
       if(bridge.length<2||ring.length<8)
-        throw new StepError("Недостаточная детализация щели или отверстия #"+(i+1));
-      return {bridge,ring,rootA,rootB,towerRoot:layout.towers(rootA,rootB)};
+        throw new StepError("Автомаршрут: повреждённое отверстие или щель #"+(i+1));
+      return {i,bridge,ring,pair:bridge[0]};
     });
-    const [left,right]=contours.slice().sort((a,b)=>a.rootA[0]-b.rootA[0]);
-    const mid=(a,b)=>a.map((v,i)=>(v+b[i])/2);
-    const centerA=mid(left.rootA,right.rootA),centerB=mid(left.rootB,right.rootB);
-    const center=layout.towers(centerA,centerB);
-    const polyAt=t=>{
-      const poly=[];
-      for(const [face,fw] of outer){
-        for(let i=0;i<40;i++){
-          const u=fw?i/40:1-i/40;
-          const a=face.A(u),b=face.B(u);
-          poly.push([a[0]*(1-t)+b[0]*t,a[2]*(1-t)+b[2]*t]);
+    const polygon=t=>{
+      const points=[];
+      for(const [f,fw] of outer)
+        for(let i=0;i<36;i++){
+          const u=fw?i/36:1-i/36,a=f.A(u),b=f.B(u);
+          points.push([a[0]*(1-t)+b[0]*t,a[2]*(1-t)+b[2]*t]);
         }
-      }
-      return poly;
+      return points;
     };
+    const stations=[0,.25,.5,.75,1],profiles=stations.map(polygon);
     const inside=(poly,[x,z])=>{
       let hit=false;
       for(let i=0,j=poly.length-1;i<poly.length;j=i++){
@@ -2964,55 +2965,218 @@ const Gen = (() => {
       }
       return hit;
     };
-    const outerMinZ=Math.min(...outer.flatMap(([face])=>
-      Array.from({length:21},(_,i)=>Math.min(face.A(i/20)[2],face.B(i/20)[2]))));
-    const checkCorridor=(startA,startB,endA,endB,label,from=0.03,to=0.97)=>{
-      for(const t of [0,.25,.5,.75,1]){
-        const poly=polyAt(t);
-        const start=[startA[0]*(1-t)+startB[0]*t,startA[2]*(1-t)+startB[2]*t];
-        const end=[endA[0]*(1-t)+endB[0]*t,endA[2]*(1-t)+endB[2]*t];
-        for(let i=0;i<=80;i++){
-          const u=from+(to-from)*i/80;
-          const p=[start[0]+(end[0]-start[0])*u,start[1]+(end[1]-start[1])*u];
-          if(inside(poly,p))throw new StepError("Небезопасный путь к отверстиям ("+label+
-            "): траектория пересекает сохраняемый профиль. Рез заблокирован");
+    const pos=(pair,t)=>[
+      pair[0][0]*(1-t)+pair[1][0]*t,pair[0][2]*(1-t)+pair[1][2]*t];
+    const freePoint=(pair)=>stations.every((t,i)=>!inside(profiles[i],pos(pair,t)));
+    const nearWall=(poly,p,r)=>{
+      const r2=r*r;
+      for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+        const a=poly[j],b=poly[i],dx=b[0]-a[0],dz=b[1]-a[1];
+        if(p[0]<Math.min(a[0],b[0])-r||p[0]>Math.max(a[0],b[0])+r||
+           p[1]<Math.min(a[1],b[1])-r||p[1]>Math.max(a[1],b[1])+r)continue;
+        const t=Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dz)/Math.max(1e-14,dx*dx+dz*dz)));
+        if((p[0]-a[0]-t*dx)**2+(p[1]-a[1]-t*dz)**2<r2)return true;
+      }
+      return false;
+    };
+    // Endpoint points are allowed on the exact wall, but ALL intermediate
+    // samples must be outside the saved part. This test prevents the previous
+    // wall-cutting regression, which the stock-box simulator cannot detect.
+    const visible=(a,b)=>{
+      for(let k=0;k<stations.length;k++){
+        const t=stations[k],pa=pos(a,t),pb=pos(b,t),poly=profiles[k];
+        for(let j=1;j<24;j++){
+          const u=j/24,p=[pa[0]+(pb[0]-pa[0])*u,pa[1]+(pb[1]-pa[1])*u];
+          if(inside(poly,p))return false;
+          // The wire is not infinitely thin. Away from an intentional
+          // start/end boundary contact, reserve half the kerf as clearance.
+          const limit=Math.min(kerf/2,Math.min(
+            Math.hypot(p[0]-pa[0],p[1]-pa[1]),
+            Math.hypot(p[0]-pb[0],p[1]-pb[1]))*.6);
+          if(limit>.02 && nearWall(poly,p,limit))return false;
         }
       }
+      return true;
     };
-    // The center line is a waste/void corridor in the final U profile.
-    // It is cut with G1, not rapid G0: the uncut stock initially fills it.
-    const lowA=[centerA[0],centerA[1],outerMinZ-3];
-    const lowB=[centerB[0],centerB[1],outerMinZ-3];
-    checkCorridor(lowA,lowB,centerA,centerB,"центральный вход");
-    checkCorridor(centerA,centerB,left.rootA,left.rootB,"левый проход");
-    checkCorridor(centerA,centerB,right.rootA,right.rootB,"правый проход");
-    checkCorridor(left.rootA,left.rootB,right.rootA,right.rootB,"между отверстиями",.02,.98);
-    const outside=side*(stockWidth/2+leadMargin);
-    const atUnder=[[center[0][0],underZ],[center[1][0],underZ]];
-    const travelTo=(kind,pair)=>prog.travel(kind,pair[0][0],pair[0][1],pair[1][0],pair[1][1]);
-    const points=[center,...contours.flatMap(h=>h.bridge.concat(h.ring).map(([a,b])=>layout.towers(a,b)))];
-    let g=";"+EOL+"; *** WIREFRAME HOLES: SHARED INNER-ARCH WASTE CORRIDOR ***"+EOL;
-    g+=prog.travel("move",outside,safe,outside,safe);
-    g+=prog.travel("move",outside,underZ,outside,underZ);
-    g+=travelTo("move",atUnder);
-    g+=travelTo("cut",center);
-    let current=center;
-    for(const [i,h] of contours.slice().sort((a,b)=>{
-      const length=x=>Math.max(...[0,1].map(k=>Math.hypot(x.towerRoot[k][0]-center[k][0],x.towerRoot[k][1]-center[k][1])));
-      return length(a)-length(b);
-    }).entries()){
-      g+=";"+EOL+"; *** HOLE "+(i+1)+"/2: ENTRY THROUGH INNER ARCH ***"+EOL;
-      g+=travelTo("cut",h.towerRoot);
-      for(const [a,b] of h.bridge.slice(1))g+=travelTo("cut",layout.towers(a,b));
-      for(const [a,b] of h.ring)g+=travelTo("cut",layout.towers(a,b));
-      for(const [a,b] of h.bridge.slice().reverse())g+=travelTo("cut",layout.towers(a,b));
-      current=h.towerRoot;
+    const metric=(a,b)=>Math.max(dist(a[0],b[0]),dist(a[1],b[1]));
+    const roots=contours.map(c=>c.pair);
+    const avg=(values)=>values.reduce((s,v)=>s+v,0)/values.length;
+    const delta=[0,2].map(k=>avg(roots.map(p=>p[1][k]-p[0][k])));
+    const minX=Math.min(...roots.map(p=>p[0][0])),maxX=Math.max(...roots.map(p=>p[0][0]));
+    const minZ=Math.min(...roots.map(p=>p[0][2])),maxZ=Math.max(...roots.map(p=>p[0][2]));
+    const allOuter=profiles[0],minOuterZ=Math.min(...allOuter.map(p=>p[1]));
+    const gridSpacing=8,baseZ=Math.max(minOuterZ+2,minZ-30),topZ=maxZ+30;
+    const nodes=roots.map(pair=>({pair,role:"root"}));
+    const addNode=(x,z)=>{
+      const pair=[[x,planeA,z],[x+delta[0],planeB,z+delta[1]]];
+      if(freePoint(pair)&&!nodes.some(n=>metric(n.pair,pair)<3))
+        nodes.push({pair,role:"free"});
+    };
+    // The centre of the cavity is often the best entry. Also sample the
+    // entire space near the holes; an off-centre or asymmetric cavity can
+    // require several turns rather than a direct wall-crossing segment.
+    addNode((minX+maxX)/2,avg(roots.map(p=>p[0][2])));
+    const columns=Math.min(22,Math.max(2,Math.ceil((maxX-minX+20)/gridSpacing)));
+    const rows=Math.min(20,Math.max(2,Math.ceil((topZ-baseZ)/gridSpacing)));
+    for(let j=0;j<=rows;j++)for(let i=0;i<=columns;i++)
+      addNode(minX-10+(maxX-minX+20)*i/columns,baseZ+(topZ-baseZ)*j/rows);
+    if(nodes.length>280)throw new StepError("Автомаршрут: слишком сложная карта доступности");
+    const adjacency=nodes.map(()=>[]);
+    for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){
+      const d=metric(nodes[i].pair,nodes[j].pair);
+      if(d<.01 || (d>32 && !(i<holes.length&&j<holes.length)))continue;
+      if(visible(nodes[i].pair,nodes[j].pair)){
+        adjacency[i].push([j,d]);adjacency[j].push([i,d]);
+      }
     }
-    g+=travelTo("cut",center);
-    g+=travelTo("cut",atUnder);
-    g+=prog.travel("move",outside,underZ,outside,underZ);
+    const shortest=(start)=>{
+      const n=nodes.length,d=Array(n).fill(Infinity),parent=Array(n).fill(-1),
+        done=Array(n).fill(false);
+      d[start]=0;
+      for(let k=0;k<n;k++){
+        let u=-1;
+        for(let i=0;i<n;i++)if(!done[i]&&(u<0||d[i]<d[u]))u=i;
+        if(u<0||!Number.isFinite(d[u]))break;
+        done[u]=true;
+        for(const [v,w] of adjacency[u]){
+          if(d[u]+w+1e-6<d[v]){d[v]=d[u]+w;parent[v]=u;}
+        }
+      }
+      return {d,parent};
+    };
+    // Choose an accessible entry among all four sides of the stock cross
+    // section. After rotating around the wire axis, a formerly bottom-open
+    // cavity may open left, right or above. Entry candidates must be safe
+    // across the whole ruled span, not just on one end-cap.
+    const entryCandidates=[],outsideOffset=stockWidth/2+leadMargin;
+    const sectionOutside=(pair,kind)=>{
+      if(kind==="bottom"||kind==="top"){
+        const height=kind==="bottom"?underZ:safe;
+        return pair.map(p=>[p[0],p[1],p[2]+height-layout.machine(p)[2]]);
+      }
+      const desired=kind==="left"?-outsideOffset:outsideOffset;
+      return pair.map(p=>{
+        const unit=[p[0]+1,p[1],p[2]];
+        const scale=layout.machine(unit)[1]-layout.machine(p)[1];
+        if(Math.abs(scale)<1e-9)throw new StepError("Автомаршрут: невозможно вычислить боковой вход");
+        return [p[0]+(desired-layout.machine(p)[1])/scale,p[1],p[2]];
+      });
+    };
+    const sides=["bottom","top","left","right"];
+    for(let i=holes.length;i<nodes.length;i++){
+      const pair=nodes[i].pair;
+      const reach=shortest(i);
+      if(roots.some((_,k)=>!Number.isFinite(reach.d[k])))continue;
+      for(const sideName of sides){
+        if(sideName==="bottom"&&bottomZ<2)continue;
+        const exterior=sectionOutside(pair,sideName);
+        if(!visible(exterior,pair))continue;
+        const towerExterior=layout.towers(exterior[0],exterior[1]);
+        const inBounds=towerExterior.every(([y,z])=>Math.abs(y)<=prog.cfg.HorizontalTravel/2+1e-6 &&
+          z>=-1e-6&&z<=prog.cfg.VerticalTravel+1e-6);
+        if(!inBounds)continue;
+        const pathLength=metric(pair,exterior);
+        const score=pathLength+.25*roots.reduce((sum,_,k)=>sum+reach.d[k],0);
+        entryCandidates.push({i,pair,exterior,sideName,score});
+      }
+    }
+    entryCandidates.sort((a,b)=>a.score-b.score);
+    if(!entryCandidates.length)
+      throw new StepError("Автомаршрут: нет безопасного входа сверху, снизу или с боков через область отхода; резка заблокирована");
+    const entry=entryCandidates[0],seed=entry.i;
+    const routes=[seed,...Array.from({length:holes.length},(_,i)=>i)].map(shortest);
+    const indexOf=k=>k===holes.length?0:k+1;
+    const cost=(from,to)=>routes[indexOf(from)].d[to===holes.length?seed:to];
+    // Exact shortest visiting order up to 9 holes, deterministic
+    // nearest-neighbour with local 2-opt improvements thereafter.
+    const n=holes.length;
+    let order=[];
+    if(n<=9){
+      const dp=new Map(),all=(1<<n)-1;
+      for(let j=0;j<n;j++)dp.set((1<<j)+":"+j,{cost:cost(n,j),seq:[j]});
+      for(let mask=1;mask<=all;mask++)for(let j=0;j<n;j++){
+        const state=dp.get(mask+":"+j);
+        if(!state)continue;
+        for(let k=0;k<n;k++)if(!(mask&(1<<k))){
+          const next=mask|(1<<k),key=next+":"+k,c=state.cost+cost(j,k),prev=dp.get(key);
+          if(!prev||c<prev.cost)dp.set(key,{cost:c,seq:[...state.seq,k]});
+        }
+      }
+      let best=null;
+      for(let j=0;j<n;j++){
+        const state=dp.get(all+":"+j);
+        if(!state)continue;
+        const total=state.cost+cost(j,seed);
+        if(!best||total<best.cost)best={cost:total,seq:state.seq};
+      }
+      if(!best)throw new StepError("Автомаршрут: отверстия находятся в несвязанных областях отхода");
+      order=best.seq;
+    } else {
+      const todo=new Set(contours.map((_,i)=>i));
+      let current=seed;
+      while(todo.size){
+        const next=[...todo].sort((a,b)=>cost(current,a)-cost(current,b))[0];
+        if(!Number.isFinite(cost(current,next)))throw new StepError("Автомаршрут: разорван граф переходов");
+        order.push(next);todo.delete(next);current=next;
+      }
+    }
+    const path=(from,to)=>{
+      const src=routes[indexOf(from)],out=[],visited=new Set();
+      let at=to===holes.length?seed:to;
+      const source=from===holes.length?seed:from;
+      while(at!==source){
+        if(at<0||visited.has(at))throw new StepError("Автомаршрут: путь перехода не найден");
+        visited.add(at);out.push(nodes[at].pair);at=src.parent[at];
+      }
+      return out.reverse();
+    };
+    const tower=pair=>layout.towers(pair[0],pair[1]),
+          travelTo=(kind,pair)=>{
+            const t=tower(pair);
+            return prog.travel(kind,t[0][0],t[0][1],t[1][0],t[1][1]);
+          };
+    const exteriorTower=tower(entry.exterior),outside=side*(stockWidth/2+leadMargin);
+    let g=";"+EOL+"; *** WIREFRAME ROUTE PLANNER: "+n+" "+(n===1?"HOLE":"HOLES")+", VERIFIED WASTE GRAPH ***"+EOL;
+    g+="; WASTE PATH ORDER: "+order.map(i=>i+1).join(" -> ")+EOL;
+    g+="; SAFE ENTRY SIDE: "+entry.sideName.toUpperCase()+EOL;
     g+=prog.travel("move",outside,safe,outside,safe);
-    return [g,points];
+    if(entry.sideName==="bottom"){
+      g+=prog.travel("move",outside,underZ,outside,underZ);
+      g+=prog.travel("move",exteriorTower[0][0],underZ,exteriorTower[1][0],underZ);
+    }else if(entry.sideName==="top"){
+      g+=prog.travel("move",exteriorTower[0][0],safe,exteriorTower[1][0],safe);
+    }else{
+      // Move laterally above the stock, then descend while fully outside its
+      // bounding box. Only the final G1 crosses into sacrificial foam.
+      g+=prog.travel("move",exteriorTower[0][0],safe,exteriorTower[1][0],safe);
+      g+=prog.travel("move",exteriorTower[0][0],exteriorTower[0][1],
+                                  exteriorTower[1][0],exteriorTower[1][1]);
+    }
+    g+=travelTo("cut",entry.pair);
+    let previous=n,allTowers=[exteriorTower,tower(entry.pair)];
+    for(const [k,i] of order.entries()){
+      const hole=contours[i];
+      g+=";"+EOL+"; *** HOLE "+(k+1)+"/"+n+" FROM VERIFIED WASTE ROUTE ***"+EOL;
+      for(const point of path(previous,i)){g+=travelTo("cut",point);allTowers.push(tower(point));}
+      for(const point of hole.bridge.slice(1)){
+        g+=travelTo("cut",point);allTowers.push(tower(point));
+      }
+      for(const point of hole.ring){
+        g+=travelTo("cut",point);allTowers.push(tower(point));
+      }
+      for(const point of hole.bridge.slice().reverse()){
+        g+=travelTo("cut",point);allTowers.push(tower(point));
+      }
+      previous=i;
+    }
+    for(const point of path(previous,n)){g+=travelTo("cut",point);allTowers.push(tower(point));}
+    g+=travelTo("cut",entry.exterior);
+    if(entry.sideName==="bottom")
+      g+=prog.travel("move",outside,underZ,outside,underZ);
+    else
+      g+=prog.travel("move",exteriorTower[0][0],safe,exteriorTower[1][0],safe);
+    g+=prog.travel("move",outside,safe,outside,safe);
+    return [g,allTowers];
   }
 
   function holeBlock(safe, prog, contour, layout, axis, kerf, notes, sag, maxStep, gap = null, fromBelow = false) {
@@ -3255,8 +3419,8 @@ const Gen = (() => {
       addProfile(lower, o.side);
     } else {
       const layout = makeLayout(o.mirror ? 1 : -1, 1, 1, o.bottomZ + stockHeight / 2);   // - зеркало: корень и конец меняются башнями
-      if (model.wireframe && holes.length===2 && holes.every(h=>h.entry?.length===2)) {
-        const [block,towers]=wireframeConnectedHolesBlock(
+      if (model.wireframe && holes.length>=1) {
+        const [block,towers]=wireframeRoutePlannerBlock(
           safe,prog,holes,outer,layout,axis,kerf,warnings,sag,maxStep,
           stockWidth,o.leadMargin,o.bottomZ,o.side);
         program+=block;allTowers.push(...towers);
