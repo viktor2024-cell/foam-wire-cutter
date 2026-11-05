@@ -384,3 +384,15 @@ test('pair enters from opposite sides and exits upwards for both pieces',()=>{
  const parsed=sim.parseGcode(r.program), check=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
 });
+
+test('oblique ruled main surface is identified by end-cap topology',()=>{
+ const swept=fixture.replace(/(CARTESIAN_POINT\('',\()\s*(-?[\d.]+),\s*(-?[\d.]+),\s*(-?[\d.]+)(\)\))/g,
+  (_,prefix,x,y,z,suffix)=>prefix+(+x+(+y)*.12)+','+y+','+z+suffix);
+ const m=new gen.Model(swept),shape=m.build();
+ assert.equal(shape.axis,1);assert.equal(shape.secondaryContours.length,0);
+ assert.doesNotThrow(()=>gen.buildProgram(swept,'oblique.stp',options()));
+});
+test('external stab2: do not emit an inaccurate synchronized cut',{skip:!process.env.STAB2_STEP},()=>{
+ const text=fs.readFileSync(process.env.STAB2_STEP,'utf8');
+ assert.throws(()=>gen.previewGeometry(text),/Грань #503: синхронная струна отклоняется от STEP-поверхности/);
+});

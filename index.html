@@ -2192,7 +2192,7 @@ const Gen = (() => {
           return pair && pair.every(p => Math.abs(p[axis] - plane) < 0.001);
         });
         if (!hasEndEdge(planeA) || !hasEndEdge(planeB)) continue;
-        const face = this.ruledFace(this.surface(raw.surf), axis, planeA, planeB, raw.edgeIds);
+        const face = this.ruledFace(this.surface(raw.surf), axis, planeA, planeB, raw.edgeIds, raw.fid);
         if(face !== null) {
           (face.closed ? holes : outer).push(face);
           handled.add(raw.fid);
@@ -2231,7 +2231,7 @@ const Gen = (() => {
       const innerContours = holes.map(h=>[[h,true]]);
       return { outer: Model.chain(outer), holes: innerContours, secondaryContours, axis, planeA, planeB };
     }
-    ruledFace(surf, axis, planeA, planeB, edgeIds) {
+    ruledFace(surf, axis, planeA, planeB, edgeIds, faceId) {
       // - Параметр размаха: степень 1 и координата по оси размаха меняется вдоль него
       const uMid = sum2(surf.udomain) / 2, vMid = sum2(surf.vdomain) / 2;
       // Compare normalized alignment, not a tiny absolute coordinate drift.
@@ -2248,7 +2248,7 @@ const Gen = (() => {
         if(norm>1e-6)candidate.push({u:false,alignment:Math.abs(b[axis]-a[axis])/norm});
       }
       candidate.sort((a,b)=>b.alignment-a.alignment);
-      if(!candidate.length||candidate[0].alignment<.995)return null;
+      if(!candidate.length||candidate[0].alignment<.9)return null;
       const spanIsU=candidate[0].u;
 
       const sDom = spanIsU ? surf.udomain : surf.vdomain, tDom = spanIsU ? surf.vdomain : surf.udomain;
@@ -2293,7 +2293,16 @@ const Gen = (() => {
       if (closed) [t0, t1] = tDom;
       else {
         t0 = Model.project(railA, tDom, endsA[0]); t1 = Model.project(railA, tDom, endsA[1]);
-        const u0 = Model.project(railB, tDom, endsB[0]), u1 = Model.project(railB, tDom, endsB[1]);
+        let u0 = Model.project(railB, tDom, endsB[0]), u1 = Model.project(railB, tDom, endsB[1]);
+        // A closed B-spline can project the same seam to either end of its domain.
+        // Select the equivalent value matching the corresponding end on rail A.
+        const sideMatch = (a,b) => edgeIds.some(id => {const [x,y]=this.edges.get(id);return (dist(x,a)<.01 && dist(y,b)<.01)||(dist(y,a)<.01 && dist(x,b)<.01);});
+        const seamValue = (v,point,a0,a1) => {
+          if(dist(railB(tDom[0]),railB(tDom[1]))>.01 || Math.min(Math.abs(v-tDom[0]),Math.abs(v-tDom[1]))>1e-6) return v;
+          const target=sideMatch(endsA[0],point)?a0:sideMatch(endsA[1],point)?a1:v;
+          return Math.abs(target-tDom[0])<Math.abs(target-tDom[1])?tDom[0]:tDom[1];
+        };
+        u0=seamValue(u0,endsB[0],t0,t1);u1=seamValue(u1,endsB[1],t0,t1);
 
         // - Грань может быть куском поверхности, обрезанным прямыми рёбрами: её углы в плоскостях A и B лежат
         //   при немного разных параметрах. Углы увязываем с углами, внутри параметр масштабируем.
@@ -2317,6 +2326,21 @@ const Gen = (() => {
         if (skew > 1e-6) {
           const baseB = railB, scale = (bHi - bLo) / (aHi - aLo);
           railB = (t) => baseB(bLo + (t - aLo) * scale);
+          // Check that joining the synchronized endpoints really stays on the
+          // STEP surface, not just on the two cap curves. Sampling is a guard,
+          // not a formal error bound for arbitrary spline oscillations.
+          if (skew > .001) for (let i=0;i<=24;i++) {
+            const t=t0+(t1-t0)*i/24,a=railA(t),b=railB(t);
+            for (const f of [.25,.5,.75]) {
+              const point=a.map((v,k)=>v+f*(b[k]-v)), s=sA+f*(sB-sA), curve=u=>at(s,u);
+              let bestT=tDom[0],best=Infinity;
+              for(let j=0;j<=400;j++){const u=tDom[0]+(tDom[1]-tDom[0])*j/400,d=dist(curve(u),point);if(d<best){best=d;bestT=u;}}
+              let lo=Math.max(tDom[0],bestT-(tDom[1]-tDom[0])/400),hi=Math.min(tDom[1],bestT+(tDom[1]-tDom[0])/400);
+              for(let j=0;j<32;j++){const x=lo+(hi-lo)/3,y=hi-(hi-lo)/3;if(dist(curve(x),point)<dist(curve(y),point))hi=y;else lo=x;}
+              const deviation=dist(curve((lo+hi)/2),point);
+              if(deviation>.1) throw new StepError("Грань #"+faceId+": синхронная струна отклоняется от STEP-поверхности более 0,1 мм (не менее "+deviation.toFixed(2)+" мм); требуется другое соответствие профилей");
+            }
+          }
         }
       }
       return { A: railA, B: railB, t0, t1, closed, skew };
