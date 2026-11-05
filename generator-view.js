@@ -133,8 +133,22 @@ const generatorPreview = (() => {
     const kerf=n('gnKerf'), bottom=n('gnZ'), clearance=n('gnClear');
     const round5=x=>Math.ceil((x-1e-7)/5)*5;
     const results=[];
-    let rotation=modelRotation;
-    for(let turn=0;turn<4;turn++){
+    const rotations=[];
+    const queue=[{matrix:modelRotation,turns:0,description:'текущее положение'}];
+    const seen=new Set();
+    for(let i=0;i<queue.length;i++){
+      const state=queue[i],key=state.matrix.flat().map(v=>Math.round(v*1e6)).join(',');
+      if(seen.has(key))continue;
+      seen.add(key);rotations.push(state);
+      for(let axis=0;axis<3;axis++){
+        queue.push({matrix:Gen.rotateModel(state.matrix,axis,1),turns:state.turns+1,
+          description:state.description==='текущее положение'?
+            'поворот '+('XYZ'[axis])+' +90°':state.description+', '+('XYZ'[axis])+' +90°'});
+      }
+      if(rotations.length>=24)break;
+    }
+    for(let turn=0;turn<rotations.length;turn++){
+      const rotation=rotations[turn].matrix;
       try{
         const g=turn===0&&geometry ? geometry : Gen.previewGeometry(stepFile.text,rotation,scale);
         // Both machine and generator require the span to lie along the wire.
@@ -148,9 +162,8 @@ const generatorPreview = (() => {
            width/2+n('gnLead')>machine.ParkX+1e-7 ||
            bottom+height+clearance>machine.VerticalTravel+1e-7)continue;
         results.push({rotation,geometry:g,length,width,height,standard:Boolean(sheet),turn,
-          area:width*height,minimumHeight});
+          description:rotations[turn].description,area:width*height,minimumHeight});
       }catch(e){/* A candidate may not form valid cutting geometry at this orientation. */}
-      rotation=Gen.rotateModel(rotation,0,1);
     }
     results.sort((a,b)=>a.height-b.height||a.area-b.area||a.turn-b.turn);
     return results;
@@ -175,7 +188,7 @@ const generatorPreview = (() => {
     const fit=document.getElementById('gnFit');
     // The stock check above has validated dimensions; append actionable
     // explanation without hiding its own "fits" status.
-    const info='Автоподбор: поворот вокруг струны '+(best.turn*90)+'°, высота листа '+
+    const info='Автоподбор: '+best.description+', высота листа '+
       best.height+' мм ('+(best.standard?'стандартная':'нестандартная')+').';
     fit.textContent+=' '+info;
   });
