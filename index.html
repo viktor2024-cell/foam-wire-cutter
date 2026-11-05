@@ -3044,22 +3044,45 @@ const Gen = (() => {
       }
       return {d,parent};
     };
-    // Choose a seed in reachable WASTE with a verified entry from below
-    // the stock. Unlike a fixed midpoint, this supports asymmetric cavities.
-    const entryCandidates=[];
+    // Choose an accessible entry among all four sides of the stock cross
+    // section. After rotating around the wire axis, a formerly bottom-open
+    // cavity may open left, right or above. Entry candidates must be safe
+    // across the whole ruled span, not just on one end-cap.
+    const entryCandidates=[],outsideOffset=stockWidth/2+leadMargin;
+    const sectionOutside=(pair,kind)=>{
+      if(kind==="bottom"||kind==="top"){
+        const height=kind==="bottom"?underZ:safe;
+        return pair.map(p=>[p[0],p[1],p[2]+height-layout.machine(p)[2]]);
+      }
+      const desired=kind==="left"?-outsideOffset:outsideOffset;
+      return pair.map(p=>{
+        const unit=[p[0]+1,p[1],p[2]];
+        const scale=layout.machine(unit)[1]-layout.machine(p)[1];
+        if(Math.abs(scale)<1e-9)throw new StepError("Автомаршрут: невозможно вычислить боковой вход");
+        return [p[0]+(desired-layout.machine(p)[1])/scale,p[1],p[2]];
+      });
+    };
+    const sides=["bottom","top","left","right"];
     for(let i=holes.length;i<nodes.length;i++){
-      const pair=nodes[i].pair,
-        bottom=pair.map((p,k)=>[p[0],p[1],p[2]-(layout.machine(p)[2]-underZ)]);
-      if(!visible(bottom,pair))continue;
+      const pair=nodes[i].pair;
       const reach=shortest(i);
       if(roots.some((_,k)=>!Number.isFinite(reach.d[k])))continue;
-      const score=Math.min(...roots.map(p=>metric(p,pair)))+
-        .25*roots.reduce((sum,_,k)=>sum+reach.d[k],0);
-      entryCandidates.push({i,pair,bottom,score});
+      for(const sideName of sides){
+        if(sideName==="bottom"&&bottomZ<2)continue;
+        const exterior=sectionOutside(pair,sideName);
+        if(!visible(exterior,pair))continue;
+        const towerExterior=layout.towers(exterior[0],exterior[1]);
+        const inBounds=towerExterior.every(([y,z])=>Math.abs(y)<=prog.cfg.HorizontalTravel/2+1e-6 &&
+          z>=-1e-6&&z<=prog.cfg.VerticalTravel+1e-6);
+        if(!inBounds)continue;
+        const pathLength=metric(pair,exterior);
+        const score=pathLength+.25*roots.reduce((sum,_,k)=>sum+reach.d[k],0);
+        entryCandidates.push({i,pair,exterior,sideName,score});
+      }
     }
     entryCandidates.sort((a,b)=>a.score-b.score);
     if(!entryCandidates.length)
-      throw new StepError("Автомаршрут: нет безопасного общего входа к отверстиям через область отхода; резка заблокирована");
+      throw new StepError("Автомаршрут: нет безопасного входа сверху, снизу или с боков через область отхода; резка заблокирована");
     const entry=entryCandidates[0],seed=entry.i;
     const routes=[seed,...Array.from({length:holes.length},(_,i)=>i)].map(shortest);
     const indexOf=k=>k===holes.length?0:k+1;
@@ -3112,14 +3135,25 @@ const Gen = (() => {
             const t=tower(pair);
             return prog.travel(kind,t[0][0],t[0][1],t[1][0],t[1][1]);
           };
-    const underTower=tower(entry.bottom),outside=side*(stockWidth/2+leadMargin);
+    const exteriorTower=tower(entry.exterior),outside=side*(stockWidth/2+leadMargin);
     let g=";"+EOL+"; *** WIREFRAME ROUTE PLANNER: "+n+" "+(n===1?"HOLE":"HOLES")+", VERIFIED WASTE GRAPH ***"+EOL;
     g+="; WASTE PATH ORDER: "+order.map(i=>i+1).join(" -> ")+EOL;
+    g+="; SAFE ENTRY SIDE: "+entry.sideName.toUpperCase()+EOL;
     g+=prog.travel("move",outside,safe,outside,safe);
-    g+=prog.travel("move",outside,underZ,outside,underZ);
-    g+=prog.travel("move",underTower[0][0],underZ,underTower[1][0],underZ);
+    if(entry.sideName==="bottom"){
+      g+=prog.travel("move",outside,underZ,outside,underZ);
+      g+=prog.travel("move",exteriorTower[0][0],underZ,exteriorTower[1][0],underZ);
+    }else if(entry.sideName==="top"){
+      g+=prog.travel("move",exteriorTower[0][0],safe,exteriorTower[1][0],safe);
+    }else{
+      // Move laterally above the stock, then descend while fully outside its
+      // bounding box. Only the final G1 crosses into sacrificial foam.
+      g+=prog.travel("move",exteriorTower[0][0],safe,exteriorTower[1][0],safe);
+      g+=prog.travel("move",exteriorTower[0][0],exteriorTower[0][1],
+                                  exteriorTower[1][0],exteriorTower[1][1]);
+    }
     g+=travelTo("cut",entry.pair);
-    let previous=n,allTowers=[underTower,tower(entry.pair)];
+    let previous=n,allTowers=[exteriorTower,tower(entry.pair)];
     for(const [k,i] of order.entries()){
       const hole=contours[i];
       g+=";"+EOL+"; *** HOLE "+(k+1)+"/"+n+" FROM VERIFIED WASTE ROUTE ***"+EOL;
@@ -3136,8 +3170,11 @@ const Gen = (() => {
       previous=i;
     }
     for(const point of path(previous,n)){g+=travelTo("cut",point);allTowers.push(tower(point));}
-    g+=travelTo("cut",entry.bottom);
-    g+=prog.travel("move",outside,underZ,outside,underZ);
+    g+=travelTo("cut",entry.exterior);
+    if(entry.sideName==="bottom")
+      g+=prog.travel("move",outside,underZ,outside,underZ);
+    else
+      g+=prog.travel("move",exteriorTower[0][0],safe,exteriorTower[1][0],safe);
     g+=prog.travel("move",outside,safe,outside,safe);
     return [g,allTowers];
   }
