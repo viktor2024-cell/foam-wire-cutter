@@ -417,3 +417,20 @@ test('external F1-1: resolve the closed seam before checking ruled-surface accur
  // surface; the geometry-based seam resolver must reach the accuracy check.
  assert.throws(()=>gen.previewGeometry(text),/Грань #1807: синхронная струна отклоняется от STEP-поверхности/);
 });
+
+test('external F1-1: explicit 0.6 mm tolerance, tower travel and simulation',{skip:!process.env.F11_STEP},()=>{
+ const text=fs.readFileSync(process.env.F11_STEP,'utf8');
+ const rotation=gen.rotateModel(gen.identityRotation(),2,1);
+ const o=options({rotation,tolerance:.6,stock:[55,145,135],bottomZ:50,clearance:20,trim:false});
+ const geometry=gen.previewGeometry(text,rotation,1,.6);assert.equal(geometry.axis,1);
+ const r=gen.buildProgram(text,'F1-1.stp',o);
+ assert.match(r.program,/STEP TOLERANCE=0\.600 mm/);
+ assert.ok(r.warnings.some(w=>w.includes('Допуск поверхности 0.60')));
+ const p=sim.parseGcode(r.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
+ assert.ok(p.moves.length>100);assert.ok(p.moves.every(m=>Math.abs(m.to.X)<=245 && Math.abs(m.to.Z)<=245 && Math.min(m.to.Y,m.to.A)>=0 && Math.max(m.to.Y,m.to.A)<=250));
+});
+test('surface deviation tolerance must be finite and nonnegative',()=>{
+ assert.throws(()=>gen.previewGeometry(fixture,gen.identityRotation(),1,-.1),/Допуск/);
+ assert.throws(()=>gen.buildProgram(fixture,'invalid.stp',options({tolerance:NaN})),/Допуск/);
+});

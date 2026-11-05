@@ -213,6 +213,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       <label>Мощность S<input id="gnMinS" type="number" step="10" value="500"></label>
       <label>Макс. S<input id="gnMaxS" type="number" step="10" value="1000"></label>
       <label>Толщина реза<input id="gnKerf" type="number" step="0.1" value="1"></label>
+      <label>Допуск отклонения от STEP, мм<input id="gnTolerance" type="number" min="0" step="0.01" value="0.1"></label>
     </div>
     <label class="check"><input type="checkbox" id="gnComp" checked> Менять мощность по длине струны</label>
   </section>
@@ -1854,9 +1855,9 @@ const Gen = (() => {
     r[i][i] = r[j][j] = 0; r[i][j] = -turn; r[j][i] = turn;
     return r.map((row) => [0,1,2].map((col) => row.reduce((sum, v, k) => sum + v * rotation[k][col], 0)));
   }
-  function previewGeometry(text, rotation = identityRotation(), scale = 1) {
+  function previewGeometry(text, rotation = identityRotation(), scale = 1, tolerance = 0.1) {
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
-    const { outer, holes, secondaryContours, axis } = new Model(text, rotation, scale).build();
+    const { outer, holes, secondaryContours, axis } = new Model(text, rotation, scale, tolerance).build();
     const sampled = outer.map(([face]) => sampleFace(face, face.t0, face.t1, 0.05, 5));
     const rails = [...outer, ...holes.flat(), ...secondaryContours.flatMap(g=>g.contour)].map(([face]) => sampleFace(face, face.t0, face.t1, 0.01, 2)
       .map((pair) => pair.map((p) => [-p[1], p[0], p[2]])));
@@ -1980,7 +1981,10 @@ const Gen = (() => {
   const sum2 = (d) => d[0] + d[1];
 
   class Model {
-    constructor(text, rotation = identityRotation(), scale = 1) { this.rotation = rotation; this.scale = scale; this.entities = parseStep(text); this.readGeometry(); }
+    constructor(text, rotation = identityRotation(), scale = 1, tolerance = 0.1) {
+      if(!Number.isFinite(tolerance)||tolerance<0) throw new StepError("Допуск отклонения должен быть неотрицательным числом");
+      this.rotation = rotation; this.scale = scale; this.tolerance=tolerance; this.maxCheckedDeviation=0; this.entities = parseStep(text); this.readGeometry();
+    }
     get(ref) { return this.entities.get(ref.id); }
     point(ref) {
       const p = this.get(ref).args[1], machine = [-p[1], p[0], p[2]];
@@ -2378,13 +2382,15 @@ const Gen = (() => {
               const point=a.map((v,k)=>v+f*(b[k]-v)), s=sA+f*(sB-sA), curve=u=>at(s,u);
               // Check the actual synchronized surface parameter first: a
               // narrow trailing edge can fall between the coarse search grid.
-              if(dist(curve(t),point)<=.1) continue;
+              const direct=dist(curve(t),point);
+              if(direct<=this.tolerance) { this.maxCheckedDeviation=Math.max(this.maxCheckedDeviation,direct); continue; }
               let bestT=tDom[0],best=Infinity;
               for(let j=0;j<=400;j++){const u=tDom[0]+(tDom[1]-tDom[0])*j/400,d=dist(curve(u),point);if(d<best){best=d;bestT=u;}}
               let lo=Math.max(tDom[0],bestT-(tDom[1]-tDom[0])/400),hi=Math.min(tDom[1],bestT+(tDom[1]-tDom[0])/400);
               for(let j=0;j<32;j++){const x=lo+(hi-lo)/3,y=hi-(hi-lo)/3;if(dist(curve(x),point)<dist(curve(y),point))hi=y;else lo=x;}
               const deviation=dist(curve((lo+hi)/2),point);
-              if(deviation>.1) throw new StepError("Грань #"+faceId+": синхронная струна отклоняется от STEP-поверхности более 0,1 мм (не менее "+deviation.toFixed(2)+" мм); требуется другое соответствие профилей");
+              this.maxCheckedDeviation=Math.max(this.maxCheckedDeviation,deviation);
+              if(deviation>this.tolerance) throw new StepError("Грань #"+faceId+": синхронная струна отклоняется от STEP-поверхности более "+this.tolerance.toFixed(2)+" мм (не менее "+deviation.toFixed(2)+" мм); требуется другое соответствие профилей");
             }
             }
           }
@@ -2790,7 +2796,7 @@ const Gen = (() => {
     }
     const scale = o.scale === undefined ? 1 : o.scale;
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
-    const model = new Model(text, o.rotation, scale), { outer, holes, secondaryContours, axis, planeA, planeB } = model.build();
+    const model = new Model(text, o.rotation, scale, o.tolerance === undefined ? .1 : o.tolerance), { outer, holes, secondaryContours, axis, planeA, planeB } = model.build();
     if (axis !== 1) throw new StepError("Поверните модель: размах должен идти вдоль струны (сейчас ось модели " + "XYZ"[axis] + ")");
 
     // - Габарит детали по направляющим
@@ -2828,7 +2834,9 @@ const Gen = (() => {
     if (hasTrim && cfg.ParkX - radius < RadialMargin) warnings.push("При повороте на 90 радиус заготовки " + radius.toFixed(1) + " мм, каретки отведены только на " + cfg.ParkX.toFixed(1) + " мм: проверьте зазор");
 
     // - Шапка: сведения для симулятора и для человека
+    if(model.tolerance>.1) warnings.push("Допуск поверхности "+model.tolerance.toFixed(2)+" мм; выборочная оценка до "+model.maxCheckedDeviation.toFixed(2)+" мм до компенсации реза");
     let program = "; FM_step2gcode: " + fileName + (o.pair ? " (pair: upper reflected over gap, turned 180)" : o.mirror ? " (mirror)" : "") + EOL;
+    program += "; STEP TOLERANCE=" + model.tolerance.toFixed(3) + " mm; sampled upper estimate=" + model.maxCheckedDeviation.toFixed(3) + " mm" + EOL;
     program += "; CUT MODE=" + (o.pair ? "PAIR PIECES=2" : o.mirror ? "MIRROR PIECES=1" : "SINGLE PIECES=1") + EOL;
     program += "; STOCK L=" + fmtG(stockWidth) + " W=" + fmtG(stockLength) + " H=" + fmtG(stockHeight) + " Z0=" + fmtG(o.bottomZ) + EOL;
     program += "; CUT F=" + fmtG(cfg.FeedRateCut) + " mm/s S=" + fmtG(cfg.WireMinPower) + ".." + fmtG(cfg.WireMaxPower) + " kerf=" + fmtG(kerf) + EOL;
@@ -2949,7 +2957,7 @@ function openStep(file, handle = null) {
   const rd = new FileReader();
   rd.onload = () => {
     stepFile = { name: file.name, text: String(rd.result), handle };
-    modelRotation = Gen.identityRotation(); $("gnScale").value = 100;
+    modelRotation = Gen.identityRotation(); $("gnScale").value = 100; $("gnTolerance").value = "0.1";
     $("gnFile").textContent = file.name;
     // Preliminary validated F2 setup. The 250 mm vertical travel allows
     // only 10 mm overhead above a 240 mm high blank with bottom at Z=0.
@@ -2979,7 +2987,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
   $("gnDone").hidden = true;
   try {
     const r = Gen.buildProgram(stepFile.text, stepFile.name, {
-      rotation: modelRotation, scale: n("gnScale") / 100,
+      rotation: modelRotation, scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
       clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair",
     });

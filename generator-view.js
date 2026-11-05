@@ -106,7 +106,7 @@ const generatorPreview = (() => {
   }
   function load() {
     invalidate(); geometry = null; error = '';
-    try { if (stepFile) geometry = Gen.previewGeometry(stepFile.text, modelRotation, n('gnScale')/100); }
+    try { if (stepFile) geometry = Gen.previewGeometry(stepFile.text, modelRotation, n('gnScale')/100, n('gnTolerance')); }
     catch (e) { error = e.message; }
     rebuild();
   }
@@ -144,6 +144,7 @@ const generatorPreview = (() => {
     invalidate(); rebuild();
   });
   document.getElementById('gnScale').addEventListener('change',load);
+  document.getElementById('gnTolerance').addEventListener('change',load);
   for (const id of ['gnL','gnW','gnH','gnZ']) document.getElementById(id).addEventListener('input',()=>{invalidate();rebuild();});
   new ResizeObserver(()=>{
     const w=host.clientWidth,h=host.clientHeight;if (!w || !h) return;
