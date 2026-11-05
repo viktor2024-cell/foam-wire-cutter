@@ -171,7 +171,7 @@ test('auto stock takes standard sheet thickness along wire, not vertical Z',()=>
  assert.equal(best.length,50);
  assert.equal(best.turn,0);
  assert.equal(best.standard,true);
- assert.ok(best.height>=100);
+ assert.ok(best.height+1e-7>=state.geometry.size[2]+20); // geometrically required allowance
  assert.ok(best.width>best.length);
 });
 test('wireframe U-arch uses one safe waste corridor to both openings',()=>{
