@@ -110,7 +110,9 @@ const generatorPreview = (() => {
         ' мм. '+(unsupported?'Смещение этой комбинации операций пока не поддерживается. ':trimConflict?'Смещение X с торцеванием пока не поддерживается. ':fits?'Помещается. ':'Не помещается. ')+(paired?'Минимальная высота: '+requiredZ.toFixed(1)+' мм. ':'')+
         (geometry.axis===1?'Размах вдоль струны.':'Для генерации поверните размах вдоль струны.')+
         (geometry.auxiliaryCurves?.length?' Найдены '+geometry.auxiliaryCurves.length+
-          ' вспомогательные кривые (розовые). Программа резки для них пока не валидирована.':'');
+          ' вспомогательные кривые (розовые), пар направляющих: '+
+          (geometry.guideAnalysis?.pairs.length||0)+
+          '. Это кандидаты, не проверенные станочные операции.':'');
       if(!fits||unsupported||trimConflict||geometry.axis!==1||geometry.auxiliaryCurves?.length) fit.className='note crit';
     } else {
       fit.textContent = error || 'Откройте STEP для проверки размещения.';
