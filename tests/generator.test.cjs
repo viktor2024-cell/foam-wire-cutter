@@ -153,6 +153,27 @@ test('external W1: no false transverse operation from STEP end caps',{skip:!proc
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
  assert.doesNotMatch(r.program,/SECONDARY CUT/);
 });
+test('auto stock takes standard sheet thickness along wire, not vertical Z',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../generator-view.js'),'utf8');
+ const begin=source.indexOf('  function autoStockOptions()');
+ const end=source.indexOf("  document.getElementById('gnStockFromModel').addEventListener",begin);
+ assert.ok(begin>0&&end>begin);
+ const text=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-profile.stp'),'utf8');
+ const state={
+  Gen:gen,stepFile:{text},modelRotation:gen.identityRotation(),
+  geometry:gen.previewGeometry(text),machine:gen.CONFIG,
+  document:{getElementById:()=>({checked:false})},
+  n:id=>({gnScale:100,gnKerf:1,gnZ:10,gnClear:20,gnLead:5})[id]
+ };
+ const options=vm.runInNewContext(source.slice(begin,end)+';autoStockOptions()',state);
+ assert.ok(options.length);
+ const best=options[0];
+ assert.equal(best.length,50);
+ assert.equal(best.turn,0);
+ assert.equal(best.standard,true);
+ assert.ok(best.height>=100);
+ assert.ok(best.width>best.length);
+});
 test('curve-only STEP reconstructs matched end sections and emits G-code safely',()=>{
  const text=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-profile.stp'),'utf8');
  const m=new gen.Model(text),built=m.build();
