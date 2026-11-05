@@ -332,21 +332,34 @@ test('external F2: two-direction path and safe tower motions',{skip:!process.env
  if(process.env.F2_GCODE_OUT)fs.writeFileSync(process.env.F2_GCODE_OUT,r.program);
 });
 
-test('outer profile uses corner entry and 5 mm upward closing overrun',()=>{
- const r=build({trim:false});
- assert.match(r.program,/corner entry, upper first, overrun Z\+5/);
- const lines=r.program.split(/\r?\n/);
- const i=lines.findIndex(line=>line.includes('corner entry, upper first'));
+function checkProfileOverlap(program) {
+ const lines=program.split(/\r?\n/),i=lines.findIndex(line=>line.includes('corner entry, upper first'));
  assert.ok(i>=0);
- const profile=lines.slice(i+1).filter(line=>/^G0[01] /.test(line));
- assert.ok(profile.length>5);
- // The final two cutting moves are the vertical overrun and horizontal exit.
- const cuts=profile.filter(line=>/^G01 /.test(line));
- assert.ok(cuts.length>3);
- const last=cuts.at(-1),previous=cuts.at(-2);
- const coords=line=>Object.fromEntries([...line.matchAll(/([XZUY])(-?\d+(?:\.\d+)?)/g)].map(m=>[m[1],+m[2]]));
- const a=coords(previous),b=coords(last);
- assert.ok(Object.keys(a).length>0 && Object.keys(b).length>0);
+ const count=+lines[i].match(/PROFILE: (\d+) points/)[1];
+ const moves=lines.slice(i+1).filter(line=>/^G01 /.test(line));
+ const coords=line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?\d+(?:\.\d+)?)/g)].map(m=>[m[1],+m[2]]));
+ const points=moves.map(coords),start=points[0],closed=points[count-1];
+ for(const axis of ['X','Y','Z','A']) assert.ok(Math.abs(start[axis]-closed[axis])<.03,'contour returns to entry '+axis);
+ let length=0,j=1;
+ while(length<4.97 && j<count){
+  const a=points[count+j-2],b=points[count+j-1];
+  length+=Math.max(Math.hypot(b.X-a.X,b.Y-a.Y),Math.hypot(b.Z-a.Z,b.A-a.A));
+  if(length<4.97) for(const axis of ['X','Y','Z','A']) assert.ok(Math.abs(b[axis]-points[j][axis])<.03,'overlap follows the cut path');
+  j++;
+ }
+ assert.ok(length>=4.97 && length<=5.04,'overlap length '+length);
+ const upper=points.slice(1,Math.min(count,35)).map(p=>(p.Y+p.A)/2);
+ assert.ok(Math.max(...upper)>(start.Y+start.A)/2+2,'first contour branch goes upwards');
+}
+test('outer profile crosses its beginning by 5 mm along the existing cut',()=>{
+ checkProfileOverlap(build({trim:false}).program);
+});
+test('external F2: upper branch first and 5 mm overlap follow its actual contour',{skip:!process.env.F2_STEP},()=>{
+ const text=fs.readFileSync(process.env.F2_STEP,'utf8');
+ const r=gen.buildProgram(text,'F2.stp',options({stock:[50,325,240],bottomZ:0,clearance:10,trim:false}));
+ checkProfileOverlap(r.program);
+ const p=sim.parseGcode(r.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
 });
 
 test('pair preview uses the same height and gap as generated toolpaths',()=>{

@@ -2641,17 +2641,40 @@ const Gen = (() => {
     if (start < 0) throw new StepError("Не найден угол для входа в наружный контур");
     // Reversing the complete loop preserves kerf-compensated coordinates.
     const reverse = segments.map(seg => segment(u=>seg.A(1-u),u=>seg.B(1-u),seg.kind)).reverse();
-    const prev = segments[(start + segments.length - 1) % segments.length];
-    const next = segments[start];
-    const forwardUpper = (height(next.A(Math.min(0.02,1))) + height(next.B(Math.min(0.02,1)))) / 2;
-    const backwardUpper = (height(prev.A(Math.max(0.98,0))) + height(prev.B(Math.max(0.98,0)))) / 2;
-    const ordered = backwardUpper > forwardUpper + 1e-5 ? reverse : segments;
-    const startIndex = ordered === segments ? start : segments.length - 1 - ((start + segments.length - 1) % segments.length);
-    const towers = sampleSequence(startSequence(ordered, startIndex, 0), sag, maxStep).map(([a, b]) => layout.towers(a, b));
+    const reverseIndex = segments.length - 1 - ((start + segments.length - 1) % segments.length);
+    const samplePath = (seq,index) => sampleSequence(startSequence(seq,index,0),sag,maxStep)
+      .map(([a,b]) => layout.towers(a,b));
+    const forward=samplePath(segments,start), backward=samplePath(reverse,reverseIndex);
+    // Compare branches by actual travelled distance, including kerf-join arcs.
+    // A fixed parameter fraction is meaningless for faces of unequal length.
+    function atDistance(path, distance) {
+      let left=distance;
+      for(let i=1;i<path.length;i++) {
+        const a=path[i-1],b=path[i];
+        const length=Math.max(...[0,1].map(k=>Math.hypot(b[k][0]-a[k][0],b[k][1]-a[k][1])));
+        if(length>=left && length>1e-9) {
+          const f=left/length;
+          return {index:i, point:a.map((p,k)=>p.map((v,j)=>v+f*(b[k][j]-v)))};
+        }
+        left-=length;
+      }
+      return null;
+    }
+    let orderedPath=null;
+    for(const distance of [5,10,20,40]) {
+      const f=atDistance(forward,distance),b=atDistance(backward,distance);
+      if(!f || !b) break;
+      const z=p=>(p[0][1]+p[1][1])/2;
+      const delta=z(f.point)-z(b.point);
+      if(Math.abs(delta)>.05) { orderedPath=delta>0?forward:backward; break; }
+    }
+    if(!orderedPath) throw new StepError("Не удалось однозначно выбрать верхний обход наружного контура");
+    const towers=orderedPath;
+    const overlap=atDistance(towers,5);
+    if(!overlap) throw new StepError("Контур слишком короткий для перекрытия 5 мм");
     const yOut = side * (stockWidth / 2 + margin);
     const [[yl, zl], [yr, zr]] = towers[0];
-    const overrun = 5;
-    let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", corner entry, upper first, overrun Z+" + overrun + " ***" + EOL;
+    let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", corner entry, upper first, overlap 5 mm along contour ***" + EOL;
     // Move to the entry height outside the block, then enter horizontally.
     // With normal overhead mode, descend only OUTSIDE the stock.
     if (sideEntry) g += prog.travel("move", yOut, zl, yOut, zr);
@@ -2661,11 +2684,12 @@ const Gen = (() => {
     }
     g += prog.travel("cut", yl, zl, yr, zr);
     for (const [[yl2, zl2], [yr2, zr2]] of towers.slice(1)) g += prog.travel("cut", yl2, zl2, yr2, zr2);
-    // Close the profile by crossing the original corner 5 mm upward.
-    // This is an intentional additional cut, not kerf compensation.
-    g += prog.travel("cut", yl, zl + overrun, yr, zr + overrun);
-    // Horizontal exit from the block at the overrun height.
-    g += prog.travel("cut", yOut, zl + overrun, yOut, zr + overrun);
+    // Continue on the first 5 mm of the already cut contour, then retrace
+    // that same kerf to the corner before leaving through the entry slit.
+    const repeated=[...towers.slice(1,overlap.index),overlap.point];
+    for (const [[y1,z1],[y2,z2]] of repeated) g += prog.travel("cut",y1,z1,y2,z2);
+    for (const [[y1,z1],[y2,z2]] of [...repeated.slice(0,-1).reverse(),towers[0]]) g += prog.travel("cut",y1,z1,y2,z2);
+    g += prog.travel("cut", yOut, zl, yOut, zr);
     if (!sideEntry) g += prog.travel("move", yOut, safe, yOut, safe);
     return [g, towers];
   }
