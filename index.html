@@ -169,6 +169,12 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
         <button id="gnViewSide" aria-pressed="false">Сбоку · вдоль струны</button>
       </div>
     </div>
+    <div class="row" aria-label="Выбор пар направляющих">
+      <button id="gnGuideMode" type="button" aria-pressed="false">Выбрать кривые в 3D</button>
+      <button id="gnGuideUndo" type="button">Отменить пару</button>
+      <button id="gnGuideExport" type="button">Сохранить пары JSON</button>
+      <span class="note" id="gnGuideStatus" role="status" aria-live="polite">Откройте STEP с вспомогательными кривыми.</span>
+    </div>
     <div id="gnView" aria-label="Модель, заготовка и рабочая область станка"></div>
     <div class="note" id="gnEnvelopeLegend"></div>
     <div class="row" id="gnRotate" aria-label="Поворот модели">
@@ -201,7 +207,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
     <div class="mline">
       <label class="btn" for="gnInput">Открыть STEP<input type="file" id="gnInput" accept=".stp,.step"></label>
       <span class="file-name" id="gnFile">файл не выбран</span>
-      <a class="btn" href="tools/guide-editor.html" target="_blank" rel="noopener">Назначить направляющие мышкой</a>
+      
     </div>
     <div class="note">Твёрдое тело с профилями в двух плоскостях, размах вдоль оси Y модели. Файл можно перетащить в это окно.</div>
   </section>
