@@ -620,6 +620,8 @@ test('external F4-1: retains all four design B-splines without unsafe G-code',
  assert.ok(motion.operations.every(p=>p.samples.length>=128));
  assert.ok(motion.operations.every(p=>p.samples.every(s=>[...s.left,...s.right].every(Number.isFinite))));
  assert.equal(motion.safeForGcode,false);
+ assert.equal(motion.origin.length,3);
+ assert.ok(motion.operations.every(op=>Math.abs(op.transverseCenter-motion.origin[op.axis===1?0:1])<1e-9));
  assert.throws(()=>gen.buildProgram(step,'F4-1.stp',options()),
   /вспомогательных кривых.*заблокирована/);
 });
