@@ -182,7 +182,18 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       <button id="gnResetRotation">Сбросить поворот</button>
       <label>Масштаб, % <input id="gnScale" type="number" min="0.01" step="1" value="100" style="width:85px"></label>
     </div>
-    <div class="note">X — вдоль струны (красная ось), Y — поперёк (зелёная), Z — вверх (синяя). Модель центрируется в заготовке. Повороты меняют модель, а не угол стола.</div>
+    <div class="row" id="gnMove" aria-label="Перемещение модели">
+      <span>Переместить модель, шаг 5 мм:</span>
+      <button data-axis="0" data-step="-1" aria-label="Переместить модель по X на минус 5 мм"><span style="color:#ff0000">X</span> −</button>
+      <button data-axis="0" data-step="1" aria-label="Переместить модель по X на плюс 5 мм"><span style="color:#ff0000">X</span> +</button>
+      <button data-axis="1" data-step="-1" aria-label="Переместить модель по Y на минус 5 мм"><span style="color:#00ff00">Y</span> −</button>
+      <button data-axis="1" data-step="1" aria-label="Переместить модель по Y на плюс 5 мм"><span style="color:#00ff00">Y</span> +</button>
+      <button data-axis="2" data-step="-1" aria-label="Переместить модель по Z на минус 5 мм"><span style="color:#0000ff">Z</span> −</button>
+      <button data-axis="2" data-step="1" aria-label="Переместить модель по Z на плюс 5 мм"><span style="color:#0000ff">Z</span> +</button>
+      <button id="gnResetOffset">По центру</button>
+      <span id="gnOffset">X 0 · Y 0 · Z 0 мм</span>
+    </div>
+    <div class="note">X — вдоль струны (красная ось), Y — поперёк (зелёная), Z — вверх (синяя). Смещение задано относительно центра заготовки; заготовка и стол остаются на месте.</div>
     <div class="note" id="gnFit" role="status">Откройте STEP для проверки размещения.</div>
   </section>
   <section class="box">
@@ -1392,7 +1403,7 @@ function showWarnings() {
 let original = null;        // - исходная программа: { text, name, base }
 let currentText = "", currentName = "", generationStamp = null;
 function generatorSignature() {
-  return JSON.stringify([stepFile?.text, modelRotation, [...document.querySelectorAll('#panelGen input, #panelGen select')].map(e=>[e.id,e.type==='checkbox'?e.checked:e.value])]);
+  return JSON.stringify([stepFile?.text, modelRotation, modelOffset, [...document.querySelectorAll('#panelGen input, #panelGen select')].map(e=>[e.id,e.type==='checkbox'?e.checked:e.value])]);
 }
 function requireCurrentProgram() {
   if (generationStamp !== null && generationStamp !== generatorSignature()) {
@@ -1857,14 +1868,14 @@ const Gen = (() => {
   }
   function previewGeometry(text, rotation = identityRotation(), scale = 1, tolerance = 0.1) {
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
-    const { outer, holes, secondaryContours, axis } = new Model(text, rotation, scale, tolerance).build();
+    const { outer, holes, secondaryContours, axis, wireframe } = new Model(text, rotation, scale, tolerance).build();
     const sampled = outer.map(([face]) => sampleFace(face, face.t0, face.t1, 0.05, 5));
     const rails = [...outer, ...holes.flat(), ...secondaryContours.flatMap(g=>g.contour)].map(([face]) => sampleFace(face, face.t0, face.t1, 0.01, 2)
       .map((pair) => pair.map((p) => [-p[1], p[0], p[2]])));
     const points = sampled.flat(2).map(p => [-p[1],p[0],p[2]]);
     const low = [0,1,2].map((k) => Math.min(...points.map((p) => p[k])));
     const high = [0,1,2].map((k) => Math.max(...points.map((p) => p[k])));
-    return { rails, axis, sampled, secondaryCount: secondaryContours.length, center: low.map((v,k) => (v+high[k])/2), size: low.map((v,k) => high[k]-v) };
+    return { rails, axis, sampled, wireframe: !!wireframe, secondaryCount: secondaryContours.length, center: low.map((v,k) => (v+high[k])/2), size: low.map((v,k) => high[k]-v) };
   }
 
   function pairPlacement(zsA, zsB, zc, span, stockHeight, bottomZ, kerf) {
@@ -3320,11 +3331,18 @@ const Gen = (() => {
       throw new Error("Деталь " + part.span.toFixed(1) + " x " + (part.x1 - part.x0).toFixed(1) + " x " + (part.z1 - part.z0).toFixed(1) +
         " не помещается в заготовку (размах × хорда × высота) " + stockLength.toFixed(1) + " x " + stockWidth.toFixed(1) + " x " + stockHeight.toFixed(1));
     }
+    const offset=o.offset===undefined?[0,0,0]:o.offset;
+    if(!Array.isArray(offset)||offset.length!==3||!offset.every(Number.isFinite)) throw new Error("Недопустимое смещение модели");
+    const shifted=offset.some(v=>Math.abs(v)>1e-9);
+    if(shifted && (o.pair || model.wireframe || secondaryContours.length))
+      throw new StepError("Смещение пока доступно для одиночной детали без дополнительных направлений и STEP только с кривыми");
+    if (Math.abs(offset[0])+part.span/2>stockLength/2+1e-6 || Math.abs(offset[1])+(part.x1-part.x0)/2>stockWidth/2+1e-6 || Math.abs(offset[2])+(part.z1-part.z0)/2>stockHeight/2+1e-6)
+      throw new Error("Смещённая модель не помещается в заготовку; увеличьте её размер или сдвиньте модель к центру");
     const xc = (part.x0 + part.x1) / 2, yc = (planeA + planeB) / 2, zc = (part.z0 + part.z1) / 2;
     const half = cfg.FieldWidth / 2;
     // - spanSign и chordSign меняют стороны размаха и хорды, zSign отражает по высоте, zMid - высота середины детали
     const makeLayout = (spanSign, chordSign, zSign, zMid) => ({
-      machine: (p) => [spanSign * (p[1] - yc), chordSign * (p[0] - xc), zSign * (p[2] - zc) + zMid],
+      machine: (p) => [spanSign * (p[1] - yc) + offset[0], chordSign * (p[0] - xc) + offset[1], zSign * (p[2] - zc) + zMid + offset[2]],
       towers(a, b) {    // - положение концов проволоки на башнях для прямой через точки a и b
         const ma = this.machine(a), mb = this.machine(b);
         const at = (x) => { const s = (x - ma[0]) / (mb[0] - ma[0]); return [ma[1] + s * (mb[1] - ma[1]), ma[2] + s * (mb[2] - ma[2])]; };
@@ -3336,6 +3354,7 @@ const Gen = (() => {
     const trim = { Length: stockLength, Width: stockWidth, Height: stockHeight, TrimEnds: (stockLength - part.span) / 2 - kerf / 2, BottomZ: o.bottomZ, RetractOffset: o.retract };
     const hasTrim = o.trim !== false && trim.TrimEnds > 0;
     const sideEntry = o.sideEntry === true;
+    if(hasTrim && Math.abs(offset[0])>1e-9) throw new StepError("Торцевание со смещением по X пока не поддерживается; отключите торцевание или верните X в центр");
     if(model.wireframe && (o.pair||o.mirror||sideEntry))
       throw new StepError("Для STEP только с кривыми пока поддержана одна обычная деталь; пара, зеркало и боковой вход заблокированы до проверки соответствия щелей");
     if (secondaryContours.length && (o.pair || o.mirror || sideEntry)) throw new StepError("Дополнительные направления: режим пары, зеркала и бокового входа ещё не поддержан; G-code заблокирован");
@@ -3352,6 +3371,7 @@ const Gen = (() => {
     if(model.tolerance>.1) warnings.push("Допуск поверхности "+model.tolerance.toFixed(2)+" мм; выборочная оценка до "+model.maxCheckedDeviation.toFixed(2)+" мм до компенсации реза");
     let program = "; FM_step2gcode: " + fileName + (o.pair ? " (pair: upper reflected over gap, turned 180)" : o.mirror ? " (mirror)" : "") + EOL;
     program += "; STEP TOLERANCE=" + model.tolerance.toFixed(3) + " mm; sampled upper estimate=" + model.maxCheckedDeviation.toFixed(3) + " mm" + EOL;
+    program += "; MODEL OFFSET X="+fmtG(offset[0])+" Y="+fmtG(offset[1])+" Z="+fmtG(offset[2])+" mm"+EOL;
     program += "; CUT MODE=" + (o.pair ? "PAIR PIECES=2" : o.mirror ? "MIRROR PIECES=1" : "SINGLE PIECES=1") + EOL;
     if(model.wireframe)program+="; STEP GEOMETRY=CURVES_ONLY; reconstructed ruled interpolation, original surfaces unavailable"+EOL;
     program += "; STOCK L=" + fmtG(stockWidth) + " W=" + fmtG(stockLength) + " H=" + fmtG(stockHeight) + " Z0=" + fmtG(o.bottomZ) + EOL;
@@ -3470,6 +3490,7 @@ const Gen = (() => {
 //  Вкладки и экран генератора
 // ---------------------------------------------------------------------------------------------
 let modelRotation = Gen.identityRotation();
+let modelOffset = [0,0,0];
 let stepFile = null;        // - открытый STEP: { name, text }
 function showTab(tab) {
   const gen = tab === "gen";
@@ -3481,7 +3502,7 @@ function openStep(file, handle = null) {
   const rd = new FileReader();
   rd.onload = () => {
     stepFile = { name: file.name, text: String(rd.result), handle };
-    modelRotation = Gen.identityRotation(); $("gnScale").value = 100; $("gnTolerance").value = "0.1";
+    modelRotation = Gen.identityRotation(); modelOffset = [0,0,0]; $("gnOffset").textContent="X 0 · Y 0 · Z 0 мм"; $("gnScale").value = 100; $("gnTolerance").value = "0.1";
     $("gnFile").textContent = file.name;
     // Preliminary validated F2 setup. The 250 mm vertical travel allows
     // only 10 mm overhead above a 240 mm high blank with bottom at Z=0.
@@ -3511,7 +3532,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
   $("gnDone").hidden = true;
   try {
     const r = Gen.buildProgram(stepFile.text, stepFile.name, {
-      rotation: modelRotation, scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
+      rotation: modelRotation, offset: [...modelOffset], scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
       clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair",
     });
