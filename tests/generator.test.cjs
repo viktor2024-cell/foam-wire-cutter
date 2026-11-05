@@ -392,7 +392,21 @@ test('oblique ruled main surface is identified by end-cap topology',()=>{
  assert.equal(shape.axis,1);assert.equal(shape.secondaryContours.length,0);
  assert.doesNotThrow(()=>gen.buildProgram(swept,'oblique.stp',options()));
 });
-test('external stab2: do not emit an inaccurate synchronized cut',{skip:!process.env.STAB2_STEP},()=>{
+test('external stab2: synchronized STEP sections and kerf-aware simulation',{skip:!process.env.STAB2_STEP},()=>{
  const text=fs.readFileSync(process.env.STAB2_STEP,'utf8');
- assert.throws(()=>gen.previewGeometry(text),/Грань #503: синхронная струна отклоняется от STEP-поверхности/);
+ const shape=new gen.Model(text).build();
+ assert.equal(shape.axis,1);assert.equal(shape.secondaryContours.length,0);
+ const faces=shape.outer.map(([face])=>face), synchronized=faces.filter(f=>f.breaks?.length);
+ assert.ok(synchronized.length>0,'surface section anchors are present');
+ for(const face of synchronized){
+  const sampled=gen.sampleFace(face,face.t0,face.t1,.01,1);
+  for(const t of face.breaks){
+   const a=face.A(t),b=face.B(t);
+   assert.ok(sampled.some(pair=>Math.hypot(...a.map((x,i)=>x-pair[0][i]))<1e-6 && Math.hypot(...b.map((x,i)=>x-pair[1][i]))<1e-6),'both rails include each STEP section simultaneously');
+  }
+ }
+ const r=gen.buildProgram(text,'stab2.stp',options({stock:[305,230,50],bottomZ:10,kerf:1,trim:false}));
+ const p=sim.parseGcode(r.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
+ assert.ok(r.points>100);assert.ok(r.warnings.some(w=>w.includes('не дойдёт до вершины')));
 });
