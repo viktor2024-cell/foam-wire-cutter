@@ -580,10 +580,10 @@ test('solid STEP keeps separate guide curves and refuses incomplete G-code',()=>
   "#900002 = CARTESIAN_POINT('',(10.,0.,0.));",
   "#900003 = B_SPLINE_CURVE_WITH_KNOTS ('guide',1,(#900001,#900002),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
   "#900004 = GEOMETRIC_CURVE_SET ('guides',(#900003));"
- ].join('\\n');
+ ].join('\n');
  const idx=fixture.lastIndexOf('ENDSEC;');
  assert.ok(idx>0);
- const solidWithCurves=fixture.slice(0,idx)+extra+'\\n'+fixture.slice(idx);
+ const solidWithCurves=fixture.slice(0,idx)+extra+'\n'+fixture.slice(idx);
  const model=new gen.Model(solidWithCurves);
  assert.equal(model.wireframe,false);
  const curves=model.auxiliaryCurves();
