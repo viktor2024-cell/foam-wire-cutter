@@ -603,7 +603,7 @@ test('external F4-1: retains all four design B-splines without unsafe G-code',
  const m=new gen.Model(step),curves=m.auxiliaryCurves();
  assert.equal(m.wireframe,false);
  assert.equal(curves.length,4);
- assert.deepEqual(curves.map(c=>c.fixedAxis).sort(),[0,0,1,1]);
+ assert.deepEqual(Array.from(curves,c=>c.fixedAxis).sort(),[0,0,1,1]);
  assert.throws(()=>gen.buildProgram(step,'F4-1.stp',options()),
   /вспомогательных кривых.*заблокирована/);
 });
