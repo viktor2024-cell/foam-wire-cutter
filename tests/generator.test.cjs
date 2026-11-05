@@ -174,6 +174,27 @@ test('auto stock takes standard sheet thickness along wire, not vertical Z',()=>
  assert.ok(best.height>=100);
  assert.ok(best.width>best.length);
 });
+test('wireframe U-arch uses one safe waste corridor to both openings',()=>{
+ const step=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-two-holes.stp'),'utf8');
+ const opts=options({stock:[50,165,165],bottomZ:10,clearance:20,trim:false});
+ const result=gen.buildProgram(step,'wireframe-two-holes.stp',opts);
+ assert.match(result.program,/SHARED INNER-ARCH WASTE CORRIDOR/);
+ assert.equal((result.program.match(/ENTRY THROUGH INNER ARCH/g)||[]).length,2);
+ assert.doesNotMatch(result.program,/WIREFRAME HOLE VIA EXPLICIT STEP SLIT/);
+ assert.equal(result.holes,2);
+ const p=sim.parseGcode(result.program);
+ const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+});
+test('external curves STEP: internal corridor must pass stock simulator',{skip:!process.env.CURVES_STEP},()=>{
+ const step=fs.readFileSync(process.env.CURVES_STEP,'utf8');
+ const result=gen.buildProgram(step,'curves.stp',options({stock:[50,165,165],bottomZ:10,clearance:20,trim:false}));
+ assert.match(result.program,/SHARED INNER-ARCH WASTE CORRIDOR/);
+ assert.equal(result.holes,2);
+ const p=sim.parseGcode(result.program);
+ const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+});
 test('curve-only STEP reconstructs matched end sections and emits G-code safely',()=>{
  const text=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-profile.stp'),'utf8');
  const m=new gen.Model(text),built=m.build();
