@@ -223,7 +223,7 @@ test('curve-only STEP reconstructs matched end sections and emits G-code safely'
  const opts=options({stock:[50,130,100],bottomZ:10,clearance:20});
  const r=gen.buildProgram(text,'wireframe-profile.stp',opts);
  assert.match(r.program,/STEP GEOMETRY=CURVES_ONLY/);
- assert.match(r.program,/WIREFRAME HOLE VIA EXPLICIT STEP SLIT/);
+ assert.match(r.program,/WIREFRAME ROUTE PLANNER: 1 HOLE/);
  assert.equal(r.holes,1);
  const p=sim.parseGcode(r.program);
  const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
