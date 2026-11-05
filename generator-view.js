@@ -97,10 +97,21 @@ const generatorPreview = (() => {
         const outline=new THREE.BufferGeometry();outline.setAttribute('position',new THREE.Float32BufferAttribute(lines,3));
         group.add(new THREE.LineSegments(outline,new THREE.LineBasicMaterial({color})));
       }
+      if(geometry.auxiliaryCurves?.length) {
+        for(const curve of geometry.auxiliaryCurves) {
+          const points=curve.points.map(p=>[-p[1],p[0],p[2]]);
+          const coords=points.flatMap(p=>p.map((v,k)=>v-geometry.center[k]+(k===2?bottom+stock[2]/2:0)+modelOffset[k]));
+          const path=new THREE.BufferGeometry();
+          path.setAttribute('position',new THREE.Float32BufferAttribute(coords,3));
+          group.add(new THREE.Line(path,new THREE.LineBasicMaterial({color:0xc235a6,depthTest:false})));
+        }
+      }
       fit.textContent=(paired?'Пара: ':'Модель: ')+geometry.size.map(v=>v.toFixed(2)).join(' × ')+
         ' мм. '+(unsupported?'Смещение этой комбинации операций пока не поддерживается. ':trimConflict?'Смещение X с торцеванием пока не поддерживается. ':fits?'Помещается. ':'Не помещается. ')+(paired?'Минимальная высота: '+requiredZ.toFixed(1)+' мм. ':'')+
-        (geometry.axis===1?'Размах вдоль струны.':'Для генерации поверните размах вдоль струны.');
-      if(!fits||unsupported||trimConflict||geometry.axis!==1) fit.className='note crit';
+        (geometry.axis===1?'Размах вдоль струны.':'Для генерации поверните размах вдоль струны.')+
+        (geometry.auxiliaryCurves?.length?' Найдены '+geometry.auxiliaryCurves.length+
+          ' вспомогательные кривые (розовые). Программа резки для них пока не валидирована.':'');
+      if(!fits||unsupported||trimConflict||geometry.axis!==1||geometry.auxiliaryCurves?.length) fit.className='note crit';
     } else {
       fit.textContent = error || 'Откройте STEP для проверки размещения.';
       if (error) fit.className = 'note crit';
