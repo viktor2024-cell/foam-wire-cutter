@@ -2192,7 +2192,7 @@ const Gen = (() => {
           return pair && pair.every(p => Math.abs(p[axis] - plane) < 0.001);
         });
         if (!hasEndEdge(planeA) || !hasEndEdge(planeB)) continue;
-        const face = this.ruledFace(this.surface(raw.surf), axis, planeA, planeB, raw.edgeIds);
+        const face = this.ruledFace(this.surface(raw.surf), axis, planeA, planeB, raw.edgeIds, raw.fid);
         if(face !== null) {
           (face.closed ? holes : outer).push(face);
           handled.add(raw.fid);
@@ -2231,7 +2231,7 @@ const Gen = (() => {
       const innerContours = holes.map(h=>[[h,true]]);
       return { outer: Model.chain(outer), holes: innerContours, secondaryContours, axis, planeA, planeB };
     }
-    ruledFace(surf, axis, planeA, planeB, edgeIds) {
+    ruledFace(surf, axis, planeA, planeB, edgeIds, faceId) {
       // - Параметр размаха: степень 1 и координата по оси размаха меняется вдоль него
       const uMid = sum2(surf.udomain) / 2, vMid = sum2(surf.vdomain) / 2;
       // Compare normalized alignment, not a tiny absolute coordinate drift.
@@ -2248,7 +2248,7 @@ const Gen = (() => {
         if(norm>1e-6)candidate.push({u:false,alignment:Math.abs(b[axis]-a[axis])/norm});
       }
       candidate.sort((a,b)=>b.alignment-a.alignment);
-      if(!candidate.length||candidate[0].alignment<.995)return null;
+      if(!candidate.length||candidate[0].alignment<.9)return null;
       const spanIsU=candidate[0].u;
 
       const sDom = spanIsU ? surf.udomain : surf.vdomain, tDom = spanIsU ? surf.vdomain : surf.udomain;
@@ -2288,12 +2288,33 @@ const Gen = (() => {
         if (ends.length !== 2) throw new StepError("Неоднозначная граница направляющей: ожидается одна цепочка рёбер");
         return ends;
       };
+      const capVerticesA=endsA.slice(),capVerticesB=endsB.slice();
       if (!closed) { endsA = chainEnds(endsA); endsB = chainEnds(endsB); }
-      let skew = 0, t0, t1;
+      let skew = 0, t0, t1, breaks = [];
       if (closed) [t0, t1] = tDom;
       else {
-        t0 = Model.project(railA, tDom, endsA[0]); t1 = Model.project(railA, tDom, endsA[1]);
-        const u0 = Model.project(railB, tDom, endsB[0]), u1 = Model.project(railB, tDom, endsB[1]);
+        // Projection onto a closed rail has two solutions at its seam. Use
+        // the actual cap-edge curve parameter domain when it matches the
+        // surface rail; a guess can select the other half of the profile.
+        const seamProject=(rail,point,plane)=>{
+          const t=Model.project(rail,tDom,point);
+          if(dist(rail(tDom[0]),rail(tDom[1]))>.01 || Math.min(Math.abs(t-tDom[0]),Math.abs(t-tDom[1]))>1e-6) return t;
+          const choices=[];
+          for(const id of edgeIds) {
+            const ends=this.edges.get(id);
+            if(!ends || !ends.every(p=>Math.abs(p[axis]-plane)<.001) || !ends.some(p=>dist(p,point)<.01)) continue;
+            const e=this.entities.get(id), c=this.get(e.args[3]);
+            if(!isTyped(c) || c.name!=="B_SPLINE_CURVE_WITH_KNOTS") continue;
+            const knots=c.args[7]; if(!Array.isArray(knots)||!knots.length)continue;
+            const limits=[knots[0],knots.at(-1)];
+            for(const u of limits) if(u>=tDom[0]-1e-8 && u<=tDom[1]+1e-8 && dist(rail(u),point)<.01) choices.push(u);
+          }
+          const seamChoices=choices.filter(u=>Math.min(Math.abs(u-tDom[0]),Math.abs(u-tDom[1]))<1e-6);
+          if(seamChoices.length && seamChoices.every(u=>Math.abs(u-seamChoices[0])<1e-6)) return seamChoices[0];
+          return t;
+        };
+        t0=seamProject(railA,endsA[0],planeA);t1=seamProject(railA,endsA[1],planeA);
+        let u0=seamProject(railB,endsB[0],planeB),u1=seamProject(railB,endsB[1],planeB);
 
         // - Грань может быть куском поверхности, обрезанным прямыми рёбрами: её углы в плоскостях A и B лежат
         //   при немного разных параметрах. Углы увязываем с углами, внутри параметр масштабируем.
@@ -2315,11 +2336,45 @@ const Gen = (() => {
           }
         }
         if (skew > 1e-6) {
-          const baseB = railB, scale = (bHi - bLo) / (aHi - aLo);
-          railB = (t) => baseB(bLo + (t - aLo) * scale);
+          const baseB = railB, knots=spanIsU?surf.V:surf.U;
+          // A common STEP knot is the same surface section on both end rails.
+          // Align every common section, and only interpolate the unmatched ends.
+          // Include all coedge vertices as well as spline knots: profile
+          // sections must not be skipped merely because they share a surface.
+          const capParameters=[...capVerticesA.map(p=>Model.project(railA,tDom,p)),...capVerticesB.map(p=>Model.project(baseB,tDom,p))];
+          breaks=[...new Set([...knots,...capParameters])].filter(k=>k>Math.max(aLo,bLo)+1e-7 && k<Math.min(aHi,bHi)-1e-7).sort((a,b)=>a-b)
+            .filter((v,i,a)=>i===0 || v-a[i-1]>1e-7);
+          const anchors=[[aLo,bLo],...breaks.map(t=>[t,t]),[aHi,bHi]];
+          railB = t => {
+            let i=1;while(i<anchors.length-1 && t>anchors[i][0])i++;
+            const [x0,y0]=anchors[i-1],[x1,y1]=anchors[i];
+            return baseB(y0+(t-x0)*(y1-y0)/(x1-x0));
+          };
+          // Check that joining the synchronized endpoints really stays on the
+          // STEP surface, not just on the two cap curves. Sampling is a guard,
+          // not a formal error bound for arbitrary spline oscillations.
+          if (skew > .001) {
+            const sections=[t0,t1,...breaks,...Array.from({length:25},(_,i)=>t0+(t1-t0)*i/24)].sort((a,b)=>a-b);
+            const checks=[...sections,...sections.slice(1).map((t,i)=>(t+sections[i])/2)];
+            for (const t of checks) {
+            const a=railA(t),b=railB(t);
+            for (const f of [.25,.5,.75]) {
+              const point=a.map((v,k)=>v+f*(b[k]-v)), s=sA+f*(sB-sA), curve=u=>at(s,u);
+              // Check the actual synchronized surface parameter first: a
+              // narrow trailing edge can fall between the coarse search grid.
+              if(dist(curve(t),point)<=.1) continue;
+              let bestT=tDom[0],best=Infinity;
+              for(let j=0;j<=400;j++){const u=tDom[0]+(tDom[1]-tDom[0])*j/400,d=dist(curve(u),point);if(d<best){best=d;bestT=u;}}
+              let lo=Math.max(tDom[0],bestT-(tDom[1]-tDom[0])/400),hi=Math.min(tDom[1],bestT+(tDom[1]-tDom[0])/400);
+              for(let j=0;j<32;j++){const x=lo+(hi-lo)/3,y=hi-(hi-lo)/3;if(dist(curve(x),point)<dist(curve(y),point))hi=y;else lo=x;}
+              const deviation=dist(curve((lo+hi)/2),point);
+              if(deviation>.1) throw new StepError("Грань #"+faceId+": синхронная струна отклоняется от STEP-поверхности более 0,1 мм (не менее "+deviation.toFixed(2)+" мм); требуется другое соответствие профилей");
+            }
+            }
+          }
         }
       }
-      return { A: railA, B: railB, t0, t1, closed, skew };
+      return { A: railA, B: railB, t0, t1, closed, skew, breaks };
     }
     static project(rail, domain, point, samples = 1500) {
       let bestT = domain[0], best = 1e18;
@@ -2371,17 +2426,21 @@ const Gen = (() => {
         refine(tm, pm, t1, p1, depth + 1);
       } else result.push(p1);
     };
-    refine(tFrom, result[0], tTo, pair(tTo), 0);
+    const stops=[tFrom,...(face.breaks||[]).filter(t=>t>Math.min(tFrom,tTo)+1e-10 && t<Math.max(tFrom,tTo)-1e-10).sort((a,b)=>tFrom<tTo?a-b:b-a),tTo];
+    for(let i=1;i<stops.length;i++) {
+      refine(stops[i-1],result.at(-1),stops[i],pair(stops[i]),0);
+      if(i<stops.length-1)result.at(-1).mandatory=true;
+    }
     return result;
   }
 
   // --- Участки контура и компенсация толщины реза
-  const segment = (A, B, kind = "face") => ({ A, B, kind, t0: 0, t1: 1 });
+  const segment = (A, B, kind = "face", breaks = []) => ({ A, B, kind, breaks, t0: 0, t1: 1 });
   function faceSegment(face, forward = true) {
     const t0 = forward ? face.t0 : face.t1, t1 = forward ? face.t1 : face.t0;
-    return segment((u) => face.A(t0 + (t1 - t0) * u), (u) => face.B(t0 + (t1 - t0) * u));
+    return segment((u) => face.A(t0 + (t1 - t0) * u), (u) => face.B(t0 + (t1 - t0) * u),"face",(face.breaks||[]).map(t=>(t-t0)/(t1-t0)).filter(u=>u>0&&u<1));
   }
-  const subSegment = (seg, u0, u1) => segment((u) => seg.A(u0 + (u1 - u0) * u), (u) => seg.B(u0 + (u1 - u0) * u), seg.kind);
+  const subSegment = (seg, u0, u1) => segment((u) => seg.A(u0 + (u1 - u0) * u), (u) => seg.B(u0 + (u1 - u0) * u), seg.kind,(seg.breaks||[]).map(u=>(u-u0)/(u1-u0)).filter(u=>u>0&&u<1));
   function startSequence(segments, k, u) {
     const result = [];
     if (u < 1 - 1e-9) result.push(subSegment(segments[k], u, 1));
@@ -2483,7 +2542,14 @@ const Gen = (() => {
         if (ranges[k][P][0] >= ranges[k][P][1]) throw new StepError("Участок контура полностью съеден толщиной реза: деталь тоньше реза в этом месте");
       }
       const trimmed = (P) => { const [lo, hi] = ranges[k][P], g = rails[k][P]; return (u) => g(lo + (hi - lo) * u); };
-      result.push(segment(trimmed("A"), trimmed("B")));
+      // Independent trimming remaps the two rails differently. Do not
+      // silently desynchronize the protected STEP sections as a result.
+      if ((segments[k].breaks||[]).length &&
+          (Math.abs(ranges[k].A[0]-ranges[k].B[0])>1e-6 || Math.abs(ranges[k].A[1]-ranges[k].B[1])>1e-6))
+        throw new StepError("Компенсация реза по-разному обрезает торцы; нельзя синхронизировать точки профилей");
+      const breaks=[];
+      for(const P of RAILS) {const [lo,hi]=ranges[k][P];for(const u of segments[k].breaks||[]) {const v=(u-lo)/(hi-lo);if(v>1e-9&&v<1-1e-9)breaks.push(v);}}
+      result.push(segment(trimmed("A"), trimmed("B"),"face",[...new Set(breaks)]));
       if (RAILS.some((P) => joins[k][P].kind === "arc")) {
         const arc = (P) => {
           const join = joins[k][P];
@@ -2587,7 +2653,7 @@ const Gen = (() => {
     for (const seg of segments) {
       for (const p of sampleFace(seg, 0, 1, sag, maxStep)) {
         const last = points[points.length - 1];
-        if (!last || Math.max(dist(last[0], p[0]), dist(last[1], p[1])) > minStep) points.push(p);
+        if (!last || p.mandatory || Math.max(dist(last[0], p[0]), dist(last[1], p[1])) > minStep) points.push(p);
       }
     }
     return points;
@@ -2643,7 +2709,7 @@ const Gen = (() => {
     const hasUpperCorner=sideCorners.length>1 && sideCorners[0].z-sideCorners.at(-1).z>Math.max(1,2*kerf);
     const start=hasUpperCorner?sideCorners[0].k:corners.reduce((best,c)=>c.y>best.y?c:best).k;
     // Reversing the complete loop preserves kerf-compensated coordinates.
-    const reverse = segments.map(seg => segment(u=>seg.A(1-u),u=>seg.B(1-u),seg.kind)).reverse();
+    const reverse = segments.map(seg => segment(u=>seg.A(1-u),u=>seg.B(1-u),seg.kind,(seg.breaks||[]).map(u=>1-u))).reverse();
     const reverseIndex = segments.length - 1 - ((start + segments.length - 1) % segments.length);
     const samplePath = (seq,index) => sampleSequence(startSequence(seq,index,0),sag,maxStep)
       .map(([a,b]) => layout.towers(a,b));
