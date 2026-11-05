@@ -597,6 +597,8 @@ test('solid STEP keeps separate guide curves and refuses incomplete G-code',()=>
  assert.equal(preview.guideAnalysis.count,1);
  assert.equal(preview.guideAnalysis.pairs.length,0);
  assert.equal(preview.guideAnalysis.ambiguous.length,1);
+ assert.equal(preview.guideKinematics.operations.length,0);
+ assert.equal(preview.guideKinematics.safeForGcode,false);
  assert.throws(()=>gen.buildProgram(solidWithCurves,'solid-guides.stp',options()),
   /вспомогательных кривых.*заблокирована/);
 });
@@ -612,6 +614,34 @@ test('external F4-1: retains all four design B-splines without unsafe G-code',
  assert.equal(groups.ambiguous.length,0);
  assert.deepEqual(groups.pairs.map(p=>p.ids),[[544,681],[197,406]]);
  assert.ok(groups.pairs.every(p=>p.span>1));
+ const motion=m.guideKinematics(gen.CONFIG.FieldWidth);
+ assert.equal(motion.operations.length,2);
+ assert.deepEqual(motion.operations.map(p=>p.angle).sort(),[0,90]);
+ assert.ok(motion.operations.every(p=>p.samples.length>=128));
+ assert.ok(motion.operations.every(p=>p.samples.every(s=>[...s.left,...s.right].every(Number.isFinite))));
+ assert.equal(motion.safeForGcode,false);
  assert.throws(()=>gen.buildProgram(step,'F4-1.stp',options()),
   /вспомогательных кривых.*заблокирована/);
+});
+
+test('paired planar STEP guides extrapolate to both towers at B0 without releasing G-code',()=>{
+ const extra=[
+  "#900001 = CARTESIAN_POINT('',(0.,0.,0.));",
+  "#900002 = CARTESIAN_POINT('',(10.,0.,0.));",
+  "#900003 = CARTESIAN_POINT('',(0.,25.,0.));",
+  "#900004 = CARTESIAN_POINT('',(10.,25.,0.));",
+  "#900005 = B_SPLINE_CURVE_WITH_KNOTS ('guide',1,(#900001,#900002),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
+  "#900006 = B_SPLINE_CURVE_WITH_KNOTS ('guide',1,(#900003,#900004),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
+  "#900007 = GEOMETRIC_CURVE_SET ('guides',(#900005,#900006));"
+ ].join('\n');
+ const idx=fixture.lastIndexOf('ENDSEC;');
+ const step=fixture.slice(0,idx)+extra+'\n'+fixture.slice(idx);
+ const m=new gen.Model(step),motion=m.guideKinematics(370);
+ assert.equal(motion.operations.length,1);
+ const op=motion.operations[0];
+ assert.equal(op.angle,0);
+ assert.equal(op.samples.length,129);
+ assert.ok(op.samples.every(p=>Math.abs(p.left[0]-p.right[0])<1e-7));
+ assert.ok(op.samples.every(p=>Math.abs(p.left[1]-p.right[1])<1e-7));
+ assert.equal(motion.safeForGcode,false);
 });
