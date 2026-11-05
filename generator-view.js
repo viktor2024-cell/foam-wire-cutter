@@ -257,8 +257,8 @@ const generatorPreview = (() => {
   let generatorPreviewLoadedFile = null;
   function load() {
     invalidate(); geometry = null; error = '';
-    if (stepFile?.name !== generatorPreviewLoadedFile) {
-      savedGuidePairs = []; pendingGuide = []; generatorPreviewLoadedFile = stepFile?.name || null;
+    if (stepFile !== generatorPreviewLoadedFile) {
+      savedGuidePairs = []; pendingGuide = []; generatorPreviewLoadedFile = stepFile || null;
     }
     try { if (stepFile) geometry = Gen.previewGeometry(stepFile.text, modelRotation, n('gnScale')/100, n('gnTolerance')); }
     catch (e) { error = e.message; }
