@@ -186,6 +186,34 @@ test('wireframe U-arch uses one safe waste corridor to both openings',()=>{
  const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns.filter(w=>w.level==='crit')));
 });
+test('safe entry adapts to rotation around wire axis on multi-hole profiles',()=>{
+ const stock=[50,165,165];
+ for(const file of ['wireframe-two-holes.stp','wireframe-three-holes.stp']){
+  const text=fs.readFileSync(path.join(__dirname,'fixtures',file),'utf8');
+  for(const [angle,side] of [[-1,'LEFT'],[0,'BOTTOM'],[1,'RIGHT']]){
+   const rotation=angle===0?gen.identityRotation():gen.rotateModel(gen.identityRotation(),0,angle);
+   const result=gen.buildProgram(text,file,options({stock,bottomZ:10,clearance:20,
+     rotation,trim:false}));
+   assert.match(result.program,new RegExp('SAFE ENTRY SIDE: '+side));
+   const p=sim.parseGcode(result.program);
+   const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+   assert.equal(check.warns.filter(w=>w.level==='crit').length,0,
+    file+' X rotation '+angle+': '+JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+  }
+ }
+});
+test('external curves STEP: negative X rotation uses a safe lateral entry',
+ {skip:!process.env.CURVES_STEP},()=>{
+ const text=fs.readFileSync(process.env.CURVES_STEP,'utf8');
+ const rotation=gen.rotateModel(gen.identityRotation(),0,-1);
+ const result=gen.buildProgram(text,'curves.stp',
+   options({stock:[50,165,165],bottomZ:10,clearance:20,rotation,trim:false}));
+ assert.match(result.program,/SAFE ENTRY SIDE: LEFT/);
+ const p=sim.parseGcode(result.program);
+ const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,
+   JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+});
 test('route planner handles 3 openings with independent STEP access chains',()=>{
  const step=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-three-holes.stp'),'utf8');
  const built=new gen.Model(step).build();
