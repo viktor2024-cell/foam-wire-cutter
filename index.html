@@ -2151,7 +2151,7 @@ const Gen = (() => {
           }
           return reverse?1-u:u;
         };
-        let maxDifferential=0,maxCross=0,maxHeight=0;
+        let maxDifferential=0,maxCross=0,maxHeight=0,minRelativeZ=Infinity,maxRelativeZ=-Infinity;
         for(let i=0;i<sequenceLength;i++) {
           const u=i/sampleCount,pa=at(a,u),pb=at(b,mapB(u));
           const crossA=pa[cross]-transverseCenter,crossB=pb[cross]-transverseCenter;
@@ -2164,11 +2164,17 @@ const Gen = (() => {
           maxDifferential=Math.max(maxDifferential,Math.hypot(left[0]-right[0],left[1]-right[1]));
           maxCross=Math.max(maxCross,Math.abs(left[0]),Math.abs(right[0]));
           maxHeight=Math.max(maxHeight,Math.abs(left[1]),Math.abs(right[1]));
+          minRelativeZ=Math.min(minRelativeZ,left[1],right[1]);
+          maxRelativeZ=Math.max(maxRelativeZ,left[1],right[1]);
           samples.push({u,left,right,profileA:pa,profileB:pb});
         }
         result.push({ids:pair.ids,axis:along,angle:along===1?0:90,closed:pair.closed,
           span:pair.span,wireFieldWidth:fieldWidth,transverseCenter,zCenter,
-          samples,maxDifferential,maxCross,maxHeight,status:"diagnostic_only"});
+          samples,maxDifferential,maxCross,maxHeight,minRelativeZ,maxRelativeZ,
+          requiredVerticalTravel:maxRelativeZ-minRelativeZ,
+          fitsHorizontalTravel:maxCross<=CONFIG.HorizontalTravel/2+1e-7,
+          fitsVerticalTravel:maxRelativeZ-minRelativeZ<=CONFIG.VerticalTravel+1e-7,
+          status:"diagnostic_only"});
       }
       return {operations:result,origin,ambiguous:analysis.ambiguous,unpaired:analysis.unpaired,
         safeForGcode:false};
