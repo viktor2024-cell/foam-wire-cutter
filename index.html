@@ -1868,14 +1868,16 @@ const Gen = (() => {
   }
   function previewGeometry(text, rotation = identityRotation(), scale = 1, tolerance = 0.1) {
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
-    const { outer, holes, secondaryContours, axis, wireframe } = new Model(text, rotation, scale, tolerance).build();
+    const model = new Model(text, rotation, scale, tolerance);
+    const { outer, holes, secondaryContours, axis, wireframe } = model.build();
+    const auxiliaryCurves = model.wireframe ? [] : model.auxiliaryCurves();
     const sampled = outer.map(([face]) => sampleFace(face, face.t0, face.t1, 0.05, 5));
     const rails = [...outer, ...holes.flat(), ...secondaryContours.flatMap(g=>g.contour)].map(([face]) => sampleFace(face, face.t0, face.t1, 0.01, 2)
       .map((pair) => pair.map((p) => [-p[1], p[0], p[2]])));
     const points = sampled.flat(2).map(p => [-p[1],p[0],p[2]]);
     const low = [0,1,2].map((k) => Math.min(...points.map((p) => p[k])));
     const high = [0,1,2].map((k) => Math.max(...points.map((p) => p[k])));
-    return { rails, axis, sampled, wireframe: !!wireframe, secondaryCount: secondaryContours.length, center: low.map((v,k) => (v+high[k])/2), size: low.map((v,k) => high[k]-v) };
+    return { rails, axis, sampled, wireframe: !!wireframe, auxiliaryCurves, secondaryCount: secondaryContours.length, center: low.map((v,k) => (v+high[k])/2), size: low.map((v,k) => high[k]-v) };
   }
 
   function pairPlacement(zsA, zsB, zc, span, stockHeight, bottomZ, kerf) {
@@ -2039,9 +2041,41 @@ const Gen = (() => {
         }
         this.facesRaw.push({ fid, surf: f.args[2], edgeIds });
       }
+      this.auxiliaryCurveRefs = [...new Set([...this.entities.values()]
+        .filter(e=>isTyped(e)&&e.name==="GEOMETRIC_CURVE_SET")
+        .flatMap(e=>e.args[1].map(ref=>ref.id)))];
       this.wireframe = this.facesRaw.length === 0;
       if(this.wireframe && ![...this.entities.values()].some(e=>isTyped(e)&&e.name==="GEOMETRIC_CURVE_SET"))
         throw new StepError("В STEP нет ни граней, ни GEOMETRIC_CURVE_SET для построения траекторий");
+    }
+    // Standalone presentation/design curves are not part of the BREP edge topology.
+    // Preserve them explicitly even when a solid body is present (F4-1 STEP).
+    auxiliaryCurves() {
+      return this.auxiliaryCurveRefs.map(id=>{
+        const e=this.entities.get(id);
+        if(!isTyped(e)||e.name!=="B_SPLINE_CURVE_WITH_KNOTS")
+          throw new StepError("Вспомогательная кривая #"+id+": пока поддерживаются только B-spline");
+        const degree=e.args[1], refs=e.args[2], mult=e.args[6], knots=e.args[7];
+        if(!Number.isInteger(degree)||degree<1||!Array.isArray(refs)||!Array.isArray(mult)||!Array.isArray(knots))
+          throw new StepError("Вспомогательная кривая #"+id+": некорректная B-spline");
+        const U=expandKnots(knots,mult), count=refs.length, lo=U[degree],hi=U[count];
+        if(U.length!==count+degree+1||!Number.isFinite(lo)||!Number.isFinite(hi)||hi<=lo)
+          throw new StepError("Вспомогательная кривая #"+id+": некорректные узлы");
+        const controls=refs.map(ref=>this.point(ref)), samples=[];
+        const sampleCount=Math.max(64,Math.min(512,count*3));
+        for(let i=0;i<=sampleCount;i++){
+          const t=i===sampleCount?hi:lo+(hi-lo)*i/sampleCount;
+          const span=findSpan(count-1,degree,t,U), N=basis(span,t,degree,U), p=[0,0,0];
+          for(let j=0;j<=degree;j++)for(let k=0;k<3;k++)
+            p[k]+=N[j]*controls[span-degree+j][k];
+          if(p.some(v=>!Number.isFinite(v)))throw new StepError("Вспомогательная кривая #"+id+": ошибка вычисления");
+          samples.push(p);
+        }
+        const ranges=[0,1,2].map(k=>Math.max(...samples.map(p=>p[k]))-Math.min(...samples.map(p=>p[k])));
+        const fixedAxis=ranges.findIndex(v=>v<.05);
+        return {id,points:samples,closed:dist(samples[0],samples.at(-1))<.05,
+          fixedAxis,range:ranges};
+      });
     }
     // Identify distinct cutting directions from the STEP ruled surfaces.  This
     // is diagnostic only: a direction is not yet an executable cutting operation.
@@ -3320,7 +3354,17 @@ const Gen = (() => {
     }
     const scale = o.scale === undefined ? 1 : o.scale;
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
-    const model = new Model(text, o.rotation, scale, o.tolerance === undefined ? .1 : o.tolerance), { outer, holes, secondaryContours, axis, planeA, planeB } = model.build();
+    const model = new Model(text, o.rotation, scale, o.tolerance === undefined ? .1 : o.tolerance);
+    // A solid plus separate guide curves defines additional toolpaths.
+    // Never silently discard them and emit a plausible but incomplete G-code.
+    if(!model.wireframe && model.auxiliaryCurveRefs.length) {
+      const curves=model.auxiliaryCurves();
+      const axes=curves.map(c=>c.fixedAxis<0?"3D":"XYZ"[c.fixedAxis]).join(", ");
+      throw new StepError("STEP содержит тело и "+curves.length+
+        " вспомогательных кривых (плоскости: "+axes+
+        "). Их направления резки пока не проверены: генерация G-code заблокирована.");
+    }
+    const { outer, holes, secondaryContours, axis, planeA, planeB } = model.build();
     if (axis !== 1) throw new StepError("Поверните модель: размах должен идти вдоль струны (сейчас ось модели " + "XYZ"[axis] + ")");
 
     // - Габарит детали по направляющим
