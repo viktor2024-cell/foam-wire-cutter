@@ -3046,7 +3046,7 @@ const Gen = (() => {
     const entry=entryCandidates[0],seed=entry.i;
     const routes=[seed,...Array.from({length:holes.length},(_,i)=>i)].map(shortest);
     const indexOf=k=>k===holes.length?0:k+1;
-    const cost=(from,to)=>routes[indexOf(from)].d[to];
+    const cost=(from,to)=>routes[indexOf(from)].d[to===holes.length?seed:to];
     // Exact shortest visiting order up to 9 holes, deterministic
     // nearest-neighbour with local 2-opt improvements thereafter.
     const n=holes.length;
@@ -3082,8 +3082,9 @@ const Gen = (() => {
     }
     const path=(from,to)=>{
       const src=routes[indexOf(from)],out=[],visited=new Set();
-      let at=to;
-      while(at!==from){
+      let at=to===holes.length?seed:to;
+      const source=from===holes.length?seed:from;
+      while(at!==source){
         if(at<0||visited.has(at))throw new StepError("Автомаршрут: путь перехода не найден");
         visited.add(at);out.push(nodes[at].pair);at=src.parent[at];
       }
@@ -3101,7 +3102,7 @@ const Gen = (() => {
     g+=prog.travel("move",outside,underZ,outside,underZ);
     g+=prog.travel("move",underTower[0][0],underZ,underTower[1][0],underZ);
     g+=travelTo("cut",entry.pair);
-    let previous=seed,allTowers=[underTower,tower(entry.pair)];
+    let previous=n,allTowers=[underTower,tower(entry.pair)];
     for(const [k,i] of order.entries()){
       const hole=contours[i];
       g+=";"+EOL+"; *** HOLE "+(k+1)+"/"+n+" FROM VERIFIED WASTE ROUTE ***"+EOL;
@@ -3117,7 +3118,7 @@ const Gen = (() => {
       }
       previous=i;
     }
-    for(const point of path(previous,seed)){g+=travelTo("cut",point);allTowers.push(tower(point));}
+    for(const point of path(previous,n)){g+=travelTo("cut",point);allTowers.push(tower(point));}
     g+=travelTo("cut",entry.bottom);
     g+=prog.travel("move",outside,underZ,outside,underZ);
     g+=prog.travel("move",outside,safe,outside,safe);
