@@ -19,4 +19,4 @@ jobs:
         with:
           node-version: '22'
       - name: Run generator tests (no CNC hardware)
-        run: node --test tests/generator.test.cjs tests/guide-editor.test.cjs
+        run: node --test tests/generator.test.cjs tests/guide-editor.test.cjs tests/generator-3d-guides.test.cjs
