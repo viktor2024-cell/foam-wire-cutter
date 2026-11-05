@@ -2933,7 +2933,7 @@ const Gen = (() => {
   function wireframeRoutePlannerBlock(safe, prog, holes, outer, layout,
                                       axis, kerf, notes, sag, maxStep,
                                       stockWidth, leadMargin, bottomZ, side) {
-    if(holes.length<2 || holes.some(h=>h.entry?.length!==2))
+    if(holes.length<2 || holes.some(h=>!h.entry?.length))
       throw new StepError("Автомаршрут: нужны хотя бы два отверстия с отдельными граничными щелями STEP");
     if(bottomZ<2)throw new StepError("Автомаршрут: низ заготовки должен быть не ниже Z=2");
     if(holes.length>16)throw new StepError("Автомаршрут: больше 16 отверстий; требуется разбиение на операции");
@@ -3365,7 +3365,7 @@ const Gen = (() => {
       addProfile(lower, o.side);
     } else {
       const layout = makeLayout(o.mirror ? 1 : -1, 1, 1, o.bottomZ + stockHeight / 2);   // - зеркало: корень и конец меняются башнями
-      if (model.wireframe && holes.length>=2 && holes.every(h=>h.entry?.length===2)) {
+      if (model.wireframe && holes.length>=2) {
         const [block,towers]=wireframeRoutePlannerBlock(
           safe,prog,holes,outer,layout,axis,kerf,warnings,sag,maxStep,
           stockWidth,o.leadMargin,o.bottomZ,o.side);
