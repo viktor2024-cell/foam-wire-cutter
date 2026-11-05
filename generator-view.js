@@ -165,7 +165,7 @@ const generatorPreview = (() => {
           description:rotations[turn].description,area:width*height,minimumHeight});
       }catch(e){/* A candidate may not form valid cutting geometry at this orientation. */}
     }
-    results.sort((a,b)=>a.height-b.height||a.area-b.area||a.turn-b.turn);
+    results.sort((a,b)=>a.height-b.height||a.minimumHeight-b.minimumHeight||a.area-b.area||a.turn-b.turn);
     return results;
   }
   document.getElementById('gnStockFromModel').addEventListener('click',()=>{
