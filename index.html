@@ -2901,17 +2901,21 @@ const Gen = (() => {
     if(lead.length<2||ring.length<8)throw new StepError("Недостаточная детализация входа к кривой");
     const [[rootL,rootZL],[rootR,rootZR]]=lead[0];
     const outside=side*(stockWidth/2+leadMargin);
+    // Never rapid along Z=stock bottom: the simulator (and a real uneven
+    // foam block) cannot guarantee clearance at the nominal boundary.
+    if(bottomZ<2)throw new StepError("Резка щелей снизу требует поднять заготовку минимум на 2 мм над столом");
+    const underZ=bottomZ-1;
     let g=";"+EOL+"; *** WIREFRAME HOLE VIA EXPLICIT STEP SLIT ***"+EOL;
     g+=prog.travel("move",outside,safe,outside,safe);
-    g+=prog.travel("move",outside,bottomZ,outside,bottomZ);
-    g+=prog.travel("move",rootL,bottomZ,rootR,bottomZ);
+    g+=prog.travel("move",outside,underZ,outside,underZ);
+    g+=prog.travel("move",rootL,underZ,rootR,underZ);
     g+=prog.travel("cut",rootL,rootZL,rootR,rootZR);
     for(const [[yl,zl],[yr,zr]] of lead.slice(1))g+=prog.travel("cut",yl,zl,yr,zr);
     // Offset the circular perimeter, but not the narrow access slit.
     for(const [[yl,zl],[yr,zr]] of ring)g+=prog.travel("cut",yl,zl,yr,zr);
     for(const [[yl,zl],[yr,zr]] of [...lead].reverse())g+=prog.travel("cut",yl,zl,yr,zr);
-    g+=prog.travel("cut",rootL,bottomZ,rootR,bottomZ);
-    g+=prog.travel("move",outside,bottomZ,outside,bottomZ);
+    g+=prog.travel("cut",rootL,underZ,rootR,underZ);
+    g+=prog.travel("move",outside,underZ,outside,underZ);
     g+=prog.travel("move",outside,safe,outside,safe);
     return [g,[...lead,...ring]];
   }
