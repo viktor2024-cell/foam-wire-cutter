@@ -178,10 +178,27 @@ test('wireframe U-arch uses one safe waste corridor to both openings',()=>{
  const step=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-two-holes.stp'),'utf8');
  const opts=options({stock:[50,165,165],bottomZ:10,clearance:20,trim:false});
  const result=gen.buildProgram(step,'wireframe-two-holes.stp',opts);
- assert.match(result.program,/SHARED INNER-ARCH WASTE CORRIDOR/);
- assert.equal((result.program.match(/ENTRY THROUGH INNER ARCH/g)||[]).length,2);
+ assert.match(result.program,/WIREFRAME ROUTE PLANNER: 2 HOLES/);
+ assert.equal((result.program.match(/FROM VERIFIED WASTE ROUTE/g)||[]).length,2);
  assert.doesNotMatch(result.program,/WIREFRAME HOLE VIA EXPLICIT STEP SLIT/);
  assert.equal(result.holes,2);
+ const p=sim.parseGcode(result.program);
+ const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+});
+test('route planner handles 3 openings with independent STEP access chains',()=>{
+ const step=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-three-holes.stp'),'utf8');
+ const built=new gen.Model(step).build();
+ assert.equal(built.holes.length,3);
+ assert.ok(built.holes.some(h=>h.entry.length===3)); // nontrivial access topology
+ const result=gen.buildProgram(step,'wireframe-three-holes.stp',
+  options({stock:[50,165,165],bottomZ:10,clearance:20,trim:false}));
+ assert.match(result.program,/WIREFRAME ROUTE PLANNER: 3 HOLES/);
+ assert.equal((result.program.match(/FROM VERIFIED WASTE ROUTE/g)||[]).length,3);
+ assert.doesNotMatch(result.program,/WIREFRAME HOLE VIA EXPLICIT STEP SLIT/);
+ const order=result.program.match(/WASTE PATH ORDER: ([^\r\n]+)/);
+ assert.ok(order);
+ assert.equal(new Set(order[1].match(/\d+/g)).size,3);
  const p=sim.parseGcode(result.program);
  const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns.filter(w=>w.level==='crit')));
@@ -189,7 +206,7 @@ test('wireframe U-arch uses one safe waste corridor to both openings',()=>{
 test('external curves STEP: internal corridor must pass stock simulator',{skip:!process.env.CURVES_STEP},()=>{
  const step=fs.readFileSync(process.env.CURVES_STEP,'utf8');
  const result=gen.buildProgram(step,'curves.stp',options({stock:[50,165,165],bottomZ:10,clearance:20,trim:false}));
- assert.match(result.program,/SHARED INNER-ARCH WASTE CORRIDOR/);
+ assert.match(result.program,/WIREFRAME ROUTE PLANNER: 2 HOLES/);
  assert.equal(result.holes,2);
  const p=sim.parseGcode(result.program);
  const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
