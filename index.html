@@ -2886,6 +2886,35 @@ const Gen = (() => {
   }
   // - gap: высоты [левая башня, правая] в зазоре между деталями пары, откуда струна подходит к отверстию;
   //   null - подход сверху. fromBelow: вход снизу, в самую низкую точку контура (верхняя деталь пары)
+  function wireframeSlitHoleBlock(safe,prog,contour,layout,axis,kerf,notes,sag,maxStep,
+                                  stockWidth,leadMargin,bottomZ,side) {
+    // The exported wireframe has an explicit bridge to each circular feature.
+    // Approach below the foam and follow its outer boundary + bridge; a
+    // vertical cut from the top would ruin the retained curved outer shell.
+    if(!contour.entry?.length)throw new StepError("Круглому отверстию не задан безопасный путь входа");
+    const lead=sampleSequence(contour.entry.map(([f,forward])=>faceSegment(f,forward)),sag,maxStep)
+      .map(([a,b])=>layout.towers(a,b));
+    const circleSegments=prepareContour(contour.map(([f,forward])=>faceSegment(f,forward)),
+                                        axis,kerf,false,notes);
+    const ring=sampleSequence(startSequence(circleSegments,0,0),sag,maxStep)
+      .map(([a,b])=>layout.towers(a,b));
+    if(lead.length<2||ring.length<8)throw new StepError("Недостаточная детализация входа к кривой");
+    const [[rootL,rootZL],[rootR,rootZR]]=lead[0];
+    const outside=side*(stockWidth/2+leadMargin);
+    let g=";"+EOL+"; *** WIREFRAME HOLE VIA EXPLICIT STEP SLIT ***"+EOL;
+    g+=prog.travel("move",outside,safe,outside,safe);
+    g+=prog.travel("move",outside,bottomZ,outside,bottomZ);
+    g+=prog.travel("move",rootL,bottomZ,rootR,bottomZ);
+    g+=prog.travel("cut",rootL,rootZL,rootR,rootZR);
+    for(const [[yl,zl],[yr,zr]] of lead.slice(1))g+=prog.travel("cut",yl,zl,yr,zr);
+    // Offset the circular perimeter, but not the narrow access slit.
+    for(const [[yl,zl],[yr,zr]] of ring)g+=prog.travel("cut",yl,zl,yr,zr);
+    for(const [[yl,zl],[yr,zr]] of [...lead].reverse())g+=prog.travel("cut",yl,zl,yr,zr);
+    g+=prog.travel("cut",rootL,bottomZ,rootR,bottomZ);
+    g+=prog.travel("move",outside,bottomZ,outside,bottomZ);
+    g+=prog.travel("move",outside,safe,outside,safe);
+    return [g,[...lead,...ring]];
+  }
   function holeBlock(safe, prog, contour, layout, axis, kerf, notes, sag, maxStep, gap = null, fromBelow = false) {
     // An internal contour can consist of many ruled faces, not just one
     // closed B-spline surface. Preserve the topology and traversal direction.
@@ -3021,6 +3050,8 @@ const Gen = (() => {
     const trim = { Length: stockLength, Width: stockWidth, Height: stockHeight, TrimEnds: (stockLength - part.span) / 2 - kerf / 2, BottomZ: o.bottomZ, RetractOffset: o.retract };
     const hasTrim = o.trim !== false && trim.TrimEnds > 0;
     const sideEntry = o.sideEntry === true;
+    if(model.wireframe && (o.pair||o.mirror||sideEntry))
+      throw new StepError("Для STEP только с кривыми пока поддержана одна обычная деталь; пара, зеркало и боковой вход заблокированы до проверки соответствия щелей");
     if (secondaryContours.length && (o.pair || o.mirror || sideEntry)) throw new StepError("Дополнительные направления: режим пары, зеркала и бокового входа ещё не поддержан; G-code заблокирован");
     if (sideEntry && (o.trim !== false || o.pair || holes.length || o.side !== 1)) throw new Error("Боковой вход справа требует одну деталь без отверстий, торцевания и входа слева");
     if (sideEntry && (stockWidth / 2 + o.leadMargin > cfg.ParkX || o.leadMargin <= 0)) throw new Error("Нет внешнего коридора между правым краем заготовки и парковкой");
@@ -3034,6 +3065,7 @@ const Gen = (() => {
     // - Шапка: сведения для симулятора и для человека
     let program = "; FM_step2gcode: " + fileName + (o.pair ? " (pair: upper reflected over gap, turned 180)" : o.mirror ? " (mirror)" : "") + EOL;
     program += "; CUT MODE=" + (o.pair ? "PAIR PIECES=2" : o.mirror ? "MIRROR PIECES=1" : "SINGLE PIECES=1") + EOL;
+    if(model.wireframe)program+="; STEP GEOMETRY=CURVES_ONLY; reconstructed ruled interpolation, original surfaces unavailable"+EOL;
     program += "; STOCK L=" + fmtG(stockWidth) + " W=" + fmtG(stockLength) + " H=" + fmtG(stockHeight) + " Z0=" + fmtG(o.bottomZ) + EOL;
     program += "; CUT F=" + fmtG(cfg.FeedRateCut) + " mm/s S=" + fmtG(cfg.WireMinPower) + ".." + fmtG(cfg.WireMaxPower) + " kerf=" + fmtG(kerf) + EOL;
     const prog = new Program(cfg, o.powerComp, 5);
@@ -3091,7 +3123,10 @@ const Gen = (() => {
       }
     }
     const addHole = (hole, layout, gap, fromBelow) => {
-      const [block, towers] = holeBlock(safe, prog, hole, layout, axis, kerf, warnings, sag, maxStep, gap, fromBelow);
+      const [block,towers] = model.wireframe && hole.entry
+        ? wireframeSlitHoleBlock(safe,prog,hole,layout,axis,kerf,warnings,sag,maxStep,
+                                 stockWidth,o.leadMargin,o.bottomZ,o.side)
+        : holeBlock(safe,prog,hole,layout,axis,kerf,warnings,sag,maxStep,gap,fromBelow);
       program += block; allTowers.push(...towers);
     };
     const addProfile = (layout, side) => {
