@@ -155,17 +155,24 @@ const generatorPreview = (() => {
         if(g.axis!==1)continue;
         const required=paired ? Gen.previewPair(g,0,0,kerf).minimumHeight : g.size[2];
         const minimumHeight=required+20; // 10 mm foam margin above and below
-        const sheet=[20,50,100].find(h=>h+1e-7>=minimumHeight);
-        const height=sheet||round5(minimumHeight);
-        const length=round5(g.size[0]+20),width=round5(g.size[1]+20);
+        // Standard 20/50/100 mm is the foam SHEET THICKNESS ALONG
+        // THE WIRE (gnL / stock X), not the upright Z dimension.
+        // Keep 5 mm on each wire-side end; vertical and transverse
+        // cutting allowance remains 10 mm per side.
+        const minimumLength=g.size[0]+10;
+        const sheet=[20,50,100].find(t=>t+1e-7>=minimumLength);
+        const length=sheet||round5(minimumLength);
+        const height=round5(minimumHeight),width=round5(g.size[1]+20);
         if(length>machine.FieldWidth+1e-7 || width>machine.HorizontalTravel+1e-7 ||
            width/2+n('gnLead')>machine.ParkX+1e-7 ||
            bottom+height+clearance>machine.VerticalTravel+1e-7)continue;
         results.push({rotation,geometry:g,length,width,height,standard:Boolean(sheet),turn,
-          description:rotations[turn].description,area:width*height,minimumHeight});
+          description:rotations[turn].description,area:width*height,minimumHeight,minimumLength});
       }catch(e){/* A candidate may not form valid cutting geometry at this orientation. */}
     }
-    results.sort((a,b)=>a.height-b.height||a.minimumHeight-b.minimumHeight||a.area-b.area||a.turn-b.turn);
+    // First use the thinnest standard sheet, then preserve current
+    // orientation if it already fits. Never rotate just to shave Z.
+    results.sort((a,b)=>a.length-b.length||a.turn-b.turn||a.area-b.area||a.height-b.height);
     return results;
   }
   document.getElementById('gnStockFromModel').addEventListener('click',()=>{
@@ -188,8 +195,9 @@ const generatorPreview = (() => {
     const fit=document.getElementById('gnFit');
     // The stock check above has validated dimensions; append actionable
     // explanation without hiding its own "fits" status.
-    const info='Автоподбор: '+best.description+', высота листа '+
-      best.height+' мм ('+(best.standard?'стандартная':'нестандартная')+').';
+    const info='Автоподбор: '+best.description+', толщина листа вдоль струны '+
+      best.length+' мм ('+(best.standard?'стандартная':'нестандартная')+
+      '), заготовка '+best.length+' × '+best.width+' × '+best.height+' мм.';
     fit.textContent+=' '+info;
   });
   document.getElementById('gnScale').addEventListener('change',load);
