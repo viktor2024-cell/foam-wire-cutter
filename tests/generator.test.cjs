@@ -153,6 +153,124 @@ test('external W1: no false transverse operation from STEP end caps',{skip:!proc
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
  assert.doesNotMatch(r.program,/SECONDARY CUT/);
 });
+test('auto stock takes standard sheet thickness along wire, not vertical Z',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../generator-view.js'),'utf8');
+ const begin=source.indexOf('  function autoStockOptions()');
+ const end=source.indexOf("  document.getElementById('gnStockFromModel').addEventListener",begin);
+ assert.ok(begin>0&&end>begin);
+ const text=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-profile.stp'),'utf8');
+ const state={
+  Gen:gen,stepFile:{text},modelRotation:gen.identityRotation(),
+  geometry:gen.previewGeometry(text),machine:gen.CONFIG,
+  document:{getElementById:()=>({checked:false})},
+  n:id=>({gnScale:100,gnKerf:1,gnZ:10,gnClear:20,gnLead:5,gnTolerance:.6})[id]
+ };
+ const seenTolerances=[];
+ state.Gen={...gen,previewGeometry:(...args)=>{seenTolerances.push(args[3]);return gen.previewGeometry(...args)}};
+ const options=vm.runInNewContext(source.slice(begin,end)+';autoStockOptions()',state);
+ assert.ok(seenTolerances.length>0 && seenTolerances.every(v=>v===.6),'candidate orientations use selected STEP tolerance');
+ assert.ok(options.length);
+ const best=options[0];
+ assert.equal(best.length,50);
+ assert.equal(best.turn,0);
+ assert.equal(best.standard,true);
+ assert.ok(best.height+1e-7>=state.geometry.size[2]+20); // geometrically required allowance
+ assert.ok(best.width>best.length);
+});
+test('wireframe U-arch uses one safe waste corridor to both openings',()=>{
+ const step=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-two-holes.stp'),'utf8');
+ const opts=options({stock:[50,165,165],bottomZ:10,clearance:20,trim:false});
+ const result=gen.buildProgram(step,'wireframe-two-holes.stp',opts);
+ assert.match(result.program,/WIREFRAME ROUTE PLANNER: 2 HOLES/);
+ assert.equal((result.program.match(/FROM VERIFIED WASTE ROUTE/g)||[]).length,2);
+ assert.doesNotMatch(result.program,/WIREFRAME HOLE VIA EXPLICIT STEP SLIT/);
+ assert.equal(result.holes,2);
+ const p=sim.parseGcode(result.program);
+ const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+});
+test('safe entry adapts to rotation around wire axis on multi-hole profiles',()=>{
+ const stock=[50,165,165];
+ for(const file of ['wireframe-two-holes.stp','wireframe-three-holes.stp']){
+  const text=fs.readFileSync(path.join(__dirname,'fixtures',file),'utf8');
+  for(const [angle,side] of [[-1,'LEFT'],[0,'BOTTOM'],[1,'RIGHT']]){
+   const rotation=angle===0?gen.identityRotation():gen.rotateModel(gen.identityRotation(),0,angle);
+   const result=gen.buildProgram(text,file,options({stock,bottomZ:10,clearance:20,
+     rotation,trim:false}));
+   assert.match(result.program,new RegExp('SAFE ENTRY SIDE: '+side));
+   const p=sim.parseGcode(result.program);
+   const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+   assert.equal(check.warns.filter(w=>w.level==='crit').length,0,
+    file+' X rotation '+angle+': '+JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+  }
+ }
+});
+test('external curves STEP: negative X rotation uses a safe lateral entry',
+ {skip:!process.env.CURVES_STEP},()=>{
+ const text=fs.readFileSync(process.env.CURVES_STEP,'utf8');
+ const rotation=gen.rotateModel(gen.identityRotation(),0,-1);
+ const result=gen.buildProgram(text,'curves.stp',
+   options({stock:[50,165,165],bottomZ:10,clearance:20,rotation,trim:false}));
+ assert.match(result.program,/SAFE ENTRY SIDE: LEFT/);
+ const p=sim.parseGcode(result.program);
+ const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,
+   JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+});
+test('route planner handles 3 openings with independent STEP access chains',()=>{
+ const step=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-three-holes.stp'),'utf8');
+ const built=new gen.Model(step).build();
+ assert.equal(built.holes.length,3);
+ assert.ok(built.holes.some(h=>h.entry.length===3)); // nontrivial access topology
+ const result=gen.buildProgram(step,'wireframe-three-holes.stp',
+  options({stock:[50,165,165],bottomZ:10,clearance:20,trim:false}));
+ assert.match(result.program,/WIREFRAME ROUTE PLANNER: 3 HOLES/);
+ assert.equal((result.program.match(/FROM VERIFIED WASTE ROUTE/g)||[]).length,3);
+ assert.doesNotMatch(result.program,/WIREFRAME HOLE VIA EXPLICIT STEP SLIT/);
+ const order=result.program.match(/WASTE PATH ORDER: ([^\r\n]+)/);
+ assert.ok(order);
+ assert.equal(new Set(order[1].match(/\d+/g)).size,3);
+ const p=sim.parseGcode(result.program);
+ const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+});
+test('external curves STEP: internal corridor must pass stock simulator',{skip:!process.env.CURVES_STEP},()=>{
+ const step=fs.readFileSync(process.env.CURVES_STEP,'utf8');
+ const result=gen.buildProgram(step,'curves.stp',options({stock:[50,165,165],bottomZ:10,clearance:20,trim:false}));
+ assert.match(result.program,/WIREFRAME ROUTE PLANNER: 2 HOLES/);
+ assert.equal(result.holes,2);
+ const p=sim.parseGcode(result.program);
+ const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+});
+test('curve-only STEP reconstructs matched end sections and emits G-code safely',()=>{
+ const text=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-profile.stp'),'utf8');
+ const m=new gen.Model(text),built=m.build();
+ assert.equal(built.wireframe,true);
+ assert.equal(built.axis,1);
+ assert.equal(built.outer.length,6);
+ assert.equal(built.holes.length,1);
+ assert.equal(built.holes[0].entry.length,2);
+ const opts=options({stock:[50,130,100],bottomZ:10,clearance:20});
+ const r=gen.buildProgram(text,'wireframe-profile.stp',opts);
+ assert.match(r.program,/STEP GEOMETRY=CURVES_ONLY/);
+ assert.match(r.program,/WIREFRAME ROUTE PLANNER: 1 HOLE/);
+ assert.equal(r.holes,1);
+ const p=sim.parseGcode(r.program);
+ const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+ assert.throws(()=>gen.buildProgram(text,'pair.stp',options({pair:true,stock:[50,130,200]})),/пока поддержана одна обычная деталь/);
+});
+test('external curves STEP: double-hole wireframe safely emits program',{skip:!process.env.CURVES_STEP},()=>{
+ const text=fs.readFileSync(process.env.CURVES_STEP,'utf8');
+ const m=new gen.Model(text),built=m.build();
+ assert.equal(built.axis,1);
+ assert.equal(built.outer.length,13);
+ assert.equal(built.holes.length,2);
+ const r=gen.buildProgram(text,'curves.stp',options({stock:[50,160,175],bottomZ:10,clearance:20}));
+ const p=sim.parseGcode(r.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+});
 test('split coedges yield the complete trimmed rectangular profile',()=>{
  const m=new gen.Model(fixture), b=m.build();
  assert.equal(b.axis,1);assert.equal(b.planeA,-25);assert.equal(b.planeB,25);
@@ -409,4 +527,28 @@ test('external stab2: synchronized STEP sections and kerf-aware simulation',{ski
  const p=sim.parseGcode(r.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
  assert.ok(r.points>100);assert.ok(r.warnings.some(w=>w.includes('не дойдёт до вершины')));
+});
+
+test('external F1-1: resolve the closed seam before checking ruled-surface accuracy',{skip:!process.env.F11_STEP},()=>{
+ const text=fs.readFileSync(process.env.F11_STEP,'utf8');
+ // The actual cross-edge parameters are on a different scale from the
+ // surface; the geometry-based seam resolver must reach the accuracy check.
+ assert.throws(()=>gen.previewGeometry(text),/Грань #1807: синхронная струна отклоняется от STEP-поверхности/);
+});
+
+test('external F1-1: explicit 0.6 mm tolerance, tower travel and simulation',{skip:!process.env.F11_STEP},()=>{
+ const text=fs.readFileSync(process.env.F11_STEP,'utf8');
+ const rotation=gen.rotateModel(gen.identityRotation(),2,1);
+ const o=options({rotation,tolerance:.6,stock:[55,145,135],bottomZ:50,clearance:20,trim:false});
+ const geometry=gen.previewGeometry(text,rotation,1,.6);assert.equal(geometry.axis,1);
+ const r=gen.buildProgram(text,'F1-1.stp',o);
+ assert.match(r.program,/STEP TOLERANCE=0\.600 mm/);
+ assert.ok(r.warnings.some(w=>w.includes('Допуск поверхности 0.60')));
+ const p=sim.parseGcode(r.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
+ assert.ok(p.moves.length>100);assert.ok(p.moves.every(m=>Math.abs(m.to.X)<=245 && Math.abs(m.to.Z)<=245 && Math.min(m.to.Y,m.to.A)>=0 && Math.max(m.to.Y,m.to.A)<=250));
+});
+test('surface deviation tolerance must be finite and nonnegative',()=>{
+ assert.throws(()=>gen.previewGeometry(fixture,gen.identityRotation(),1,-.1),/Допуск/);
+ assert.throws(()=>gen.buildProgram(fixture,'invalid.stp',options({tolerance:NaN})),/Допуск/);
 });

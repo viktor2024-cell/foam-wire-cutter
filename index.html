@@ -213,6 +213,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       <label>Мощность S<input id="gnMinS" type="number" step="10" value="500"></label>
       <label>Макс. S<input id="gnMaxS" type="number" step="10" value="1000"></label>
       <label>Толщина реза<input id="gnKerf" type="number" step="0.1" value="1"></label>
+      <label>Допуск отклонения от STEP, мм<input id="gnTolerance" type="number" min="0" step="0.01" value="0.1"></label>
     </div>
     <label class="check"><input type="checkbox" id="gnComp" checked> Менять мощность по длине струны</label>
   </section>
@@ -1854,9 +1855,9 @@ const Gen = (() => {
     r[i][i] = r[j][j] = 0; r[i][j] = -turn; r[j][i] = turn;
     return r.map((row) => [0,1,2].map((col) => row.reduce((sum, v, k) => sum + v * rotation[k][col], 0)));
   }
-  function previewGeometry(text, rotation = identityRotation(), scale = 1) {
+  function previewGeometry(text, rotation = identityRotation(), scale = 1, tolerance = 0.1) {
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
-    const { outer, holes, secondaryContours, axis } = new Model(text, rotation, scale).build();
+    const { outer, holes, secondaryContours, axis } = new Model(text, rotation, scale, tolerance).build();
     const sampled = outer.map(([face]) => sampleFace(face, face.t0, face.t1, 0.05, 5));
     const rails = [...outer, ...holes.flat(), ...secondaryContours.flatMap(g=>g.contour)].map(([face]) => sampleFace(face, face.t0, face.t1, 0.01, 2)
       .map((pair) => pair.map((p) => [-p[1], p[0], p[2]])));
@@ -1980,7 +1981,10 @@ const Gen = (() => {
   const sum2 = (d) => d[0] + d[1];
 
   class Model {
-    constructor(text, rotation = identityRotation(), scale = 1) { this.rotation = rotation; this.scale = scale; this.entities = parseStep(text); this.readGeometry(); }
+    constructor(text, rotation = identityRotation(), scale = 1, tolerance = 0.1) {
+      if(!Number.isFinite(tolerance)||tolerance<0) throw new StepError("Допуск отклонения должен быть неотрицательным числом");
+      this.rotation = rotation; this.scale = scale; this.tolerance=tolerance; this.maxCheckedDeviation=0; this.entities = parseStep(text); this.readGeometry();
+    }
     get(ref) { return this.entities.get(ref.id); }
     point(ref) {
       const p = this.get(ref).args[1], machine = [-p[1], p[0], p[2]];
@@ -2024,7 +2028,9 @@ const Gen = (() => {
         }
         this.facesRaw.push({ fid, surf: f.args[2], edgeIds });
       }
-      if (this.facesRaw.length === 0) throw new StepError("В файле нет граней: ожидается твёрдое тело (MANIFOLD_SOLID_BREP)");
+      this.wireframe = this.facesRaw.length === 0;
+      if(this.wireframe && ![...this.entities.values()].some(e=>isTyped(e)&&e.name==="GEOMETRIC_CURVE_SET"))
+        throw new StepError("В STEP нет ни граней, ни GEOMETRIC_CURVE_SET для построения траекторий");
     }
     // Identify distinct cutting directions from the STEP ruled surfaces.  This
     // is diagnostic only: a direction is not yet an executable cutting operation.
@@ -2182,6 +2188,7 @@ const Gen = (() => {
       return {A,B,t0:tDom[0],t1:tDom[1],closed,dir,source:raw.fid};
     }
     build() {
+      if(this.wireframe)return new WireframeModel(this).build();
       const [axis, planeA, planeB] = this.spanAxis();
       const outer = [], holes = [], handled = new Set();
       for (const raw of this.facesRaw) {
@@ -2306,6 +2313,22 @@ const Gen = (() => {
             const e=this.entities.get(id), c=this.get(e.args[3]);
             if(!isTyped(c) || c.name!=="B_SPLINE_CURVE_WITH_KNOTS") continue;
             const knots=c.args[7]; if(!Array.isArray(knots)||!knots.length)continue;
+            // The edge may use a completely different parameter scale than
+            // the surface. Evaluate its geometry instead of comparing scales.
+            const degree=c.args[1], refs=c.args[2], multiplicities=c.args[6];
+            if(Array.isArray(refs)&&Array.isArray(multiplicities)) {
+              const U=expandKnots(knots,multiplicities), n=refs.length-1;
+              const u=(U[degree]+U[n+1])/2, span=findSpan(n,degree,u,U), N=basis(span,u,degree,U);
+              const midpoint=[0,0,0];
+              for(let j=0;j<=degree;j++){const p=this.point(refs[span-degree+j]);for(let k=0;k<3;k++)midpoint[k]+=N[j]*p[k];}
+              const other=dist(ends[0],point)<.01?ends[1]:ends[0];
+              try {
+                const mid=Model.project(rail,tDom,midpoint), end=Model.project(rail,tDom,other), eps=1e-6;
+                const first=mid>=Math.min(tDom[0],end)-eps && mid<=Math.max(tDom[0],end)+eps;
+                const last=mid>=Math.min(tDom[1],end)-eps && mid<=Math.max(tDom[1],end)+eps;
+                if(first!==last) choices.push(first?tDom[0]:tDom[1]);
+              } catch (_) { /* fall back to matching parameter domains below */ }
+            }
             const limits=[knots[0],knots.at(-1)];
             for(const u of limits) if(u>=tDom[0]-1e-8 && u<=tDom[1]+1e-8 && dist(rail(u),point)<.01) choices.push(u);
           }
@@ -2362,13 +2385,15 @@ const Gen = (() => {
               const point=a.map((v,k)=>v+f*(b[k]-v)), s=sA+f*(sB-sA), curve=u=>at(s,u);
               // Check the actual synchronized surface parameter first: a
               // narrow trailing edge can fall between the coarse search grid.
-              if(dist(curve(t),point)<=.1) continue;
+              const direct=dist(curve(t),point);
+              if(direct<=this.tolerance) { this.maxCheckedDeviation=Math.max(this.maxCheckedDeviation,direct); continue; }
               let bestT=tDom[0],best=Infinity;
               for(let j=0;j<=400;j++){const u=tDom[0]+(tDom[1]-tDom[0])*j/400,d=dist(curve(u),point);if(d<best){best=d;bestT=u;}}
               let lo=Math.max(tDom[0],bestT-(tDom[1]-tDom[0])/400),hi=Math.min(tDom[1],bestT+(tDom[1]-tDom[0])/400);
               for(let j=0;j<32;j++){const x=lo+(hi-lo)/3,y=hi-(hi-lo)/3;if(dist(curve(x),point)<dist(curve(y),point))hi=y;else lo=x;}
               const deviation=dist(curve((lo+hi)/2),point);
-              if(deviation>.1) throw new StepError("Грань #"+faceId+": синхронная струна отклоняется от STEP-поверхности более 0,1 мм (не менее "+deviation.toFixed(2)+" мм); требуется другое соответствие профилей");
+              this.maxCheckedDeviation=Math.max(this.maxCheckedDeviation,deviation);
+              if(deviation>this.tolerance) throw new StepError("Грань #"+faceId+": синхронная струна отклоняется от STEP-поверхности более "+this.tolerance.toFixed(2)+" мм (не менее "+deviation.toFixed(2)+" мм); требуется другое соответствие профилей");
             }
             }
           }
@@ -2410,6 +2435,223 @@ const Gen = (() => {
       }
       if (dist(current, firstStart) > 0.01) throw new StepError("Профиль не замкнут");
       return items;
+    }
+  }
+
+  // STEP GEOMETRIC_CURVE_SET contains curves but NO BREP faces. Reconstruct
+  // corresponding sectional wire rails without pretending that the original
+  // solid's surfaces or material side can be recovered from edges alone.
+  class WireframeModel {
+    constructor(model) { this.model=model; }
+    curve(id) {
+      const e=this.model.entities.get(id);
+      if(!e||e.name!=="B_SPLINE_CURVE_WITH_KNOTS")
+        throw new StepError("Кривая #"+id+": пока поддерживается только B_SPLINE_CURVE_WITH_KNOTS");
+      const p=e.args[1],control=e.args[2].map(ref=>this.model.point(ref));
+      const U=expandKnots(e.args[7],e.args[6]),n=control.length-1;
+      if(!Number.isInteger(p)||p<1||U.length!==control.length+p+1)
+        throw new StepError("Кривая #"+id+": некорректные узлы B-сплайна");
+      const lo=U[p],hi=U[n+1];
+      const atParam=t=>{
+        const u=lo+(hi-lo)*Math.max(0,Math.min(1,t)),span=findSpan(n,p,u,U);
+        const weights=basis(span,u,p,U),v=[0,0,0];
+        weights.forEach((w,k)=>control[span-p+k].forEach((x,i)=>v[i]+=w*x));
+        return v;
+      };
+      const sampled=Array.from({length:201},(_,i)=>atParam(i/200));
+      const lengths=[0];
+      for(let i=1;i<sampled.length;i++)lengths.push(lengths[i-1]+dist(sampled[i],sampled[i-1]));
+      const total=lengths.at(-1);
+      if(total<.001)throw new StepError("Кривая #"+id+": нулевая длина");
+      const at=u=>{
+        const target=Math.max(0,Math.min(1,u))*total;
+        let lo=0,hi=lengths.length-1;
+        while(lo+1<hi){const m=(lo+hi)>>1;if(lengths[m]<target)lo=m;else hi=m;}
+        const fraction=(target-lengths[lo])/Math.max(lengths[hi]-lengths[lo],1e-12);
+        return atParam((lo+fraction)/200);
+      };
+      return {id,at,start:at(0),end:at(1),length:total,
+        sampled:sampled.filter((_,i)=>i%4===0)};
+    }
+    section(raw,axis) {
+      const nodes=[],edges=[];
+      const node=p=>{
+        let n=nodes.findIndex(q=>dist(q,p)<.04);
+        if(n<0){n=nodes.length;nodes.push(p);}
+        return n;
+      };
+      raw.forEach(curve=>edges.push({...curve,a:node(curve.start),b:node(curve.end)}));
+      const connected=(a,b,without)=>{
+        const reached=new Set([a]),pending=[a];
+        while(pending.length){
+          const n=pending.pop();
+          if(n===b)return true;
+          for(const edge of edges){
+            if(edge===without)continue;
+            const next=edge.a===n?edge.b:edge.b===n?edge.a:-1;
+            if(next>=0&&!reached.has(next)){reached.add(next);pending.push(next);}
+          }
+        }
+        return false;
+      };
+      const circles=edges.filter(e=>e.a===e.b);
+      const bridges=edges.filter(e=>e.a!==e.b&&!connected(e.a,e.b,e));
+      const core=edges.filter(e=>e.a!==e.b&&!bridges.includes(e));
+      if(!core.length)throw new StepError("В сечении Y="+raw[0].start[axis].toFixed(2)+" нет замкнутого наружного контура");
+      // A single boundary cycle may contain arbitrarily many B-spline edges.
+      // Internal seams and branch edges are kept as explicit access paths.
+      const used=new Set(),loops=[];
+      for(const first of core){
+        if(used.has(first))continue;
+        const items=[],head=first.a;let current=head;
+        while(true){
+          const edgesHere=core.filter(e=>!used.has(e)&&(e.a===current||e.b===current));
+          if(!edgesHere.length)break;
+          const edge=edgesHere[0],fw=edge.a===current;
+          used.add(edge);items.push({edge,fw,from:current,to:fw?edge.b:edge.a});
+          current=fw?edge.b:edge.a;
+          if(current===head)break;
+          if(items.length>core.length)throw new StepError("Зацикленная топология GEOMETRIC_CURVE_SET");
+        }
+        if(current!==head)throw new StepError("Незамкнутая цепочка кривых сечения");
+        loops.push(items);
+      }
+      const area=items=>{
+        const points=items.flatMap(({edge,fw})=>Array.from({length:25},(_,i)=>edge.at(fw?i/25:1-i/25)));
+        return Math.abs(points.reduce((sum,p,i)=>{
+          const q=points[(i+1)%points.length],a=axis===0?1:0,b=axis===2?1:2;
+          return sum+p[a]*q[b]-p[b]*q[a];
+        },0)/2);
+      };
+      loops.sort((a,b)=>area(b)-area(a));
+      if(loops.length!==1)throw new StepError("Несколько неоднозначных внешних контуров в GEOMETRIC_CURVE_SET; требуется назначение операций");
+      const outer=loops[0],vertices=outer.map(x=>nodes[x.from]);
+      // Start consistently at the topmost vertex, then toward the smaller X.
+      let top=0;for(let i=1;i<vertices.length;i++)
+        if(vertices[i][2]>vertices[top][2]+1e-5)top=i;
+      const ordered=outer.slice(top).concat(outer.slice(0,top));
+      if(nodes[ordered[0].to][0]>nodes[ordered.at(-1).from][0]){
+        ordered.reverse();
+        for(const item of ordered){const t=item.from;item.from=item.to;item.to=t;item.fw=!item.fw;}
+      }
+      return {axis,nodes,edges,outer:ordered,circles,bridges};
+    }
+    build() {
+      const set=[...this.model.entities.values()].find(e=>isTyped(e)&&e.name==="GEOMETRIC_CURVE_SET");
+      if(!set||!set.args[1]?.length)throw new StepError("GEOMETRIC_CURVE_SET не содержит кривых");
+      const raw=set.args[1].map(ref=>this.curve(ref.id));
+      const candidates=[0,1,2].filter(axis=>raw.every(c=>{
+        const values=c.sampled.map(p=>p[axis]);
+        return Math.max(...values)-Math.min(...values)<.04;
+      }));
+      let chosen=null;
+      for(const axis of candidates){
+        const planes=[];
+        for(const c of raw){
+          const n=planes.find(p=>Math.abs(p.value-c.start[axis])<.04);
+          if(n)n.curves.push(c);
+          else planes.push({value:c.start[axis],curves:[c]});
+        }
+        if(planes.length===2&&planes.every(p=>p.curves.length>=3)){
+          chosen={axis,planes:planes.sort((a,b)=>a.value-b.value)};break;
+        }
+      }
+      if(!chosen)throw new StepError("Кривые STEP должны образовывать два параллельных сечения; направление струны неоднозначно");
+      const [A,B]=chosen.planes.map(p=>this.section(p.curves,chosen.axis));
+      const planeA=chosen.planes[0].value,planeB=chosen.planes[1].value;
+      if(A.outer.length!==B.outer.length||A.circles.length!==B.circles.length||A.bridges.length!==B.bridges.length)
+        throw new StepError("Сечения кривых различаются по топологии: нельзя надёжно сопоставить направляющие");
+      const planeCoord=p=>[p[0],p[2]],separation=([x,z],[u,v])=>Math.hypot(x-u,z-v);
+      const score=(xs,ys)=>xs.reduce((sum,p,i)=>sum+separation(planeCoord(p),planeCoord(ys[i])),0);
+      // Cycles can be exported in different order or direction; select the
+      // one-to-one vertex alignment with the smallest geometric deviation.
+      const startB=B.outer.map(item=>B.nodes[item.from]);
+      const startsA=A.outer.map(item=>A.nodes[item.from]);
+      let best=null;
+      for(const backward of [false,true])for(let shift=0;shift<startB.length;shift++){
+        const perm=startsA.map((_,i)=>backward?(shift-i+startB.length)%startB.length:(shift+i)%startB.length);
+        const cost=score(startsA,perm.map(i=>startB[i]));
+        if(!best||cost<best.cost)best={perm,backward,cost};
+      }
+      const maxChord=Math.max(...startsA.map(p=>p[0]))-Math.min(...startsA.map(p=>p[0]));
+      if(best.cost>Math.max(3,A.outer.length*maxChord*.20))
+        throw new StepError("Не совпадают углы двух торцевых контуров; проверьте соответствие кривых");
+      const faceOf=(ca,fwA,cb,fwB)=>({
+        A:u=>ca.at(fwA?u:1-u),B:u=>cb.at(fwB?u:1-u),
+        t0:0,t1:1,closed:false,source:[ca.id,cb.id]
+      });
+      const outer=A.outer.map((item,i)=>{
+        const j=best.perm[i],other=B.outer[j],fwB=best.backward?!other.fw:other.fw;
+        return [faceOf(item.edge,item.fw,other.edge,fwB),true];
+      });
+      const matchByPosition=(items,others,where)=>{
+        const taken=new Set();
+        return items.map(item=>{
+          const p=where(item),available=others.map((other,i)=>({other,i,cost:separation(planeCoord(p),planeCoord(where(other)))}))
+            .filter(x=>!taken.has(x.i)).sort((a,b)=>a.cost-b.cost);
+          if(!available.length||available[0].cost>Math.max(6,maxChord*.15))
+            throw new StepError("Не удалось сопоставить "+(item.id||"вход")+" между сечениями");
+          taken.add(available[0].i);
+          return [item,available[0].other];
+        });
+      };
+      const pairHoles=matchByPosition(A.circles,B.circles,c=>c.start);
+      const holes=pairHoles.map(([ca,cb])=>{
+        const orientation=curve=>{
+          const p=Array.from({length:100},(_,i)=>curve.at(i/100));
+          return Math.sign(p.reduce((area,v,i)=>{
+            const q=p[(i+1)%p.length];return area+v[0]*q[2]-q[0]*v[2];
+          },0));
+        };
+        const face=faceOf(ca,true,cb,orientation(ca)===orientation(cb));
+        face.closed=true;
+        return [[face,true]];
+      });
+      const entries=matchByPosition(A.bridges,B.bridges,c=>{
+        const section=A.bridges.includes(c)?A:B;
+        const attached=section.outer.some(item=>item.from===c.a||item.to===c.a)?c.a:c.b;
+        return section.nodes[attached];
+      });
+      // Two circular holes and their bridge access paths are model features:
+      // do not discard them as decorative geometry.
+      for(const [ca,cb] of entries){
+        const seamA=A.circles.find(circle=>circle.a===ca.a||circle.a===ca.b);
+        const seamB=B.circles.find(circle=>circle.a===cb.a||circle.a===cb.b);
+        if(!seamA||!seamB)throw new StepError("Входная щель не соединена с круглым контуром");
+        const hole=holes.find(items=>items[0][0].source[0]===seamA.id);
+        if(!hole)throw new StepError("Не найдена пара для щели #"+ca.id);
+        const outerNodeA=ca.a===seamA.a?ca.b:ca.a,outerNodeB=cb.a===seamB.a?cb.b:cb.a;
+        const rootFor=(section,node)=>{
+          const target=section.nodes[node];
+          const candidates=section.outer.filter(item=>Math.abs(section.nodes[item.from][0]-target[0])<.2);
+          const low=candidates.sort((x,y)=>section.nodes[x.from][2]-section.nodes[y.from][2])[0];
+          if(!low)throw new StepError("Не найден нижний вход к щели на наружном контуре");
+          const root=low.from;
+          const buildRoute=(reverse)=>{
+            const items=section.outer,idx=items.findIndex(item=>item.from===root);
+            const targetIdx=items.findIndex(item=>item.from===node);
+            if(idx<0||targetIdx<0)throw new StepError("Неполная цепочка входа к отверстию");
+            const output=[];let at=idx;
+            while(at!==targetIdx){
+              const k=reverse?(at-1+items.length)%items.length:at;
+              output.push({edge:items[k].edge,fw:reverse?!items[k].fw:items[k].fw});
+              at=reverse?k:(at+1)%items.length;
+              if(output.length>items.length)throw new StepError("Цикл в пути входа");
+            }
+            return output;
+          };
+          const left=buildRoute(false),right=buildRoute(true);
+          const length=items=>items.reduce((sum,item)=>sum+item.edge.length,0);
+          return length(left)<length(right)?left:right;
+        };
+        const routeA=rootFor(A,outerNodeA),routeB=rootFor(B,outerNodeB);
+        if(routeA.length!==routeB.length)throw new StepError("Щели к отверстию имеют несовпадающие направляющие");
+        const path=routeA.map((step,i)=>[faceOf(step.edge,step.fw,routeB[i].edge,routeB[i].fw),true]);
+        path.push([faceOf(ca,ca.a===outerNodeA,cb,cb.a===outerNodeB),true]);
+        hole.entry=path;
+      }
+      return {outer,holes,secondaryContours:[],axis:chosen.axis,planeA,planeB,
+        wireframe:true,wireframeCurves:raw.length};
     }
   }
 
@@ -2666,6 +2908,299 @@ const Gen = (() => {
   }
   // - gap: высоты [левая башня, правая] в зазоре между деталями пары, откуда струна подходит к отверстию;
   //   null - подход сверху. fromBelow: вход снизу, в самую низкую точку контура (верхняя деталь пары)
+  function wireframeSlitHoleBlock(safe,prog,contour,layout,axis,kerf,notes,sag,maxStep,
+                                  stockWidth,leadMargin,bottomZ,side) {
+    // The exported wireframe has an explicit bridge to each circular feature.
+    // Approach below the foam and follow its outer boundary + bridge; a
+    // vertical cut from the top would ruin the retained curved outer shell.
+    if(!contour.entry?.length)throw new StepError("Круглому отверстию не задан безопасный путь входа");
+    const lead=sampleSequence(contour.entry.map(([f,forward])=>faceSegment(f,forward)),sag,maxStep)
+      .map(([a,b])=>layout.towers(a,b));
+    const circleSegments=prepareContour(contour.map(([f,forward])=>faceSegment(f,forward)),
+                                        axis,kerf,false,notes);
+    const ring=sampleSequence(startSequence(circleSegments,0,0),sag,maxStep)
+      .map(([a,b])=>layout.towers(a,b));
+    if(lead.length<2||ring.length<8)throw new StepError("Недостаточная детализация входа к кривой");
+    const [[rootL,rootZL],[rootR,rootZR]]=lead[0];
+    const outside=side*(stockWidth/2+leadMargin);
+    // Never rapid along Z=stock bottom: the simulator (and a real uneven
+    // foam block) cannot guarantee clearance at the nominal boundary.
+    if(bottomZ<2)throw new StepError("Резка щелей снизу требует поднять заготовку минимум на 2 мм над столом");
+    const underZ=bottomZ-1;
+    let g=";"+EOL+"; *** WIREFRAME HOLE VIA EXPLICIT STEP SLIT ***"+EOL;
+    g+=prog.travel("move",outside,safe,outside,safe);
+    g+=prog.travel("move",outside,underZ,outside,underZ);
+    g+=prog.travel("move",rootL,underZ,rootR,underZ);
+    g+=prog.travel("cut",rootL,rootZL,rootR,rootZR);
+    for(const [[yl,zl],[yr,zr]] of lead.slice(1))g+=prog.travel("cut",yl,zl,yr,zr);
+    // Offset the circular perimeter, but not the narrow access slit.
+    for(const [[yl,zl],[yr,zr]] of ring)g+=prog.travel("cut",yl,zl,yr,zr);
+    for(const [[yl,zl],[yr,zr]] of [...lead].reverse())g+=prog.travel("cut",yl,zl,yr,zr);
+    g+=prog.travel("cut",rootL,underZ,rootR,underZ);
+    g+=prog.travel("move",outside,underZ,outside,underZ);
+    g+=prog.travel("move",outside,safe,outside,safe);
+    return [g,[...lead,...ring]];
+  }
+  // A wireframe U-shaped part may have two circular features accessed from
+  // the OPEN CENTER of the arch. Enter that sacrificial core once, use only
+  // the short bridge from the inner wall into each hole, then traverse the
+  // core to the other hole. A separate bottom-to-hole entry on each leg
+  // leaves an unwanted slit across the finished wall.
+  // Visibility-graph CAM planner for ANY number of spline openings sharing
+  // the same accessible exterior/waste region of a ruled wireframe profile.
+  // Every edge is checked on BOTH ends of the wire AND three intermediate
+  // span stations. No route through the finished profile is accepted.
+  // Uncut waste is traversed at G1 with the wire on; G0 is confined to
+  // below the stock and above its safe height.
+  function wireframeRoutePlannerBlock(safe, prog, holes, outer, layout,
+                                      axis, kerf, notes, sag, maxStep,
+                                      stockWidth, leadMargin, bottomZ, side) {
+    if(holes.length<1 || holes.some(h=>!h.entry?.length))
+      throw new StepError("Автомаршрут: отверстия должны иметь отдельные входные щели STEP");
+    if(bottomZ<2)throw new StepError("Автомаршрут: низ заготовки должен быть не ниже Z=2");
+    if(holes.length>16)throw new StepError("Автомаршрут: больше 16 отверстий; требуется разбиение на операции");
+    const underZ=bottomZ-1, planeA=holes[0][0][0].A(0)[1],planeB=holes[0][0][0].B(0)[1];
+    const contours=holes.map((hole,i)=>{
+      const [bridgeFace,fw]=hole.entry.at(-1);
+      const bridge=sampleSequence([faceSegment(bridgeFace,fw)],sag,maxStep);
+      const ringSeg=prepareContour(hole.map(([f,d])=>faceSegment(f,d)),axis,kerf,false,notes);
+      const ring=sampleSequence(startSequence(ringSeg,0,0),sag,maxStep);
+      if(bridge.length<2||ring.length<8)
+        throw new StepError("Автомаршрут: повреждённое отверстие или щель #"+(i+1));
+      return {i,bridge,ring,pair:bridge[0]};
+    });
+    const polygon=t=>{
+      const points=[];
+      for(const [f,fw] of outer)
+        for(let i=0;i<36;i++){
+          const u=fw?i/36:1-i/36,a=f.A(u),b=f.B(u);
+          points.push([a[0]*(1-t)+b[0]*t,a[2]*(1-t)+b[2]*t]);
+        }
+      return points;
+    };
+    const stations=[0,.25,.5,.75,1],profiles=stations.map(polygon);
+    const inside=(poly,[x,z])=>{
+      let hit=false;
+      for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+        const a=poly[i],b=poly[j];
+        if((a[1]>z)!==(b[1]>z)&&x<(b[0]-a[0])*(z-a[1])/(b[1]-a[1])+a[0])hit=!hit;
+      }
+      return hit;
+    };
+    const pos=(pair,t)=>[
+      pair[0][0]*(1-t)+pair[1][0]*t,pair[0][2]*(1-t)+pair[1][2]*t];
+    const freePoint=(pair)=>stations.every((t,i)=>!inside(profiles[i],pos(pair,t)));
+    const nearWall=(poly,p,r)=>{
+      const r2=r*r;
+      for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+        const a=poly[j],b=poly[i],dx=b[0]-a[0],dz=b[1]-a[1];
+        if(p[0]<Math.min(a[0],b[0])-r||p[0]>Math.max(a[0],b[0])+r||
+           p[1]<Math.min(a[1],b[1])-r||p[1]>Math.max(a[1],b[1])+r)continue;
+        const t=Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dz)/Math.max(1e-14,dx*dx+dz*dz)));
+        if((p[0]-a[0]-t*dx)**2+(p[1]-a[1]-t*dz)**2<r2)return true;
+      }
+      return false;
+    };
+    // Endpoint points are allowed on the exact wall, but ALL intermediate
+    // samples must be outside the saved part. This test prevents the previous
+    // wall-cutting regression, which the stock-box simulator cannot detect.
+    const visible=(a,b)=>{
+      for(let k=0;k<stations.length;k++){
+        const t=stations[k],pa=pos(a,t),pb=pos(b,t),poly=profiles[k];
+        for(let j=1;j<24;j++){
+          const u=j/24,p=[pa[0]+(pb[0]-pa[0])*u,pa[1]+(pb[1]-pa[1])*u];
+          if(inside(poly,p))return false;
+          // The wire is not infinitely thin. Away from an intentional
+          // start/end boundary contact, reserve half the kerf as clearance.
+          const limit=Math.min(kerf/2,Math.min(
+            Math.hypot(p[0]-pa[0],p[1]-pa[1]),
+            Math.hypot(p[0]-pb[0],p[1]-pb[1]))*.6);
+          if(limit>.02 && nearWall(poly,p,limit))return false;
+        }
+      }
+      return true;
+    };
+    const metric=(a,b)=>Math.max(dist(a[0],b[0]),dist(a[1],b[1]));
+    const roots=contours.map(c=>c.pair);
+    const avg=(values)=>values.reduce((s,v)=>s+v,0)/values.length;
+    const delta=[0,2].map(k=>avg(roots.map(p=>p[1][k]-p[0][k])));
+    const minX=Math.min(...roots.map(p=>p[0][0])),maxX=Math.max(...roots.map(p=>p[0][0]));
+    const minZ=Math.min(...roots.map(p=>p[0][2])),maxZ=Math.max(...roots.map(p=>p[0][2]));
+    const allOuter=profiles[0],minOuterZ=Math.min(...allOuter.map(p=>p[1]));
+    const gridSpacing=8,baseZ=Math.max(minOuterZ+2,minZ-30),topZ=maxZ+30;
+    const nodes=roots.map(pair=>({pair,role:"root"}));
+    const addNode=(x,z)=>{
+      const pair=[[x,planeA,z],[x+delta[0],planeB,z+delta[1]]];
+      if(freePoint(pair)&&!nodes.some(n=>metric(n.pair,pair)<3))
+        nodes.push({pair,role:"free"});
+    };
+    // The centre of the cavity is often the best entry. Also sample the
+    // entire space near the holes; an off-centre or asymmetric cavity can
+    // require several turns rather than a direct wall-crossing segment.
+    addNode((minX+maxX)/2,avg(roots.map(p=>p[0][2])));
+    const columns=Math.min(22,Math.max(2,Math.ceil((maxX-minX+20)/gridSpacing)));
+    const rows=Math.min(20,Math.max(2,Math.ceil((topZ-baseZ)/gridSpacing)));
+    for(let j=0;j<=rows;j++)for(let i=0;i<=columns;i++)
+      addNode(minX-10+(maxX-minX+20)*i/columns,baseZ+(topZ-baseZ)*j/rows);
+    if(nodes.length>280)throw new StepError("Автомаршрут: слишком сложная карта доступности");
+    const adjacency=nodes.map(()=>[]);
+    for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){
+      const d=metric(nodes[i].pair,nodes[j].pair);
+      if(d<.01 || (d>32 && !(i<holes.length&&j<holes.length)))continue;
+      if(visible(nodes[i].pair,nodes[j].pair)){
+        adjacency[i].push([j,d]);adjacency[j].push([i,d]);
+      }
+    }
+    const shortest=(start)=>{
+      const n=nodes.length,d=Array(n).fill(Infinity),parent=Array(n).fill(-1),
+        done=Array(n).fill(false);
+      d[start]=0;
+      for(let k=0;k<n;k++){
+        let u=-1;
+        for(let i=0;i<n;i++)if(!done[i]&&(u<0||d[i]<d[u]))u=i;
+        if(u<0||!Number.isFinite(d[u]))break;
+        done[u]=true;
+        for(const [v,w] of adjacency[u]){
+          if(d[u]+w+1e-6<d[v]){d[v]=d[u]+w;parent[v]=u;}
+        }
+      }
+      return {d,parent};
+    };
+    // Choose an accessible entry among all four sides of the stock cross
+    // section. After rotating around the wire axis, a formerly bottom-open
+    // cavity may open left, right or above. Entry candidates must be safe
+    // across the whole ruled span, not just on one end-cap.
+    const entryCandidates=[],outsideOffset=stockWidth/2+leadMargin;
+    const sectionOutside=(pair,kind)=>{
+      if(kind==="bottom"||kind==="top"){
+        const height=kind==="bottom"?underZ:safe;
+        return pair.map(p=>[p[0],p[1],p[2]+height-layout.machine(p)[2]]);
+      }
+      const desired=kind==="left"?-outsideOffset:outsideOffset;
+      return pair.map(p=>{
+        const unit=[p[0]+1,p[1],p[2]];
+        const scale=layout.machine(unit)[1]-layout.machine(p)[1];
+        if(Math.abs(scale)<1e-9)throw new StepError("Автомаршрут: невозможно вычислить боковой вход");
+        return [p[0]+(desired-layout.machine(p)[1])/scale,p[1],p[2]];
+      });
+    };
+    const sides=["bottom","top","left","right"];
+    for(let i=holes.length;i<nodes.length;i++){
+      const pair=nodes[i].pair;
+      const reach=shortest(i);
+      if(roots.some((_,k)=>!Number.isFinite(reach.d[k])))continue;
+      for(const sideName of sides){
+        if(sideName==="bottom"&&bottomZ<2)continue;
+        const exterior=sectionOutside(pair,sideName);
+        if(!visible(exterior,pair))continue;
+        const towerExterior=layout.towers(exterior[0],exterior[1]);
+        const inBounds=towerExterior.every(([y,z])=>Math.abs(y)<=prog.cfg.HorizontalTravel/2+1e-6 &&
+          z>=-1e-6&&z<=prog.cfg.VerticalTravel+1e-6);
+        if(!inBounds)continue;
+        const pathLength=metric(pair,exterior);
+        const score=pathLength+.25*roots.reduce((sum,_,k)=>sum+reach.d[k],0);
+        entryCandidates.push({i,pair,exterior,sideName,score});
+      }
+    }
+    entryCandidates.sort((a,b)=>a.score-b.score);
+    if(!entryCandidates.length)
+      throw new StepError("Автомаршрут: нет безопасного входа сверху, снизу или с боков через область отхода; резка заблокирована");
+    const entry=entryCandidates[0],seed=entry.i;
+    const routes=[seed,...Array.from({length:holes.length},(_,i)=>i)].map(shortest);
+    const indexOf=k=>k===holes.length?0:k+1;
+    const cost=(from,to)=>routes[indexOf(from)].d[to===holes.length?seed:to];
+    // Exact shortest visiting order up to 9 holes, deterministic
+    // nearest-neighbour with local 2-opt improvements thereafter.
+    const n=holes.length;
+    let order=[];
+    if(n<=9){
+      const dp=new Map(),all=(1<<n)-1;
+      for(let j=0;j<n;j++)dp.set((1<<j)+":"+j,{cost:cost(n,j),seq:[j]});
+      for(let mask=1;mask<=all;mask++)for(let j=0;j<n;j++){
+        const state=dp.get(mask+":"+j);
+        if(!state)continue;
+        for(let k=0;k<n;k++)if(!(mask&(1<<k))){
+          const next=mask|(1<<k),key=next+":"+k,c=state.cost+cost(j,k),prev=dp.get(key);
+          if(!prev||c<prev.cost)dp.set(key,{cost:c,seq:[...state.seq,k]});
+        }
+      }
+      let best=null;
+      for(let j=0;j<n;j++){
+        const state=dp.get(all+":"+j);
+        if(!state)continue;
+        const total=state.cost+cost(j,seed);
+        if(!best||total<best.cost)best={cost:total,seq:state.seq};
+      }
+      if(!best)throw new StepError("Автомаршрут: отверстия находятся в несвязанных областях отхода");
+      order=best.seq;
+    } else {
+      const todo=new Set(contours.map((_,i)=>i));
+      let current=seed;
+      while(todo.size){
+        const next=[...todo].sort((a,b)=>cost(current,a)-cost(current,b))[0];
+        if(!Number.isFinite(cost(current,next)))throw new StepError("Автомаршрут: разорван граф переходов");
+        order.push(next);todo.delete(next);current=next;
+      }
+    }
+    const path=(from,to)=>{
+      const src=routes[indexOf(from)],out=[],visited=new Set();
+      let at=to===holes.length?seed:to;
+      const source=from===holes.length?seed:from;
+      while(at!==source){
+        if(at<0||visited.has(at))throw new StepError("Автомаршрут: путь перехода не найден");
+        visited.add(at);out.push(nodes[at].pair);at=src.parent[at];
+      }
+      return out.reverse();
+    };
+    const tower=pair=>layout.towers(pair[0],pair[1]),
+          travelTo=(kind,pair)=>{
+            const t=tower(pair);
+            return prog.travel(kind,t[0][0],t[0][1],t[1][0],t[1][1]);
+          };
+    const exteriorTower=tower(entry.exterior),outside=side*(stockWidth/2+leadMargin);
+    let g=";"+EOL+"; *** WIREFRAME ROUTE PLANNER: "+n+" "+(n===1?"HOLE":"HOLES")+", VERIFIED WASTE GRAPH ***"+EOL;
+    g+="; WASTE PATH ORDER: "+order.map(i=>i+1).join(" -> ")+EOL;
+    g+="; SAFE ENTRY SIDE: "+entry.sideName.toUpperCase()+EOL;
+    g+=prog.travel("move",outside,safe,outside,safe);
+    if(entry.sideName==="bottom"){
+      g+=prog.travel("move",outside,underZ,outside,underZ);
+      g+=prog.travel("move",exteriorTower[0][0],underZ,exteriorTower[1][0],underZ);
+    }else if(entry.sideName==="top"){
+      g+=prog.travel("move",exteriorTower[0][0],safe,exteriorTower[1][0],safe);
+    }else{
+      // Move laterally above the stock, then descend while fully outside its
+      // bounding box. Only the final G1 crosses into sacrificial foam.
+      g+=prog.travel("move",exteriorTower[0][0],safe,exteriorTower[1][0],safe);
+      g+=prog.travel("move",exteriorTower[0][0],exteriorTower[0][1],
+                                  exteriorTower[1][0],exteriorTower[1][1]);
+    }
+    g+=travelTo("cut",entry.pair);
+    let previous=n,allTowers=[exteriorTower,tower(entry.pair)];
+    for(const [k,i] of order.entries()){
+      const hole=contours[i];
+      g+=";"+EOL+"; *** HOLE "+(k+1)+"/"+n+" FROM VERIFIED WASTE ROUTE ***"+EOL;
+      for(const point of path(previous,i)){g+=travelTo("cut",point);allTowers.push(tower(point));}
+      for(const point of hole.bridge.slice(1)){
+        g+=travelTo("cut",point);allTowers.push(tower(point));
+      }
+      for(const point of hole.ring){
+        g+=travelTo("cut",point);allTowers.push(tower(point));
+      }
+      for(const point of hole.bridge.slice().reverse()){
+        g+=travelTo("cut",point);allTowers.push(tower(point));
+      }
+      previous=i;
+    }
+    for(const point of path(previous,n)){g+=travelTo("cut",point);allTowers.push(tower(point));}
+    g+=travelTo("cut",entry.exterior);
+    if(entry.sideName==="bottom")
+      g+=prog.travel("move",outside,underZ,outside,underZ);
+    else
+      g+=prog.travel("move",exteriorTower[0][0],safe,exteriorTower[1][0],safe);
+    g+=prog.travel("move",outside,safe,outside,safe);
+    return [g,allTowers];
+  }
+
   function holeBlock(safe, prog, contour, layout, axis, kerf, notes, sag, maxStep, gap = null, fromBelow = false) {
     // An internal contour can consist of many ruled faces, not just one
     // closed B-spline surface. Preserve the topology and traversal direction.
@@ -2774,7 +3309,7 @@ const Gen = (() => {
     }
     const scale = o.scale === undefined ? 1 : o.scale;
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
-    const model = new Model(text, o.rotation, scale), { outer, holes, secondaryContours, axis, planeA, planeB } = model.build();
+    const model = new Model(text, o.rotation, scale, o.tolerance === undefined ? .1 : o.tolerance), { outer, holes, secondaryContours, axis, planeA, planeB } = model.build();
     if (axis !== 1) throw new StepError("Поверните модель: размах должен идти вдоль струны (сейчас ось модели " + "XYZ"[axis] + ")");
 
     // - Габарит детали по направляющим
@@ -2801,6 +3336,8 @@ const Gen = (() => {
     const trim = { Length: stockLength, Width: stockWidth, Height: stockHeight, TrimEnds: (stockLength - part.span) / 2 - kerf / 2, BottomZ: o.bottomZ, RetractOffset: o.retract };
     const hasTrim = o.trim !== false && trim.TrimEnds > 0;
     const sideEntry = o.sideEntry === true;
+    if(model.wireframe && (o.pair||o.mirror||sideEntry))
+      throw new StepError("Для STEP только с кривыми пока поддержана одна обычная деталь; пара, зеркало и боковой вход заблокированы до проверки соответствия щелей");
     if (secondaryContours.length && (o.pair || o.mirror || sideEntry)) throw new StepError("Дополнительные направления: режим пары, зеркала и бокового входа ещё не поддержан; G-code заблокирован");
     if (sideEntry && (o.trim !== false || o.pair || holes.length || o.side !== 1)) throw new Error("Боковой вход справа требует одну деталь без отверстий, торцевания и входа слева");
     if (sideEntry && (stockWidth / 2 + o.leadMargin > cfg.ParkX || o.leadMargin <= 0)) throw new Error("Нет внешнего коридора между правым краем заготовки и парковкой");
@@ -2812,8 +3349,11 @@ const Gen = (() => {
     if (hasTrim && cfg.ParkX - radius < RadialMargin) warnings.push("При повороте на 90 радиус заготовки " + radius.toFixed(1) + " мм, каретки отведены только на " + cfg.ParkX.toFixed(1) + " мм: проверьте зазор");
 
     // - Шапка: сведения для симулятора и для человека
+    if(model.tolerance>.1) warnings.push("Допуск поверхности "+model.tolerance.toFixed(2)+" мм; выборочная оценка до "+model.maxCheckedDeviation.toFixed(2)+" мм до компенсации реза");
     let program = "; FM_step2gcode: " + fileName + (o.pair ? " (pair: upper reflected over gap, turned 180)" : o.mirror ? " (mirror)" : "") + EOL;
+    program += "; STEP TOLERANCE=" + model.tolerance.toFixed(3) + " mm; sampled upper estimate=" + model.maxCheckedDeviation.toFixed(3) + " mm" + EOL;
     program += "; CUT MODE=" + (o.pair ? "PAIR PIECES=2" : o.mirror ? "MIRROR PIECES=1" : "SINGLE PIECES=1") + EOL;
+    if(model.wireframe)program+="; STEP GEOMETRY=CURVES_ONLY; reconstructed ruled interpolation, original surfaces unavailable"+EOL;
     program += "; STOCK L=" + fmtG(stockWidth) + " W=" + fmtG(stockLength) + " H=" + fmtG(stockHeight) + " Z0=" + fmtG(o.bottomZ) + EOL;
     program += "; CUT F=" + fmtG(cfg.FeedRateCut) + " mm/s S=" + fmtG(cfg.WireMinPower) + ".." + fmtG(cfg.WireMaxPower) + " kerf=" + fmtG(kerf) + EOL;
     const prog = new Program(cfg, o.powerComp, 5);
@@ -2871,7 +3411,10 @@ const Gen = (() => {
       }
     }
     const addHole = (hole, layout, gap, fromBelow) => {
-      const [block, towers] = holeBlock(safe, prog, hole, layout, axis, kerf, warnings, sag, maxStep, gap, fromBelow);
+      const [block,towers] = model.wireframe && hole.entry
+        ? wireframeSlitHoleBlock(safe,prog,hole,layout,axis,kerf,warnings,sag,maxStep,
+                                 stockWidth,o.leadMargin,o.bottomZ,o.side)
+        : holeBlock(safe,prog,hole,layout,axis,kerf,warnings,sag,maxStep,gap,fromBelow);
       program += block; allTowers.push(...towers);
     };
     const addProfile = (layout, side) => {
@@ -2900,7 +3443,12 @@ const Gen = (() => {
       addProfile(lower, o.side);
     } else {
       const layout = makeLayout(o.mirror ? 1 : -1, 1, 1, o.bottomZ + stockHeight / 2);   // - зеркало: корень и конец меняются башнями
-      for (const hole of holes) addHole(hole, layout, null, false);
+      if (model.wireframe && holes.length>=1) {
+        const [block,towers]=wireframeRoutePlannerBlock(
+          safe,prog,holes,outer,layout,axis,kerf,warnings,sag,maxStep,
+          stockWidth,o.leadMargin,o.bottomZ,o.side);
+        program+=block;allTowers.push(...towers);
+      } else for (const hole of holes) addHole(hole, layout, null, false);
       addProfile(layout, o.side);
     }
     program += endBlock(cfg, prog);
@@ -2933,7 +3481,7 @@ function openStep(file, handle = null) {
   const rd = new FileReader();
   rd.onload = () => {
     stepFile = { name: file.name, text: String(rd.result), handle };
-    modelRotation = Gen.identityRotation(); $("gnScale").value = 100;
+    modelRotation = Gen.identityRotation(); $("gnScale").value = 100; $("gnTolerance").value = "0.1";
     $("gnFile").textContent = file.name;
     // Preliminary validated F2 setup. The 250 mm vertical travel allows
     // only 10 mm overhead above a 240 mm high blank with bottom at Z=0.
@@ -2963,7 +3511,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
   $("gnDone").hidden = true;
   try {
     const r = Gen.buildProgram(stepFile.text, stepFile.name, {
-      rotation: modelRotation, scale: n("gnScale") / 100,
+      rotation: modelRotation, scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
       clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair",
     });
