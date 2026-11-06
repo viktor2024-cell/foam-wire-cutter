@@ -211,7 +211,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       <label>Масштаб, % <input id="gnScale" type="number" min="0.01" step="1" value="100" style="width:85px"></label>
     </div>
     <div class="row" id="gnMove" aria-label="Перемещение модели">
-      <span>Переместить модель, шаг 5 мм:</span>
+      <span>Переместить заготовку и модель, шаг 5 мм:</span>
       <button data-axis="0" data-step="-1" aria-label="Переместить модель по X на минус 5 мм"><span style="color:#ff0000">X</span> −</button>
       <button data-axis="0" data-step="1" aria-label="Переместить модель по X на плюс 5 мм"><span style="color:#ff0000">X</span> +</button>
       <button data-axis="1" data-step="-1" aria-label="Переместить модель по Y на минус 5 мм"><span style="color:#00ff00">Y</span> −</button>
@@ -221,7 +221,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       <button id="gnResetOffset">По центру</button>
       <span id="gnOffset">X 0 · Y 0 · Z 0 мм</span>
     </div>
-    <div class="note">X — вдоль струны (красная ось), Y — поперёк (зелёная), Z — вверх (синяя). Смещение задано относительно центра заготовки; заготовка и стол остаются на месте.</div>
+    <div class="note">X — вдоль струны (красная ось), Y — поперёк (зелёная), Z — вверх (синяя). Смещение перемещает модель вместе с заготовкой относительно станка и оси поворотного стола. Авторазмещение рассчитывает допустимые ходы кареток и проверяет результат обычным генератором.</div>
     <div class="note" id="gnFit" role="status">Откройте STEP для проверки размещения.</div>
   </section>
   <section class="box">
@@ -235,7 +235,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
   </section>
   <section class="box">
     <h2>Заготовка</h2>
-    <div class="row"><button id="gnStockFromModel" disabled>По модели +10 мм с каждой стороны</button></div>
+    <div class="row"><button id="gnStockFromModel" disabled>По модели +10 мм с каждой стороны</button><button id="gnAutoPlace" type="button" disabled>Авторазмещение: поворот + сдвиг</button></div>
     <div class="fields">
       <label>Вдоль струны<input id="gnL" type="number" step="0.01" value="340"></label>
       <label>Поперёк струны<input id="gnW" type="number" step="0.01" value="230"></label>
