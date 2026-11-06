@@ -87,6 +87,7 @@ test('3D start pick chooses active pair and blocks midcurve starts on open profi
  const end=source.indexOf("  const guideModeButton = ",start);
  assert.ok(start>0&&end>start);
  const ctx={
+  document:{getElementById:()=>({})},
   savedGuidePairs:[[197,544],[337,681]],guideOp:{value:'0'},
   guideProgress:{value:'50'},guideEntryResult:{textContent:''},
   geometry:{auxiliaryCurves:[
