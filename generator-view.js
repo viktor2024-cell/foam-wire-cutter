@@ -75,6 +75,30 @@ const generatorPreview = (() => {
   }
   guideOp.addEventListener('change',updateGuideMotion);
   guideProgress.addEventListener('input',updateGuideMotion);
+  document.getElementById('gnGuideDiagnostic').addEventListener('click',()=>{
+    if(!stepFile || !savedGuidePairs.length){
+      guideFeedback('Выберите и подтвердите хотя бы одну пару направляющих.');
+      return;
+    }
+    try {
+      const n = id=>Number(document.getElementById(id).value);
+      const report=Gen.manualGuideDiagnostics(stepFile.text,savedGuidePairs,{
+        rotation:modelRotation,offset:[...modelOffset],scale:n('gnScale')/100,
+        tolerance:n('gnTolerance'),stock:[n('gnL'),n('gnW'),n('gnH')],
+        bottomZ:n('gnZ'),samples:128
+      });
+      const blob=new Blob([JSON.stringify(report,null,2)],{type:'application/json'});
+      const url=URL.createObjectURL(blob),a=document.createElement('a');
+      a.href=url;a.download=stepFile.name.replace(/\\.(stp|step)$/i,'')+'-motion-DIAGNOSTIC.json';
+      document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+      const summary=report.operations.map(op=>op.operation+' #'+op.ids.join('/#')+
+        ': X '+op.bounds.transverse.map(v=>v.toFixed(1)).join('…')+
+        ', Z '+op.bounds.z.map(v=>v.toFixed(1)).join('…')+
+        (op.insideEnvelope?' мм (в ходах)':' мм (ВНЕ ХОДОВ)')).join('; ');
+      guideMotion.textContent='Экспортировано '+report.operations.length+
+        ' диагностических операций: '+summary+'. Это НЕ G-code.';
+    } catch(e) {guideFeedback('Не удалось рассчитать диагностическую траекторию: '+e.message);}
+  });
 
   const guideConfirmButton = document.getElementById('gnGuideConfirm');
   // Keep Three.js navigation intact; a 3 px dot marks the pick cursor centre.
