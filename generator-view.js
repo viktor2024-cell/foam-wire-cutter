@@ -134,7 +134,7 @@ const generatorPreview = (() => {
     guideDot.style.display = 'none';
   });
   renderer.domElement.addEventListener('contextmenu', e => {
-    if (guideMode) e.preventDefault();
+    if (guideMode || e.ctrlKey || e.metaKey || e.altKey) e.preventDefault();
   });
   renderer.domElement.addEventListener('pointerdown', e => {
     if (!guideMode) return;
