@@ -79,6 +79,17 @@ const generatorPreview = (() => {
     if ([...guideOp.options].some(o=>o.value===current)) guideOp.value=current;
     else guideOp.value=String(Math.max(0,savedGuidePairs.length-1));
     updateGuideMotion();
+    const orderLabel=document.getElementById('gnCutOrder').value==='B0_B90'?'B0 → B90':'B90 → B0';
+    const trimming=document.getElementById('gnTrim').checked?
+      'Торцевание B'+document.getElementById('gnTrimAngle').value+' → ':'';
+    const mixed=!!geometry?.auxiliaryCurves?.length;
+    const blocked=geometry?.secondaryCount>0&&
+      document.getElementById('gnCutOrder').value==='B0_B90';
+    document.getElementById('gnOrderExplanation').textContent=
+      'План: '+trimming+orderLabel+'. '+
+      (mixed?'Для вспомогательных кривых это только диагностическая последовательность, G-code F4 до проверки сохранности детали заблокирован.':
+        blocked?'ВНИМАНИЕ: B0 первым может освободить деталь; этот порядок до дополнительной проверки заблокирован.':
+        'При поддерживаемой геометрии генератор сформирует G-code с указанными параметрами.');
   }
   guideOp.addEventListener('change',updateGuideMotion);
   guideProgress.addEventListener('input',updateGuideMotion);
@@ -125,10 +136,11 @@ const generatorPreview = (() => {
   });
   document.getElementById('gnTrimAngle').addEventListener('change',()=>{
     guideEntryResult.textContent='Изменён угол торцевания: повторите проверку.';
-    rebuild();
+    rebuild(); refreshGuideOperations();
   });
   document.getElementById('gnTrim').addEventListener('change',()=>{
     guideEntryResult.textContent='Изменён режим торцевания: повторите проверку.';
+    refreshGuideOperations();
   });
   document.getElementById('gnGuideDiagnostic').addEventListener('click',()=>{
     try {
