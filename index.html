@@ -3846,6 +3846,90 @@ const Gen = (() => {
       power: [prog.minPower, prog.maxPower, prog.changes],
       ...(cfg.PlacementProbe?{probeTargets:prog.probeTargets}: {}) };
   }
+
+  // Find a common machine-frame translation of the STEP model AND stock.
+  // First derive the affine response of every actual carriage target to X/Y/Z
+  // displacement (four diagnostic posts, no hardware or file export).
+  // Then project the zero-offset candidate onto the intersection of machine
+  // travel and translated stock bounds. The final post is ALWAYS normal.
+  function autoPlace(text,fileName,o) {
+    if(o.pair||o.mirror||o.sideEntry)
+      throw new StepError("Авторазмещение: сначала отключите пару, зеркало и боковой вход");
+    if(o.manualGuidePairs?.length)
+      throw new StepError("Авторазмещение ручных пар F4 пока не поддерживается");
+    const step=1,base={...o,offset:[0,0,0],_autoPlacementProbe:true};
+    const probes=[];
+    for(let k=0;k<4;k++){
+      const offset=k===0?[0,0,0]:[0,0,0].map((v,i)=>i===k-1?step:v);
+      probes.push(buildProgram(text,fileName,{...base,offset}).probeTargets);
+    }
+    const n=probes[0].length;
+    if(!n||probes.some(p=>p.length!==n))
+      throw new StepError("Авторазмещение: изменяется последовательность операций при смещении");
+    const constraints=[];
+    const add=(a,b)=>{
+      const norm=a.reduce((z,v)=>z+v*v,0);
+      if(norm>1e-18) constraints.push({a,b,norm});
+      else if(b<-.001) throw new StepError("Авторазмещение: фиксированный ход выходит за пределы станка");
+    };
+    const limits=[CONFIG.HorizontalTravel/2,0,CONFIG.HorizontalTravel/2,0];
+    const lo=[-limits[0],0,-limits[2],0];
+    const hi=[limits[0],CONFIG.VerticalTravel,limits[2],CONFIG.VerticalTravel];
+    const reserve=.10; // small numerical margin on computed carriage targets
+    for(let i=0;i<n;i++){
+      for(let k=0;k<4;k++){
+        const value=probes[0][i][k];
+        const a=[1,2,3].map(j=>(probes[j][i][k]-value)/step);
+        add(a,hi[k]-reserve-value);
+        add(a.map(v=>-v),value-lo[k]-reserve);
+      }
+    }
+    const [L,W,H]=o.stock,clear=o.clearance||0,bottom=o.bottomZ;
+    const xLimit=CONFIG.FieldWidth/2-L/2;
+    const yLimit=CONFIG.HorizontalTravel/2-W/2;
+    add([1,0,0],xLimit); add([-1,0,0],xLimit);
+    add([0,1,0],yLimit); add([0,-1,0],yLimit);
+    add([0,0,1],CONFIG.VerticalTravel-(bottom+H+clear));
+    add([0,0,-1],bottom);
+    // When the table actually rotates to B90, X and Y stock spans exchange.
+    if(o.trim!==false&&Number(o.trimAngle)===90){
+      const xr=CONFIG.HorizontalTravel/2-L/2;
+      const yr=CONFIG.FieldWidth/2-W/2;
+      add([1,0,0],xr);add([-1,0,0],xr);
+      add([0,1,0],yr);add([0,-1,0],yr);
+    }
+    // Dykstra projections compute the nearest feasible offset to the origin
+    // in a convex intersection, instead of guessing a 5 mm search grid.
+    const correction=new Float64Array(constraints.length);
+    const position=[0,0,0];
+    let violation=Infinity;
+    for(let iteration=0;iteration<200;iteration++){
+      for(let i=0;i<constraints.length;i++){
+        const {a,b,norm}=constraints[i];
+        const old=correction[i];
+        const d=a[0]*position[0]+a[1]*position[1]+a[2]*position[2]+old*norm-b;
+        const fresh=Math.max(0,d/norm);
+        const diff=old-fresh;
+        position[0]+=diff*a[0];position[1]+=diff*a[1];position[2]+=diff*a[2];
+        correction[i]=fresh;
+      }
+      if(iteration%10===9){
+        violation=0;
+        for(const {a,b} of constraints)
+          violation=Math.max(violation,a[0]*position[0]+a[1]*position[1]+a[2]*position[2]-b);
+        if(violation<.0005) break;
+      }
+    }
+    if(violation>.002||position.some(v=>!Number.isFinite(v)))
+      throw new StepError("Не найдено смещение, укладывающее все движения в ходы кареток");
+    const offset=position.map(v=>Math.round(v*1000)/1000);
+    // Quantization can push a very tight fit outside a limit. Never
+    // return an unchecked suggestion or bypass the normal postprocessor.
+    const result=buildProgram(text,fileName,{...o,offset,_autoPlacementProbe:false});
+    return {offset,rotation:o.rotation||identityRotation(),program:result.program,
+      points:result.points,displacement:Math.hypot(...offset),
+      warnings:result.warnings,geometry:result.part};
+  }
   // Preliminary F4 two-carriage motion from explicitly assigned guide pairs.
   // Coordinates are machine-frame candidates, NOT verified cutting moves.
   // Conservative two-carriage approach/exit inspection. A wire is a line
@@ -4419,7 +4503,7 @@ const Gen = (() => {
       warnings:['F4 review only: machine output, copy and export disabled',
         'Start and exit cutting leads, kerf side, safe B rotation and preserved STEP solid are NOT validated']};
   }
-  return { buildProgram, buildF4Program, buildF4VisualPreview, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, resolveGuideStart, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
+  return { buildProgram, autoPlace, buildF4Program, buildF4VisualPreview, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, resolveGuideStart, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
 })();
 
 // ---------------------------------------------------------------------------------------------
