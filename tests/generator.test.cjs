@@ -937,5 +937,5 @@ test('operator-directed F4 outputs actual G-code with two tower coordinates and 
  const broken=JSON.parse(JSON.stringify(base));
  broken.stock=[1000,200,70];
  assert.throws(()=>gen.buildF4Program(step,[[910005,910006]],broken),
-  /выходит за физические ходы|Превышен лимит/);
+  /выходит за физические ходы|превышает расстояние между башнями|Превышен лимит/);
 });
