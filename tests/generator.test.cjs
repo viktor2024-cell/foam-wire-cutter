@@ -788,3 +788,54 @@ test('F4 entry/exit rejects out-of-range approach positions',()=>{
  assert.equal(r.entry.candidates[0].withinMachineTravel,false);
  assert.ok(r.entry.candidates.some(c=>c.status==='CUTTING_LEAD_REQUIRED'));
 });
+
+
+test('stock trim B90 and B0 are distinct machine-frame operations',()=>{
+ const stock=[90,170,60];
+ for(const angle of [90,0]){
+  const r=gen.buildProgram(fixture,'split-profile.stp',options({
+    stock,trim:true,trimAngle:angle,cutOrder:'B90_B0'
+  }));
+  assert.match(r.program,new RegExp('TRIM B='+angle+' ENABLED=1'));
+  assert.match(r.program,new RegExp('Rotation B'+angle+' for trimming'));
+  assert.match(r.program,/TRIM BLOCK/);
+  const rotations=[...r.program.matchAll(/^G00 B([-\d.]+)/gm)].map(x=>Number(x[1]));
+  if(angle===90)assert.ok(rotations.includes(90));
+  else assert.ok(rotations.every(x=>x===0));
+ }
+ assert.throws(()=>gen.buildProgram(fixture,'test.stp',options({
+  stock,trim:true,trimAngle:45
+ })),/Угол торцевания/);
+ assert.throws(()=>gen.buildProgram(fixture,'test.stp',options({
+  stock,trim:true,cutOrder:'WRONG'
+ })),/Порядок должен быть/);
+});
+test('selected B0/B90 order cannot silently reverse solid secondary operations',()=>{
+ const step=transverseFixture();
+ const stock=[50,140,60];
+ const permitted=gen.buildProgram(step,'test.stp',options({
+   stock,cutOrder:'B90_B0',trim:false
+ }));
+ assert.ok(permitted.program.indexOf('SECONDARY CUT')<permitted.program.indexOf('corner entry, upper first'));
+ assert.throws(()=>gen.buildProgram(step,'test.stp',options({
+   stock,cutOrder:'B0_B90',trim:false
+ })),/наружный профиль B0 может освободить деталь/);
+});
+test('manual F4 planning follows trim-first and selected B0/B90 order without generating machine instructions',{
+ skip:!process.env.F4_11_STEP
+},()=>{
+ const source=fs.readFileSync(process.env.F4_11_STEP,'utf8');
+ const pairIds=[[197,544],[337,681]];
+ for(const [cutOrder,expected] of [
+  ['B0_B90',[0,90]],['B90_B0',[90,0]]
+ ]){
+  const plan=gen.manualGuideDiagnostics(source,pairIds,{
+   stock:[100,300,180],bottomZ:5,clearance:20,kerf:1,
+   trim:true,trimAngle:0,cutOrder
+  });
+  assert.deepEqual(Array.from(plan.operations,o=>o.angle),expected);
+  assert.deepEqual(Array.from(plan.plannedSequence,o=>o.angle),[0,...expected]);
+  assert.equal(plan.trimOperation.angle,0);
+  assert.equal(plan.approvedForGcode,false);
+ }
+});
