@@ -4056,9 +4056,10 @@ const Gen = (() => {
       const along=op.angle===0?1:0,cross=along===1?0:1;
       const crossBase=CONFIG.HorizontalTravel/2+(along===1?offset[1]:offset[0]);
       const zBase=(Number(o.bottomZ)||0)+stock[2]/2+offset[2];
+      const alongShift=op.angle===0?offset[0]:-offset[1];
       return [-1,1].map((sign,i)=>{
         const p=origin.slice();
-        p[along]+=sign*CONFIG.FieldWidth/2;
+        p[along]+=sign*CONFIG.FieldWidth/2-alongShift;
         p[cross]+=pos[i][0]-crossBase;
         p[2]+=pos[i][1]-zBase;
         return p;
