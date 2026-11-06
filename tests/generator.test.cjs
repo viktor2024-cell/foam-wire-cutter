@@ -934,6 +934,15 @@ test('operator-directed F4 outputs actual G-code with two tower coordinates and 
  assert.match(p.program,/M03 S500/);
  assert.equal(p.operatorDirected,true);
  assert.ok(p.points>0);
+ // Invalid motion parameters must be rejected rather than normalized or
+ // passed through to the postprocessor.
+ for(const invalid of [
+   {kerf:0},{kerf:-1},{clearance:-1},{retract:-1},{bottomZ:-1},
+   {minS:1000,maxS:500}
+ ]){
+   assert.throws(()=>gen.buildF4Program(step,[[910005,910006]],{...base,...invalid}),
+     /Некорректные параметры F4/,JSON.stringify(invalid));
+ }
  const broken=JSON.parse(JSON.stringify(base));
  broken.stock=[1000,200,70];
  assert.throws(()=>gen.buildF4Program(step,[[910005,910006]],broken),
