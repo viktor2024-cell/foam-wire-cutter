@@ -1912,7 +1912,7 @@ const Gen = (() => {
     // closed STEP curves duplicate their seam point and otherwise bias
     // the matching according to where STEP happened to start the loop.
     const center=curve=>coords.map(k=>{
-      let sum=0;for(let i=0;i<count;i++)sum+=at(curve,i/count)[k];
+      let sum=0;for(let i=0;i<count;i++)sum+=at(curve,(i+.5)/count)[k];
       return sum/count;
     });
     const ca=center(a),cb=center(b);
