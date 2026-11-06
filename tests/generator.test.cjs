@@ -4,7 +4,7 @@ const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
 // Exercise the production generator without DOM stubs or a second implementation.
 const source=html.slice(html.indexOf('const Gen ='),html.indexOf('//  Вкладки и экран генератора'))
- .replace('return { buildProgram, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };','return { buildProgram, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel, Model, sampleFace, Program, startBlock, endBlock };');
+ .replace('return { buildProgram, manualGuideDiagnostics, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };','return { buildProgram, manualGuideDiagnostics, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel, Model, sampleFace, Program, startBlock, endBlock };');
 const gen=vm.runInNewContext(source+';Gen');
 const fixture=fs.readFileSync(path.join(__dirname,'fixtures/split-profile.stp'),'utf8');
 // Construct a genuine two-direction ruled STEP topology: the main sheet
@@ -660,6 +660,16 @@ test('external F4-11 ambiguous BREP must still preview model edges and selectabl
  assert.deepEqual(Array.from(g.auxiliaryCurves,c=>c.id),[197,337,544,681,694,707]);
  assert.ok(g.size.every(v=>Number.isFinite(v)&&v>0));
  assert.equal(g.diagnosticOnly,true);
+ const motion=gen.manualGuideDiagnostics(step,[[197,544],[337,681]],{
+  stock:[100,300,180],bottomZ:5,samples:128
+ });
+ assert.equal(motion.operations.length,2);
+ assert.deepEqual(Array.from(motion.operations,x=>x.angle),[0,90]);
+ assert.ok(motion.operations.every(x=>x.samples.length===129));
+ assert.ok(motion.operations.every(x=>x.samples.every(p=>
+  [...p.left,...p.right].every(Number.isFinite))));
+ assert.equal(motion.approvedForGcode,false);
+
  assert.throws(()=>gen.buildProgram(step,'F4-11.stp',options()),/Ручных подтверждённых пар не передано/);
  assert.throws(()=>gen.buildProgram(step,'F4-11.stp',options({
   manualGuidePairs:[[197,544],[337,681]]
