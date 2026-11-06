@@ -3098,10 +3098,11 @@ const Gen = (() => {
   }
   function trimBlock(cfg, trim, prog) {
     const safe = trim.BottomZ + trim.Height + cfg.TravelClearance, y0 = trim.Length / 2 - trim.TrimEnds;
-    let g = ";" + EOL + "; *** TRIM BLOCK: L=" + fmtG(trim.Length) + " W=" + fmtG(trim.Width) + " H=" + fmtG(trim.Height) + ", LongAxis=X ***" + EOL;
+    let g = ";" + EOL + "; *** TRIM BLOCK B"+trim.Angle+": transverse="+fmtG(trim.Length)+
+      " wireSpan="+fmtG(trim.Width)+" H="+fmtG(trim.Height)+" ***"+EOL;
     for (const y of [-y0, y0]) {
       const yOut = y + (y < 0 || Object.is(y, -0) ? -trim.RetractOffset : trim.RetractOffset);
-      g += "; - Trim Y=" + fix2(y) + " at angle 90" + EOL;
+      g += "; - Trim Y=" + fix2(y) + " at B"+trim.Angle+EOL;
       g += prog.travel("move", y, safe, y, safe);                 // - к точке входа на высоте холостых ходов
       g += prog.travel("cut", y, trim.BottomZ, y, trim.BottomZ);  // - рез вниз
       g += prog.travel("cut", yOut, trim.BottomZ, yOut, trim.BottomZ);   // - отвод от центра, в отход
