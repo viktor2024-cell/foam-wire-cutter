@@ -15,12 +15,26 @@ const generatorPreview = (() => {
   let guideMode = false, pendingGuide = [], savedGuidePairs = [], curveObjects = [];
   const guideModeButton = document.getElementById('gnGuideMode');
   const guideStatus = document.getElementById('gnGuideStatus');
+  const guideConfirmButton = document.getElementById('gnGuideConfirm');
+  // Keep Three.js navigation intact; a 3 px dot marks the pick cursor centre.
+  host.style.position = 'relative';
+  const guideDot = document.createElement('div');
+  Object.assign(guideDot.style, {
+    position:'absolute', width:'3px', height:'3px',
+    borderRadius:'50%', background:'#ffffff', pointerEvents:'none',
+    transform:'translate(-50%, -50%)', display:'none', zIndex:'20',
+    boxShadow:'0 0 0 1px #17202b'
+  });
+  host.appendChild(guideDot);
   const guideColor = id => savedGuidePairs.some(p => p.includes(id)) ? 0x49cc83 :
     pendingGuide.includes(id) ? 0xffda54 : 0xc235a6;
   function guideFeedback(message) {
+    guideConfirmButton.disabled = !guideMode || pendingGuide.length !== 2;
     guideStatus.textContent = message || (pendingGuide.length
-      ? 'Выбрана #' + pendingGuide[0] + '. Щёлкните вторую кривую, затем Enter.'
-      : 'Пар: ' + savedGuidePairs.length + '. Выберите две кривые мышкой и нажмите Enter.');
+      ? (pendingGuide.length === 2
+        ? 'Выбраны #' + pendingGuide.join(' и #') + '. Нажмите ПОДТВЕРДИТЬ, правую кнопку мыши или Enter.'
+        : 'Выбрана #' + pendingGuide[0] + '. Щёлкните вторую кривую.')
+      : 'Пар: ' + savedGuidePairs.length + '. Выберите две кривые мышкой, затем ПКМ или ПОДТВЕРДИТЬ.');
     guideModeButton.setAttribute('aria-pressed', String(guideMode));
     guideModeButton.textContent = guideMode ? 'Выбор кривых: включён' : 'Выбрать кривые в 3D';
     renderer.domElement.style.cursor = guideMode ? 'crosshair' : '';
@@ -39,7 +53,7 @@ const generatorPreview = (() => {
   }
   function confirmGuidePair() {
     if (!guideMode || pendingGuide.length !== 2) {
-      if (guideMode) guideFeedback('Нужно выбрать две разные кривые, затем Enter.');
+      if (guideMode) guideFeedback('Нужно выбрать две разные кривые, затем нажать ПОДТВЕРДИТЬ, ПКМ или Enter.');
       return false;
     }
     const [idA, idB] = pendingGuide;
@@ -89,12 +103,35 @@ const generatorPreview = (() => {
     }
     return winner;
   }
-  let pointerDown = null;
+  let pointerDown = null, rightPointerDown = null;
+  renderer.domElement.addEventListener('pointermove', e => {
+    if (!guideMode) return;
+    const rect = renderer.domElement.getBoundingClientRect();
+    guideDot.style.left = (e.clientX - rect.left) + 'px';
+    guideDot.style.top = (e.clientY - rect.top) + 'px';
+    guideDot.style.display = 'block';
+  });
+  renderer.domElement.addEventListener('pointerleave', () => {
+    pointerDown = rightPointerDown = null;
+    guideDot.style.display = 'none';
+  });
+  renderer.domElement.addEventListener('contextmenu', e => {
+    if (guideMode) e.preventDefault();
+  });
   renderer.domElement.addEventListener('pointerdown', e => {
-    if (guideMode && e.button === 0) pointerDown = [e.clientX,e.clientY];
+    if (!guideMode) return;
+    if (e.button === 0) pointerDown = [e.clientX,e.clientY];
+    if (e.button === 2) rightPointerDown = [e.clientX,e.clientY];
   });
   renderer.domElement.addEventListener('pointerup', e => {
-    if (!guideMode || !pointerDown || e.button !== 0) return;
+    if (!guideMode) return;
+    if (e.button === 2 && rightPointerDown) {
+      const moved = Math.hypot(e.clientX-rightPointerDown[0], e.clientY-rightPointerDown[1]);
+      rightPointerDown = null;
+      if (moved <= 5) confirmGuidePair(); // right drag still pans camera
+      return;
+    }
+    if (!pointerDown || e.button !== 0) return;
     const moved=Math.hypot(e.clientX-pointerDown[0],e.clientY-pointerDown[1]);
     pointerDown = null;
     if (moved > 5) return; // camera drag, not a pick
@@ -104,9 +141,11 @@ const generatorPreview = (() => {
   guideModeButton.addEventListener('click', () => {
     guideMode = !guideMode;
     pendingGuide = [];
-    guideFeedback(guideMode ? 'Щёлкните первую и вторую кривую, затем Enter.' : undefined);
+    guideDot.style.display = 'none';
+    guideFeedback(guideMode ? 'Выберите две кривые мышкой, затем ПКМ или ПОДТВЕРДИТЬ.' : undefined);
     updateGuideColors();
   });
+  guideConfirmButton.addEventListener('click', confirmGuidePair);
   document.getElementById('gnGuideUndo').addEventListener('click', () => {
     if (pendingGuide.length) pendingGuide = [];
     else savedGuidePairs.pop();
