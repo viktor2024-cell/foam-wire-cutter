@@ -44,9 +44,10 @@ const generatorPreview = (() => {
     const a=curves.find(c=>c.id===pair[0]), b=curves.find(c=>c.id===pair[1]);
     if (!a || !b) return draw();
     const t=Number(guideProgress.value)/100;
-    const pa=guideSample(a,t),pb=guideSample(b,t);
-    // This segment joins corresponding *parameters* of the two curves.
-    // A user-supplied pair does not yet resolve phase/reversal/seam matching.
+    const {correspondence,mapB}=Gen.matchGuideCurves(a,b);
+    const pa=guideSample(a,t),pb=guideSample(b,mapB(t));
+    // Same phase and traversal matching used by the diagnostic two-tower
+    // computation: 3D segment agrees with exported point correspondence.
     const vertices=[guideToScene(pa),guideToScene(pb)];
     const lineGeo=new THREE.BufferGeometry().setFromPoints(vertices);
     guideWire=new THREE.Line(lineGeo,new THREE.LineBasicMaterial({color:0xff6c00,depthTest:false}));
@@ -56,7 +57,9 @@ const generatorPreview = (() => {
     guideMotion.textContent='Диагностика #'+pair.join('/#')+
       ' · '+Math.round(100*t)+'% · струна '+length.toFixed(1)+' мм · '+ 
       (a.fixedAxis===1?'B0':a.fixedAxis===0?'B90':'ось Z')+
-      '. Синхронизация параметрическая, вход/выход и сохранность детали НЕ проверены.';
+      ' · обход B '+(correspondence.reverse?'обратный':'прямой')+
+      ' · сдвиг начала '+correspondence.shift+'/128 · RMS '+correspondence.shapeRms.toFixed(2)+
+      ' мм. Вход/выход и сохранность детали НЕ проверены.';
     draw();
   }
   function refreshGuideOperations() {
