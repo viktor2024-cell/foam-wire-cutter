@@ -23,37 +23,61 @@ const generatorPreview = (() => {
   function redrawStartMarker() {
     if(guideStartMarker) {
       guideStartMarker.parent?.remove(guideStartMarker);
-      guideStartMarker.geometry.dispose();guideStartMarker.material.dispose();
+      guideStartMarker.traverse(obj=>{
+        obj.geometry?.dispose();obj.material?.dispose();
+      });
       guideStartMarker=null;
     }
     const ids=selectedGuidePair();
     if(!geometry || !ids || !group) return;
-    const c=geometry.auxiliaryCurves.find(x=>x.id===ids[0]);
-    if(!c)return;
-    const u=guideStartFor(ids),point=guideSample(c,u);
-    const geo=new THREE.SphereGeometry(2.5,10,8);
-    guideStartMarker=new THREE.Mesh(geo,new THREE.MeshBasicMaterial({
-      color:0xffe25b,depthTest:false
-    }));
-    guideStartMarker.position.copy(guideToScene(point));
-    guideStartMarker.renderOrder=35;group.add(guideStartMarker);
+    const a=geometry.auxiliaryCurves.find(x=>x.id===ids[0]);
+    const b=geometry.auxiliaryCurves.find(x=>x.id===ids[1]);
+    if(!a||!b)return;
+    const {mapA,mapB}=Gen.resolveGuideStart(a,b,guideStartFor(ids));
+    const positions=[
+      guideToScene(guideSample(a,mapA(0))),
+      guideToScene(guideSample(b,mapB(0)))
+    ];
+    const holder=new THREE.Group();
+    for(const p of positions){
+      const dot=new THREE.Mesh(new THREE.SphereGeometry(2.5,10,8),
+        new THREE.MeshBasicMaterial({color:0xffe25b,depthTest:false}));
+      dot.position.copy(p);dot.renderOrder=35;holder.add(dot);
+    }
+    const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(positions),
+      new THREE.LineBasicMaterial({color:0xffe25b,depthTest:false,
+        transparent:true,opacity:.75}));
+    line.renderOrder=34;holder.add(line);
+    guideStartMarker=holder;group.add(holder);
   }
   function setGuideStart(id,u) {
     const ids=selectedGuidePair();
-    if(!ids || id!==ids[0]) {
-      guideFeedback('Укажи начало на первой кривой активной пары (#'+(ids?.[0]??'?')+').');
+    if(!ids || !ids.includes(id)) {
+      guideFeedback('Выбери точку на одной из двух кривых активной пары.');
       return false;
     }
-    const curve=geometry?.auxiliaryCurves.find(c=>c.id===id);
-    if(!curve || !Number.isFinite(u))return false;
+    const a=geometry?.auxiliaryCurves.find(c=>c.id===ids[0]);
+    const b=geometry?.auxiliaryCurves.find(c=>c.id===ids[1]);
+    if(!a||!b||!Number.isFinite(u))return false;
+    const clicked=id===a.id?a:b;
     let start;
-    if(curve.closed)start=((u%1)+1)%1;
-    else {
-      if(u>.1 && u<.9) {
+    if(clicked.closed) {
+      if(id===a.id)start=((u%1)+1)%1;
+      else {
+        const {correspondence}=Gen.matchGuideCurves(a,b),offset=correspondence.shift/128;
+        start=((correspondence.reverse?offset-u:u-offset)%1+1)%1;
+      }
+    }else{
+      if(u>.1&&u<.9){
         guideFeedback('Открытый профиль: начало выбирается только у одного из двух концов.');
         return false;
       }
-      start=u>=.9?1:0;
+      const endpoint=u>=.9?1:0;
+      if(id===a.id)start=endpoint;
+      else {
+        const {correspondence}=Gen.matchGuideCurves(a,b);
+        start=correspondence.reverse?1-endpoint:endpoint;
+      }
     }
     guideStarts[pairKey(ids)]=start;
     guideProgress.value='0';
@@ -64,6 +88,7 @@ const generatorPreview = (() => {
     invalidate();
     return true;
   }
+
   const guideModeButton = document.getElementById('gnGuideMode');
   const guideStatus = document.getElementById('gnGuideStatus');
   const guideOp = document.getElementById('gnGuideOperation');
@@ -450,7 +475,7 @@ const generatorPreview = (() => {
     startButton.textContent=startMode?'Начало реза: выбор в 3D':'Задать начало реза';
     guideDot.style.display='none';
     guideFeedback(startMode?
-      'Выбери точку на первой кривой активной пары. Открытый профиль — только концы.':
+      'Выбери точку на любом профиле активной пары. Открытый профиль — только концы.':
       'Режим выбора начала выключен.');
     renderer.domElement.style.cursor=startMode?'crosshair':'';
   });
