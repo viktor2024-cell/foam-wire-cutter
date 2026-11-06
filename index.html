@@ -3748,14 +3748,20 @@ const Gen = (() => {
       }
       const insideEnvelope=bounds[0]>=0&&bounds[1]<=CONFIG.HorizontalTravel&&
         bounds[2]>=0&&bounds[3]<=CONFIG.VerticalTravel;
+      const clearance=Math.max(0,Number(o.clearance)||0);
+      const insideWithClearance=insideEnvelope&&bounds[3]+clearance<=CONFIG.VerticalTravel;
+      const insideStockHeight=bounds[2]>=bottom-1e-6&&bounds[3]<=bottom+stock[2]+1e-6;
       operations.push({ids:ids.slice(),angle:axis===1?0:90,operation:axisName,closed:a.closed,
         planeSpan:Math.abs(den),towersDistance,samples,
         bounds:{transverse:[bounds[0],bounds[1]],z:[bounds[2],bounds[3]]},
-        insideEnvelope,approvedForGcode:false,
+        insideEnvelope,insideWithClearance,insideStockHeight,approvedForGcode:false,
         warnings:["Направление и начало синхронизации точек не сертифицированы",
           "Прямолинейная струна не проверена на сохранность детали",
           "Не определены безопасные вход и выход", 
-          ...(insideEnvelope?[]:["Предварительная траектория выходит за пределы рабочих ходов"]) ]});
+          ...(insideEnvelope?[]:["Предварительная траектория выходит за пределы рабочих ходов"]),
+          ...(insideWithClearance?[]:["Недостаточен заданный запас по верхней границе Z"]),
+          ...(insideStockHeight?[]:["Часть траектории находится вне заданной высоты заготовки"]),
+          "Кинематика поворота стола и знак поперечной оси B90 требуют калибровки"]});
     }
     return {schema:"foam-wire-f4-diagnostic-motion-v1",operations,origin,
       approvedForGcode:false,notes:"Диагностическая экстраполяция на две каретки. Не станочный код. Не проверена геометрия удаляемого материала."};
