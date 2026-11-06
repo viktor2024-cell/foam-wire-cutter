@@ -104,6 +104,24 @@ const generatorPreview = (() => {
     return winner;
   }
   let pointerDown = null, rightPointerDown = null;
+  // Handle right button BEFORE OrbitControls' bubble listener. Its built-in
+  // Ctrl/Meta/Shift inversion converts PAN into ROTATE; Alt is not inverted.
+  // Accordingly Ctrl+RMB => PAN action (inverted to ROTATE), Alt+RMB =>
+  // PAN action, and unmodified RMB is reserved for pair confirmation.
+  renderer.domElement.addEventListener('pointerdown', e => {
+    if (e.button !== 2) return;
+    if (e.ctrlKey || e.metaKey) {
+      controls.mouseButtons.RIGHT = THREE.MOUSE.PAN; // Ctrl swaps pan -> rotate
+      rightPointerDown = null;
+    } else if (e.altKey) {
+      controls.mouseButtons.RIGHT = THREE.MOUSE.PAN; // Alt does not swap in this OrbitControls
+      rightPointerDown = null;
+    } else {
+      rightPointerDown = guideMode ? [e.clientX,e.clientY] : null;
+      e.preventDefault();
+      e.stopImmediatePropagation(); // no accidental camera pan on plain RMB
+    }
+  }, true);
   renderer.domElement.addEventListener('pointermove', e => {
     if (!guideMode) return;
     const rect = renderer.domElement.getBoundingClientRect();
@@ -121,14 +139,14 @@ const generatorPreview = (() => {
   renderer.domElement.addEventListener('pointerdown', e => {
     if (!guideMode) return;
     if (e.button === 0) pointerDown = [e.clientX,e.clientY];
-    if (e.button === 2) rightPointerDown = [e.clientX,e.clientY];
+    // Plain RMB is tracked by the capture-phase listener above.
   });
   renderer.domElement.addEventListener('pointerup', e => {
     if (!guideMode) return;
     if (e.button === 2 && rightPointerDown) {
       const moved = Math.hypot(e.clientX-rightPointerDown[0], e.clientY-rightPointerDown[1]);
       rightPointerDown = null;
-      if (moved <= 5) confirmGuidePair(); // right drag still pans camera
+      if (moved <= 5) confirmGuidePair(); // plain RMB click confirms
       return;
     }
     if (!pointerDown || e.button !== 0) return;
