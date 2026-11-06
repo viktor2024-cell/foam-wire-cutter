@@ -4,7 +4,7 @@ const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
 // Exercise the production generator without DOM stubs or a second implementation.
 const source=html.slice(html.indexOf('const Gen ='),html.indexOf('//  Вкладки и экран генератора'))
- .replace('return { buildProgram, manualGuideDiagnostics, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };','return { buildProgram, manualGuideDiagnostics, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel, Model, sampleFace, Program, startBlock, endBlock };');
+ .replace('return { buildProgram, manualGuideDiagnostics, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };','return { buildProgram, manualGuideDiagnostics, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel, Model, sampleFace, Program, startBlock, endBlock };');
 const gen=vm.runInNewContext(source+';Gen');
 const fixture=fs.readFileSync(path.join(__dirname,'fixtures/split-profile.stp'),'utf8');
 // Construct a genuine two-direction ruled STEP topology: the main sheet
