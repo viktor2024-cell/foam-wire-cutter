@@ -51,3 +51,32 @@ test('manual mouse confirmation, explicit button and 3 px centre marker',()=>{
  assert.match(source,/guideDot\.style\.left/);
  assert.match(source,/width:'3px', height:'3px'/);
 });
+
+test('right-button gestures have explicit navigation roles',()=>{
+ const start=source.indexOf('  // Handle right button BEFORE OrbitControls');
+ const end=source.indexOf("  renderer.domElement.addEventListener('pointermove'",start);
+ assert.ok(start>=0 && end>start);
+ const handlers={};
+ const ctx={THREE:{MOUSE:{PAN:2,ROTATE:0}},
+   controls:{mouseButtons:{RIGHT:2}},guideMode:true,rightPointerDown:null,
+   renderer:{domElement:{addEventListener(event,fn,capture){handlers[event]=fn;assert.equal(capture,true)}}}};
+ vm.createContext(ctx);
+ vm.runInContext(source.slice(start,end),ctx);
+ function click(mod){
+   let prevented=false,stopped=false;
+   handlers.pointerdown({button:2,clientX:42,clientY:78,ctrlKey:false,metaKey:false,altKey:false,
+     preventDefault(){prevented=true},stopImmediatePropagation(){stopped=true},...mod});
+   return {prevented,stopped,down:ctx.rightPointerDown,action:ctx.controls.mouseButtons.RIGHT};
+ }
+ const plain=click({});
+ assert.deepEqual(JSON.parse(JSON.stringify(plain.down)),[42,78]);
+ assert.equal(plain.prevented,true);assert.equal(plain.stopped,true);
+ const ctrl=click({ctrlKey:true});
+ assert.equal(ctrl.down,null);assert.equal(ctrl.stopped,false);
+ assert.equal(ctrl.action,ctx.THREE.MOUSE.PAN);
+ const alt=click({altKey:true});
+ assert.equal(alt.down,null);assert.equal(alt.stopped,false);
+ assert.equal(alt.action,ctx.THREE.MOUSE.PAN);
+ // The bundled OrbitControls swaps PAN to ROTATE for ctrlKey,
+ // and leaves PAN as PAN for altKey.
+});
