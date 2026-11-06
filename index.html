@@ -1897,8 +1897,14 @@ const Gen = (() => {
       const index=Math.max(0,Math.min(last,u*last)),i=Math.min(last-1,Math.floor(index)),t=index-i;
       return curve.points[i].map((v,k)=>v+(curve.points[i+1][k]-v)*t);
     };
-    const ca=coords.map(k=>a.points.reduce((n,p)=>n+p[k],0)/a.points.length);
-    const cb=coords.map(k=>b.points.reduce((n,p)=>n+p[k],0)/b.points.length);
+    // Use uniformly sampled centroids, not raw control/sample sums:
+    // closed STEP curves duplicate their seam point and otherwise bias
+    // the matching according to where STEP happened to start the loop.
+    const center=curve=>coords.map(k=>{
+      let sum=0;for(let i=0;i<count;i++)sum+=at(curve,i/count)[k];
+      return sum/count;
+    });
+    const ca=center(a),cb=center(b);
     let best=null;
     for(const reverse of [false,true])for(let shift=0;shift<(a.closed?count:1);shift++) {
       let loss=0;
