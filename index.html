@@ -1449,7 +1449,7 @@ function requireMachinableProgram() {
   return true;
 }
 function generatorSignature() {
-  return JSON.stringify([stepFile?.text, modelRotation, modelOffset, generatorPreview.getGuidePairs(), [...document.querySelectorAll('#panelGen input, #panelGen select')].map(e=>[e.id,e.type==='checkbox'?e.checked:e.value])]);
+  return JSON.stringify([stepFile?.text, modelRotation, modelOffset, generatorPreview.getGuidePairs(),generatorPreview.getGuideStarts(), [...document.querySelectorAll('#panelGen input, #panelGen select')].map(e=>[e.id,e.type==='checkbox'?e.checked:e.value])]);
 }
 function requireCurrentProgram() {
   if (generationStamp !== null && generationStamp !== generatorSignature()) {
@@ -4229,7 +4229,7 @@ const Gen = (() => {
       throw new StepError("Режим зеркальной/двойной детали для ручных направляющих F4 не реализован");
     if(!Array.isArray(o.stock)||o.stock.length!==3||
        ![...o.stock,o.bottomZ,o.kerf,o.feed,o.minS,o.maxS,o.clearance,o.retract].every(Number.isFinite)||
-       Math.min(...o.stock,o.feed,o.minS)>0===false||o.maxS<o.minS)
+       Math.min(...o.stock,o.feed,o.minS)<=0||o.maxS<o.minS)
       throw new StepError("Некорректные параметры F4");
     const report=manualGuideDiagnostics(text,pairs,{...o,voxelSize:o.voxelSize||6});
     const cfg={...CONFIG,TravelClearance:o.clearance,FeedRateCut:o.feed,
@@ -4268,9 +4268,19 @@ const Gen = (() => {
       const check=checkTrim(cfg,task,true);
       if(check.length)throw new StepError("Торцевание B"+trim.angle+": "+check.join("; "));
       program+="; *** TRIM B"+trim.angle+" ***"+eol;
-      program+=setAngle(trim.angle)+"M03 S"+fix2(o.minS)+eol;
-      program+=trimBlock(cfg,task,p);
-      program+="M05"+eol;
+      program+=setAngle(trim.angle);
+      const safe=task.BottomZ+task.Height+cfg.TravelClearance;
+      const half=task.Length/2-task.TrimEnds;
+      for(const y of [-half,half]){
+        const outer=y+(y<=0?-task.RetractOffset:task.RetractOffset);
+        program+="; TRIM AT "+fix2(y)+" B"+trim.angle+eol+"M05"+eol;
+        program+=p.travel("move",y,safe,y,safe);
+        program+="M03 S"+fix2(o.minS)+eol;
+        program+=p.travel("cut",y,task.BottomZ,y,task.BottomZ);
+        program+=p.travel("cut",outer,task.BottomZ,outer,task.BottomZ);
+        program+=p.travel("cut",outer,safe,outer,safe);
+        program+="M05"+eol;
+      }
       warnings.push("Торцевание и отвод после него следует проверить в симуляторе");
     }
     let count=0;
