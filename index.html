@@ -178,6 +178,14 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       <span class="note">Alt + ПКМ — перемещение · Ctrl + ПКМ — поворот · ПКМ — подтвердить пару</span>
     </div>
     <div id="gnView" aria-label="Модель, заготовка и рабочая область станка"></div>
+    <div class="row" aria-label="Диагностическая траектория струны">
+      <label for="gnGuideOperation">Пара для просмотра</label>
+      <select id="gnGuideOperation" disabled aria-label="Выбранная пара кривых"></select>
+      <label for="gnGuideProgress">Проход, %</label>
+      <input id="gnGuideProgress" type="range" min="0" max="100" value="0" step="1" disabled style="flex:1; min-width:110px">
+      <span id="gnGuideProgressText">0%</span>
+    </div>
+    <div class="note" id="gnGuideMotion" role="status">Назначьте пару кривых, чтобы увидеть перемещение струны; это диагностический просмотр, не G-code.</div>
     <div class="note" id="gnEnvelopeLegend"></div>
     <div class="row" id="gnRotate" aria-label="Поворот модели">
       <span>Модель, шаг 90°:</span>
