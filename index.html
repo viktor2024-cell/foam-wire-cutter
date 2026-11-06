@@ -4231,7 +4231,8 @@ const Gen = (() => {
       throw new StepError("Режим зеркальной/двойной детали для ручных направляющих F4 не реализован");
     if(!Array.isArray(o.stock)||o.stock.length!==3||
        ![...o.stock,o.bottomZ,o.kerf,o.feed,o.minS,o.maxS,o.clearance,o.retract].every(Number.isFinite)||
-       Math.min(...o.stock,o.feed,o.minS)<=0||o.maxS<o.minS)
+       Math.min(...o.stock,o.feed,o.minS,o.kerf)<=0||o.maxS<o.minS||
+       o.bottomZ<0||o.clearance<0||o.retract<0)
       throw new StepError("Некорректные параметры F4");
     const report=manualGuideDiagnostics(text,pairs,{...o,voxelSize:o.voxelSize||6});
     const cfg={...CONFIG,TravelClearance:o.clearance,FeedRateCut:o.feed,
