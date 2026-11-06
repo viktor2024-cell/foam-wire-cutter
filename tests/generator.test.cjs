@@ -4,7 +4,7 @@ const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
 // Exercise the production generator without DOM stubs or a second implementation.
 const source=html.slice(html.indexOf('const Gen ='),html.indexOf('//  Вкладки и экран генератора'))
- .replace('return { buildProgram, manualGuideDiagnostics, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };','return { buildProgram, manualGuideDiagnostics, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel, Model, sampleFace, Program, startBlock, endBlock };');
+ .replace('return { buildProgram, manualGuideDiagnostics, inspectGuideEntryExit, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };','return { buildProgram, manualGuideDiagnostics, inspectGuideEntryExit, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel, Model, sampleFace, Program, startBlock, endBlock };');
 const gen=vm.runInNewContext(source+';Gen');
 const fixture=fs.readFileSync(path.join(__dirname,'fixtures/split-profile.stp'),'utf8');
 // Construct a genuine two-direction ruled STEP topology: the main sheet
@@ -677,6 +677,11 @@ test('external F4-11 ambiguous BREP must still preview model edges and selectabl
  assert.ok(Math.hypot(...first.profileB.map((v,k)=>v-last.profileB[k]))<1e-5);
 
  assert.equal(motion.approvedForGcode,false);
+ assert.ok(motion.operations.every(op=>op.entryExit.approvedForGcode===false));
+ assert.ok(motion.operations.every(op=>op.entryExit.entry.candidates.length===3));
+ assert.ok(motion.operations.every(op=>op.entryExit.exit.candidates.length===3));
+ assert.ok(motion.operations.every(op=>op.entryExit.entry.hasClearRapid===false));
+ assert.ok(motion.operations.every(op=>op.entryExit.exit.hasClearRapid===false));
 
  assert.throws(()=>gen.buildProgram(step,'F4-11.stp',options()),/Ручных подтверждённых пар не передано/);
  assert.throws(()=>gen.buildProgram(step,'F4-11.stp',options({
@@ -736,4 +741,36 @@ test('guide matcher resolves reversed open profile and shifted closed seam',()=>
  const start=closed.at(mk(4,pb,true),closed.mapB(0));
  const end=closed.at(mk(4,pb,true),closed.mapB(1));
  assert.ok(Math.hypot(...start.map((v,k)=>v-end[k]))<1e-6);
+});
+
+
+test('F4 entry/exit inspection distinguishes clear rapid from sweep through uncut stock',()=>{
+ const pt=(x,z)=>({left:[x,z],right:[x,z]});
+ const clear=gen.inspectGuideEntryExit([pt(100,80),pt(110,90)],[80,120,10,50],{clearance:15});
+ assert.equal(clear.entry.candidates[0].route,'ABOVE_STOCK');
+ assert.equal(clear.entry.candidates[0].rapidTravelAllowed,true);
+ assert.equal(clear.exit.candidates[0].rapidTravelAllowed,true);
+ const buried=gen.inspectGuideEntryExit([pt(100,20),pt(105,25)],[80,120,10,50],{clearance:15});
+ assert.equal(buried.entry.hasClearRapid,false);
+ assert.equal(buried.exit.hasClearRapid,false);
+ assert.ok(buried.entry.candidates.every(c=>c.requiresCuttingLead));
+ assert.equal(buried.approvedForGcode,false);
+});
+test('F4 lead check tests whole angled wire, not just its carriage endpoints',()=>{
+ const p=(left,right)=>({left,right});
+ // End towers are outside the rectangle, but the wire between them
+ // crosses the uncut foam. This must NOT be treated as a safe rapid.
+ const path=gen.inspectGuideEntryExit([
+  p([50,25],[150,25]),p([51,26],[149,26])
+ ],[80,120,10,50],{clearance:10});
+ assert.equal(path.entry.candidates[0].intersectsUncutStock,true);
+ assert.equal(path.entry.candidates[0].rapidTravelAllowed,false);
+});
+test('F4 entry/exit rejects out-of-range approach positions',()=>{
+ const pt=(x,z)=>({left:[x,z],right:[x,z]});
+ const r=gen.inspectGuideEntryExit([pt(100,45),pt(100,44)],
+   [80,120,10,240],{clearance:30,vertical:250});
+ assert.equal(r.entry.candidates[0].status,'OUT_OF_TRAVEL');
+ assert.equal(r.entry.candidates[0].withinMachineTravel,false);
+ assert.ok(r.entry.candidates.some(c=>c.status==='CUTTING_LEAD_REQUIRED'));
 });
