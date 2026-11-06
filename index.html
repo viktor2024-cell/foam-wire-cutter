@@ -4282,7 +4282,8 @@ const Gen = (() => {
     ];
     let program="; *** F4 OPERATOR-DIRECTED G-CODE ***"+eol+
       "; WARNING: UNVERIFIED LEADS AND PRESERVED SOLID - REVIEW BEFORE MACHINING"+eol+
-      "; STOCK L="+o.stock[0]+" W="+o.stock[1]+" H="+o.stock[2]+" Z0="+o.bottomZ+
+      // The simulator's L is its Y extent, W its X extent.
+      "; STOCK L="+o.stock[1]+" W="+o.stock[0]+" H="+o.stock[2]+" Z0="+o.bottomZ+
         " OX="+offset[0]+" OY="+offset[1]+" OZ="+offset[2]+eol+
       "; CUT ORDER="+report.cutOrder+" TRIM="+(report.trimOperation?"B"+report.trimAngle:"OFF")+eol+
       "$H"+eol+"G21 G90 G94"+eol+
@@ -4371,8 +4372,9 @@ const Gen = (() => {
     const lines=[
       '; *** SIMULATION ONLY / F4 UNVERIFIED / DO NOT SEND TO MACHINE ***',
       '; No homing, no verified lead-in/out, no machine-safe output.',
-      '; STOCK L='+f(o.stock[0])+' W='+f(o.stock[1])+
-        ' H='+f(o.stock[2])+' Z0='+f(o.bottomZ),
+      '; STOCK L='+f(o.stock[1])+' W='+f(o.stock[0])+
+        ' H='+f(o.stock[2])+' Z0='+f(o.bottomZ)+
+        ' OX='+f(o.offset?.[0]||0)+' OY='+f(o.offset?.[1]||0)+' OZ='+f(o.offset?.[2]||0),
       '; CUT ORDER='+diagnostic.cutOrder+'; TRIM B='+diagnostic.trimAngle,
       '; *** VIRTUAL CUTTING PATH - NOT A MACHINE PROGRAM ***',
       'G21 G90 G94'
