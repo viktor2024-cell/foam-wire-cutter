@@ -588,10 +588,17 @@ const generatorPreview = (() => {
       try { if (paired) placement=Gen.previewPair(geometry,stock[2],bottom,kerf); }
       catch(e) { fit.className='note crit';fit.textContent=e.message;aim();return; }
       const requiredZ=paired ? placement.minimumHeight : geometry.size[2];
-      const fits=geometry.size[0]+2*Math.abs(modelOffset[0])<=stock[0]+.001 && geometry.size[1]+2*Math.abs(modelOffset[1])<=stock[1]+.001 && requiredZ+2*Math.abs(modelOffset[2])<=stock[2]+.001;
+      const stockFits=geometry.size[0]<=stock[0]+.001 &&
+        geometry.size[1]<=stock[1]+.001 && requiredZ<=stock[2]+.001;
+      const stockInMachine=stock[0]/2+Math.abs(modelOffset[0])<=machine.FieldWidth/2+.001 &&
+        stock[1]/2+Math.abs(modelOffset[1])<=machine.HorizontalTravel/2+.001 &&
+        bottom+modelOffset[2]>=0 &&
+        bottom+modelOffset[2]+stock[2]<=machine.VerticalTravel+.001;
+      const fits=stockFits&&stockInMachine;
       const shifted=modelOffset.some(v=>v!==0);
-      const unsupported=shifted && (paired || geometry.secondaryCount>0 || geometry.wireframe);
-      const trimConflict=modelOffset[0]!==0 && document.getElementById('gnTrim').checked && stock[0]>geometry.size[0]+kerf+1e-6;
+      const manualGuides=geometry.auxiliaryCurves?.length>0;
+      const unsupported=shifted && !manualGuides && (paired || geometry.secondaryCount>0 || geometry.wireframe);
+      const trimConflict=false;
       const copies=paired ? [
         {sign:[1,1,1],z:placement.zLower,color:0xe87722},
         {sign:[-1,-1,-1],z:placement.zUpper,color:0x22a8a0}
@@ -640,7 +647,7 @@ const generatorPreview = (() => {
         }
       }
       fit.textContent=(paired?'Пара: ':'Модель: ')+geometry.size.map(v=>v.toFixed(2)).join(' × ')+
-        ' мм. '+(unsupported?'Смещение этой комбинации операций пока не поддерживается. ':trimConflict?'Смещение X с торцеванием пока не поддерживается. ':fits?'Помещается. ':'Не помещается. ')+(paired?'Минимальная высота: '+requiredZ.toFixed(1)+' мм. ':'')+
+        ' мм. '+(unsupported?'Смещение этой комбинации операций пока не поддерживается. ':fits?'Помещается. ':!stockFits?'Модель не помещается в заготовку. ':'Смещённая заготовка выходит за ход станка. ')+(paired?'Минимальная высота: '+requiredZ.toFixed(1)+' мм. ':'')+
         (geometry.axis===1?'Размах вдоль струны.':'Для генерации поверните размах вдоль струны.')+
         (geometry.auxiliaryCurves?.length?' Найдены '+geometry.auxiliaryCurves.length+
           ' вспомогательные кривые (розовые), пар направляющих: '+
@@ -723,18 +730,20 @@ const generatorPreview = (() => {
         // Both machine and generator require the span to lie along the wire.
         if(g.axis!==1)continue;
         const required=paired ? Gen.previewPair(g,0,0,kerf).minimumHeight : g.size[2];
-        const minimumHeight=required+20+2*Math.abs(modelOffset[2]); // 10 mm foam margin above and below
+        const minimumHeight=required+20; // Stock and model move together; preserve 10 mm margins.
         // Standard 20/50/100 mm is the foam SHEET THICKNESS ALONG
         // THE WIRE (gnL / stock X), not the upright Z dimension.
         // Keep 5 mm on each wire-side end; vertical and transverse
         // cutting allowance remains 10 mm per side.
-        const minimumLength=g.size[0]+10+2*Math.abs(modelOffset[0]);
+        const minimumLength=g.size[0]+10;
         const sheet=[20,50,100].find(t=>t+1e-7>=minimumLength);
         const length=sheet||round5(minimumLength);
-        const height=round5(minimumHeight),width=round5(g.size[1]+20+2*Math.abs(modelOffset[1]));
-        if(length>machine.FieldWidth+1e-7 || width>machine.HorizontalTravel+1e-7 ||
-           width/2+n('gnLead')>machine.ParkX+1e-7 ||
-           bottom+height+clearance>machine.VerticalTravel+1e-7)continue;
+        const height=round5(minimumHeight),width=round5(g.size[1]+20);
+        if(length/2+Math.abs(modelOffset[0])>machine.FieldWidth/2+1e-7 ||
+           width/2+Math.abs(modelOffset[1])>machine.HorizontalTravel/2+1e-7 ||
+           width/2+Math.abs(modelOffset[1])+n('gnLead')>machine.ParkX+1e-7 ||
+           bottom+modelOffset[2]<0 ||
+           bottom+modelOffset[2]+height+clearance>machine.VerticalTravel+1e-7)continue;
         results.push({rotation,geometry:g,length,width,height,standard:Boolean(sheet),turn,
           description:rotations[turn].description,area:width*height,minimumHeight,minimumLength});
       }catch(e){/* A candidate may not form valid cutting geometry at this orientation. */}
