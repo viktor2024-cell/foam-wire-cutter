@@ -42,3 +42,12 @@ test('3D interaction has drag guard, Enter, Escape and export',()=>{
  assert.match(source,/foam-wire-guide-pairs-v1/);
  assert.match(source,/renderer\.domElement\.addEventListener\('pointerup'/);
 });
+
+test('manual mouse confirmation, explicit button and 3 px centre marker',()=>{
+ assert.match(source,/guideConfirmButton\.addEventListener\('click', confirmGuidePair\)/);
+ assert.match(source,/e\.button === 2 && rightPointerDown/);
+ assert.match(source,/moved <= 5\) confirmGuidePair\(\)/);
+ assert.match(source,/e\.preventDefault\(\)/);
+ assert.match(source,/guideDot\.style\.left/);
+ assert.match(source,/width:'3px', height:'3px'/);
+});
