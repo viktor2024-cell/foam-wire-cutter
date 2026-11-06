@@ -4220,6 +4220,89 @@ const Gen = (() => {
       trimAngle,cutOrder,trimOperation,plannedSequence,stockRemoval,
       approvedForGcode:false,notes:"Моделирование последовательного удаления материала выполнено на объёмной сетке. Сохранность STEP-детали и безопасные режущие входы ещё не сертифицированы. Не станочный код."};
   }
+  // Operator-directed F4 postprocessor. User-supplied guides and starts
+  // control cutting; unresolved stock-surface and lead checks are WARNINGS.
+  // Machine travel validation remains mandatory through Program.travel().
+  function buildF4Program(text,pairs,o={}) {
+    if(!Array.isArray(pairs)||!pairs.length)throw new StepError("Подтвердите минимум одну пару направляющих");
+    if(o.mirror||o.pair)
+      throw new StepError("Режим зеркальной/двойной детали для ручных направляющих F4 не реализован");
+    if(!Array.isArray(o.stock)||o.stock.length!==3||
+       ![...o.stock,o.bottomZ,o.kerf,o.feed,o.minS,o.maxS,o.clearance,o.retract].every(Number.isFinite)||
+       Math.min(...o.stock,o.feed,o.minS)>0===false||o.maxS<o.minS)
+      throw new StepError("Некорректные параметры F4");
+    const report=manualGuideDiagnostics(text,pairs,{...o,voxelSize:o.voxelSize||6});
+    const cfg={...CONFIG,TravelClearance:o.clearance,FeedRateCut:o.feed,
+      WireMinPower:o.minS,WireMaxPower:o.maxS};
+    const p=new Program(cfg,!!o.powerComp,1);
+    const midpoint=cfg.HorizontalTravel/2;
+    const move=(kind,s)=>p.travel(kind,s.left[0]-midpoint,s.left[1],
+      s.right[0]-midpoint,s.right[1]);
+    const eol=EOL, warnings=[
+      "F4: геометрия направляющих определена оператором; сохранность STEP-тела не подтверждена",
+      "Начало и окончание каждого реза требуют выбранного оператором технологического входа/выхода",
+      "Между B0/B90 поворот стола разрешён только после фактического освобождения струны от материала"
+    ];
+    let program="; *** F4 OPERATOR-DIRECTED G-CODE ***"+eol+
+      "; WARNING: UNVERIFIED LEADS AND PRESERVED SOLID - REVIEW BEFORE MACHINING"+eol+
+      "; STOCK L="+o.stock[0]+" W="+o.stock[1]+" H="+o.stock[2]+" Z0="+o.bottomZ+eol+
+      "; CUT ORDER="+report.cutOrder+" TRIM="+(report.trimOperation?"B"+report.trimAngle:"OFF")+eol+
+      "$H"+eol+"G21 G90 G94"+eol+
+      "G92 "+travelPosition(cfg.HomingX1,cfg.HomingZ1,cfg.HomingX2,cfg.HomingZ2)+
+        " B"+fix2(cfg.HomingR1)+eol+
+      p.travel("move",cfg.ParkX,cfg.ParkZ,cfg.ParkX,cfg.ParkZ)+rotate(cfg,cfg.ParkR1)+
+      "M05"+eol;
+    let currentAngle=cfg.ParkR1;
+    const park=()=>p.travel("move",cfg.ParkX,cfg.ParkZ,cfg.ParkX,cfg.ParkZ);
+    const setAngle=angle=>{
+      if(currentAngle===angle)return "";
+      currentAngle=angle;
+      return "M05"+eol+park()+rotate(cfg,angle);
+    };
+    if(report.trimOperation){
+      const trim=report.trimOperation;
+      const dim=trim.angle===90?o.stock[0]:o.stock[1];
+      const along=trim.angle===90?o.stock[1]:o.stock[0];
+      const task={Length:dim,Width:along,Height:o.stock[2],TrimEnds:trim.trimAllowance,
+        BottomZ:o.bottomZ,RetractOffset:o.retract,Angle:trim.angle};
+      const check=checkTrim(cfg,task,true);
+      if(check.length)throw new StepError("Торцевание B"+trim.angle+": "+check.join("; "));
+      program+="; *** TRIM B"+trim.angle+" ***"+eol;
+      program+=setAngle(trim.angle)+"M03 S"+fix2(o.minS)+eol;
+      program+=trimBlock(cfg,task,p);
+      program+="M05"+eol;
+      warnings.push("Торцевание и отвод после него следует проверить в симуляторе");
+    }
+    let count=0;
+    for(const op of report.operations){
+      if(!op.insideEnvelope)
+        throw new StepError("Операция B"+op.angle+" #"+op.ids.join("/#")+
+          " выходит за физические ходы кареток");
+      program+="; *** F4 B"+op.angle+" GUIDES #"+op.ids.join("/#")+
+        " START="+(op.startU??0).toFixed(4)+" ***"+eol;
+      program+=setAngle(op.angle);
+      // At the first point the wire is off. Operator-designed guide start
+      // determines the actual entry; no implicit lead is invented.
+      program+="; POSITION AT USER-SELECTED START - CHECK APPROACH"+eol;
+      program+=move("move",op.samples[0]);
+      program+="M03 S"+fix2(o.minS)+eol;
+      for(let i=1;i<op.samples.length;i++){program+=move("cut",op.samples[i]);count++;}
+      program+="M05"+eol+
+        "; USER MUST CONFIRM CLEARANCE BEFORE FOLLOWING ROTATION / EXIT"+eol;
+      const bad=op.sequentialStock?.entry?.filter(c=>c.occupiedVoxelHits>0)||[];
+      if(bad.length)warnings.push("B"+op.angle+": пересечения входа с оставшимся материалом; "+
+        "проверьте точку и подход");
+      if(op.alignmentNeedsReview)warnings.push("B"+op.angle+": различия парных профилей RMS="+
+        op.correspondence.shapeRms.toFixed(2)+" мм");
+    }
+    // Do not add an implicit rapid retract: the cutting wire may still be
+    // embedded in foam when the final profile finishes.
+    program+="; END AT LAST GUIDE POINT - WIRE OFF; NO AUTOMATIC RETRACT"+eol+
+      "M05"+eol;
+    return {program,warnings,diagnostic:report,points:count,
+      part:{span:o.stock[0],x0:0,x1:o.stock[1],z0:o.bottomZ,z1:o.bottomZ+o.stock[2]},
+      holes:0,power:[o.minS,o.maxS,p.changes],operatorDirected:true};
+  }
   // Review-only path encoding for the existing 3D G-code simulator.
   // This is NOT a production postprocessor: leads, stock-preservation,
   // turntable fixture and machine collisions remain unverified.
@@ -4264,7 +4347,7 @@ const Gen = (() => {
       warnings:['F4 review only: machine output, copy and export disabled',
         'Start and exit cutting leads, kerf side, safe B rotation and preserved STEP solid are NOT validated']};
   }
-  return { buildProgram, buildF4VisualPreview, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, resolveGuideStart, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
+  return { buildProgram, buildF4Program, buildF4VisualPreview, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, resolveGuideStart, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
 })();
 
 // ---------------------------------------------------------------------------------------------
