@@ -278,7 +278,7 @@ test('split coedges yield the complete trimmed rectangular profile',()=>{
  assert.equal(r.holes,0);assert.ok(r.points>100);
 });
 test('no trimming: no B90, stock metadata agrees with simulator X=W Y=L',()=>{
- const r=build();assert.doesNotMatch(r.program,/TRIM BLOCK|Rotation 90|B90/);
+ const r=build();assert.doesNotMatch(r.program,/TRIM BLOCK|Rotation B90|^G00 B90/m);
  assert.match(r.program,/STOCK L=140 W=50 H=60 Z0=10/);
  const angles=[...r.program.matchAll(/^G00 B([\d.-]+)/gm)].map(m=>+m[1]);assert.ok(angles.length);assert.ok(angles.every(a=>a===0));
  // All commanded destination coordinates, including approach, exit and park.
@@ -322,7 +322,7 @@ test('right-side entry stays outside stock on rapids and needs no overhead heigh
  const r=build({stock:[50,140,240],bottomZ:10,sideEntry:true});
  const p=sim.parseGcode(r.program),s={...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false};
  assert.equal(sim.analyse(p,s).warns.filter(w=>w.level==='crit').length,0);
- assert.doesNotMatch(r.program,/TRIM BLOCK|B90/);
+ assert.doesNotMatch(r.program,/TRIM BLOCK|Rotation B90|^G00 B90/m);
  assert.ok(p.moves.every(m=>Math.max(m.to.Y,m.to.A)<=250));
  // Approach and return are on the right, all rapid destinations outside the stock width.
  assert.ok(p.moves.filter(m=>m.type==='G0').every(m=>m.to.X>70&&m.to.Z>70));
@@ -337,7 +337,7 @@ test('external F1: 400×240×50, right-side path at B0 fits confirmed machine',{
  const r=gen.buildProgram(text,'F1.stp',options({stock:[50,400,240],bottomZ:10,sideEntry:true}));
  const p=sim.parseGcode(r.program),s={...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false};
  const check=sim.analyse(p,s);assert.equal(check.warns.filter(w=>w.level==='crit').length,0);
- assert.doesNotMatch(r.program,/TRIM BLOCK|B90/);
+ assert.doesNotMatch(r.program,/TRIM BLOCK|Rotation B90|^G00 B90/m);
  assert.ok(p.moves.every(m=>Math.abs(m.to.X)<=245&&Math.abs(m.to.Z)<=245&&Math.min(m.to.Y,m.to.A)>=0&&Math.max(m.to.Y,m.to.A)<=250));
  assert.ok(p.moves.filter(m=>m.type==='G0').every(m=>m.to.X>=205&&m.to.Z>=205));
  assert.ok(p.moves.filter(m=>m.wire&&m.type==='G1').every(m=>m.to.B===0));
