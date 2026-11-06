@@ -4177,6 +4177,8 @@ const Gen = (() => {
       kerf:o.kerf,offset,bottomZ:bottom,voxelSize:o.voxelSize,trimOperation
     });
     return {schema:"foam-wire-f4-diagnostic-motion-v1",operations,origin,
+      rotation:o.rotation||identityRotation(),scale,offset,stock:stock.slice(),
+      bottomZ:bottom,kerf:Number(o.kerf)||0,
       trimAngle,cutOrder,trimOperation,plannedSequence,stockRemoval,
       approvedForGcode:false,notes:"Моделирование последовательного удаления материала выполнено на объёмной сетке. Сохранность STEP-детали и безопасные режущие входы ещё не сертифицированы. Не станочный код."};
   }
