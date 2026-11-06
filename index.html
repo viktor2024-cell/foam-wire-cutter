@@ -1440,7 +1440,8 @@ function showWarnings() {
 // ---------------------------------------------------------------------------------------------
 let original = null;        // - исходная программа: { text, name, base }
 let currentText = "", currentName = "", generationStamp = null;
-let previewOnlyProgram=false; // generated F4 visuals are never machine or exportable files
+let previewOnlyProgram=false; // old virtual-preview jobs remain unexportable
+let operatorDirectedProgram=false; // F4 program from operator-confirmed profiles
 function requireMachinableProgram() {
   if(previewOnlyProgram){
     showMsg("Это только визуальная траектория F4. Отправка, экспорт и копирование для станка отключены.",true);
@@ -1511,7 +1512,7 @@ if (!isLocalFile) {
 }
 async function saveProgram() {
   if (!requireMachinableProgram() || !requireCurrentProgram()) return;
-  if (prog && prog.check.warns.some((w) => w.level === "crit")) { showMsg("Экспорт заблокирован: устраните критические ошибки проверки траектории.", true); return; }
+  if (!operatorDirectedProgram && prog && prog.check.warns.some((w) => w.level === "crit")) { showMsg("Экспорт заблокирован: устраните критические ошибки проверки траектории.", true); return; }
   const data = currentText.replace(/\r*\n/g, "\r\n");
   const name = currentName.replace(/^пример:\s*/, "");
   // - Страница не знает путь к файлу: окно сохранения открывается в папке STEP, пользователь только подтверждает
@@ -1550,7 +1551,7 @@ async function saveProgram() {
 }
 async function copyProgram() {
   if (!requireMachinableProgram() || !requireCurrentProgram()) return;
-  if (prog && prog.check.warns.some((w) => w.level === "crit")) { showMsg("Экспорт заблокирован: устраните критические ошибки проверки траектории.", true); return; }
+  if (!operatorDirectedProgram && prog && prog.check.warns.some((w) => w.level === "crit")) { showMsg("Экспорт заблокирован: устраните критические ошибки проверки траектории.", true); return; }
   try { await navigator.clipboard.writeText(currentText.replace(/\r*\n/g, "\r\n")); $("tNote").textContent = "G-code скопирован. Вставьте его в новый файл .gcode."; }
   catch (e) { $("tNote").textContent = "Копирование не разрешено в этом окне. Откройте локальную копию D:\\1800mm\\wire_sim.html, там есть сохранение файла."; }
 }
@@ -1565,6 +1566,7 @@ $("tCopy").addEventListener("click", copyProgram);
 function loadProgram(text, name, opts = {}) {
   if (job) { showMsg("Во время реза программу менять нельзя.", true); return; }
   previewOnlyProgram=opts.keepOriginal?previewOnlyProgram:!!opts.previewOnly;
+  if(!opts.keepOriginal)operatorDirectedProgram=!!opts.operatorDirected;
   const parsed = parseGcode(text);
   if (parsed.stock) {
     for (const [id, k] of [["sL", "L"], ["sW", "W"], ["sH", "H"], ["sZ", "Z0"]]) if (parsed.stock[k] !== undefined) $(id).value = parsed.stock[k];
@@ -4417,7 +4419,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
       const result=Gen.buildF4Program(stepFile.text,config.manualGuidePairs,config);
       const outName=stepFile.name.replace(/\.(stp|step)$/i,"")+"_F4_auto.gcode";
       $("gnOut").textContent=outName;
-      loadProgram(result.program,outName,{generationStamp:generatorSignature(),previewOnly:false});
+      loadProgram(result.program,outName,{generationStamp:generatorSignature(),previewOnly:false,operatorDirected:true});
       setCamera("3d");
       status.className="note";
       const critical=prog.check.warns.filter(x=>x.level==="crit");
