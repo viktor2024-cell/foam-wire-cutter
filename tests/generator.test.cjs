@@ -775,8 +775,10 @@ test('F4 lead checker catches a very thin foam strip between sampled positions',
    {clearance:15});
  // The above-stock lead to x=130 does not cross foam. The independent
  // full-sweep function is exercised by the side candidate from x≈98 to x=130.
- assert.ok(r.entry.candidates.some(c=>c.intersectsUncutStock));
- assert.ok(r.entry.candidates.every(c=>!c.approvedForGcode));
+ const left=r.entry.candidates.find(c=>c.route==='OUTSIDE_LEFT');
+ assert.equal(left.intersectsUncutStock,true);
+ assert.equal(left.status,'CUTTING_LEAD_REQUIRED');
+ assert.equal(r.approvedForGcode,false);
 });
 test('F4 entry/exit rejects out-of-range approach positions',()=>{
  const pt=(x,z)=>({left:[x,z],right:[x,z]});
