@@ -89,21 +89,25 @@ const generatorPreview = (() => {
       bottomZ:n('gnZ'),clearance:n('gnClear'),kerf:n('gnKerf'),samples:128
     });
   };
+  guideEntryResult.style.whiteSpace='pre-wrap';
   const guideEntrySummary=report=>report.operations.map(op=>{
-    const label=end=>end.hasClearRapid?'свободный проход найден':
-      'проход через необработанную заготовку — нужен режущий вход/выход';
-    return op.operation+' #'+op.ids.join('/#')+
-      ': вход — '+label(op.entryExit.entry)+
-      ', выход — '+label(op.entryExit.exit)+
-      (op.closed?'. Замкнутый профиль: требуется подход к контуру (прорезь либо отверстие).':'');
-  }).join(' | ');
+    const name={ABOVE_STOCK:'сверху',OUTSIDE_LEFT:'слева',OUTSIDE_RIGHT:'справа'};
+    const describe=(kind,data)=>kind+': '+data.candidates.map(c=>
+      name[c.route]+' — '+(c.status==='CLEAR_RAPID'?'свободно':
+        c.status==='OUT_OF_TRAVEL'?'ВНЕ ХОДОВ':'нужна прорезь')
+    ).join('; ');
+    return op.operation+' #'+op.ids.join('/#')+'\n'+
+      describe('Вход',op.entryExit.entry)+'\n'+
+      describe('Выход',op.entryExit.exit)+
+      (op.closed?'\nЗамкнутый контур: нужен подтверждённый способ входа в материал.':'');
+  }).join('\n\n');
   document.getElementById('gnGuideEntryExit').addEventListener('click',()=>{
     try {
       const report=getGuideDiagnostic();
       guideEntryResult.className='note crit';
-      guideEntryResult.textContent='Проверка геометрии исходного блока: '+
+      guideEntryResult.textContent='Результаты входов и выходов (3 варианта для каждого конца):\n\n'+
         guideEntrySummary(report)+
-        ' Проверены 3 варианта подхода и отхода на каждом конце; это не проверка сохранности готовой детали. G-code запрещён.';
+        '\n\nПересечения проверены с исходным прямоугольным блоком, не с готовой деталью. G-code запрещён.';
     } catch(e) {
       guideEntryResult.className='note crit';
       guideEntryResult.textContent='Проверка не выполнена: '+e.message;
@@ -345,6 +349,7 @@ const generatorPreview = (() => {
   function rebuild() {
     document.getElementById('gnStockFromModel').disabled = !geometry;
     guideWire = null; clear(); curveObjects = []; group = new THREE.Group(); scene.add(group);
+    if (guideEntryResult) guideEntryResult.textContent='Размещение или модель изменены. Повторите проверку входа и выхода.';
     const machineBox = new THREE.BoxGeometry(machine.FieldWidth, machine.HorizontalTravel, machine.VerticalTravel);
     envelope = new THREE.LineSegments(new THREE.EdgesGeometry(machineBox), new THREE.LineDashedMaterial({color:0x667788, dashSize:7, gapSize:5}));
     machineBox.dispose();
