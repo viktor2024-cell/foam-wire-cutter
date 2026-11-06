@@ -20,6 +20,38 @@ const generatorPreview = (() => {
   const guideProgressText = document.getElementById('gnGuideProgressText');
   const guideMotion = document.getElementById('gnGuideMotion');
   let guideWire = null;
+  const stockStage=document.getElementById('gnStockStage');
+  const stockCloudToggle=document.getElementById('gnStockCloud');
+  const stockSimResult=document.getElementById('gnStockSimResult');
+  let stockSimulation=null,stockCloud=null;
+  function clearStockCloud(){
+    if(stockCloud){stockCloud.parent?.remove(stockCloud);
+      stockCloud.geometry.dispose();stockCloud.material.dispose();stockCloud=null;}
+  }
+  function resetStockSimulation(){
+    stockSimulation=null;clearStockCloud();stockStage.disabled=true;stockStage.replaceChildren();
+    stockSimResult.textContent='Параметры или геометрия изменились. Повторите симуляцию удаления материала.';
+  }
+  function showStockStage(){
+    clearStockCloud();
+    if(!geometry||!stockSimulation||!stockCloudToggle.checked)return draw();
+    const op=stockSimulation.operations[Number(stockStage.value)];
+    if(!op)return draw();
+    const data=op.sequentialStock.sparseRemainingPoints,converted=[];
+    for(let i=0;i<data.length;i+=3){
+      const p=guideToScene(data.slice(i,i+3));
+      converted.push(p.x,p.y,p.z);
+    }
+    const geo=new THREE.BufferGeometry();
+    geo.setAttribute('position',new THREE.Float32BufferAttribute(converted,3));
+    stockCloud=new THREE.Points(geo,new THREE.PointsMaterial({
+      color:0x9eeab8,size:2.5,sizeAttenuation:false,depthTest:false,
+      transparent:true,opacity:0.75
+    }));
+    stockCloud.renderOrder=14;group.add(stockCloud);draw();
+  }
+  stockStage.addEventListener('change',showStockStage);
+  stockCloudToggle.addEventListener('change',showStockStage);
   // The wire preview is geometric only. No toolpath is approved by this UI.
   const guideSample = (curve, u) => {
     const pts = curve.points, end = pts.length - 1;
@@ -131,6 +163,7 @@ const generatorPreview = (() => {
     }
   });
   document.getElementById('gnCutOrder').addEventListener('change',()=>{
+    resetStockSimulation();
     refreshGuideOperations();
     guideEntryResult.textContent='Изменён порядок B0/B90: повторите проверку входов и выходов.';
   });
@@ -139,6 +172,7 @@ const generatorPreview = (() => {
     rebuild(); refreshGuideOperations();
   });
   document.getElementById('gnTrim').addEventListener('change',()=>{
+    resetStockSimulation();
     guideEntryResult.textContent='Изменён режим торцевания: повторите проверку.';
     refreshGuideOperations();
   });
@@ -160,6 +194,42 @@ const generatorPreview = (() => {
       guideEntryResult.className='note crit';
       guideEntryResult.textContent=guideEntrySummary(report)+'. Это не разрешение на резку.';
     } catch(e) {guideFeedback('Не удалось рассчитать диагностическую траекторию: '+e.message);}
+  });
+
+  document.getElementById('gnStockSimulate').addEventListener('click',()=>{
+    try {
+      stockSimResult.textContent='Вычисление объёмного остатка…';
+      const report=getGuideDiagnostic();
+      stockSimulation=report;
+      stockStage.replaceChildren();
+      report.operations.forEach((op,i)=>{
+        const opt=document.createElement('option');opt.value=String(i);
+        opt.textContent='Рез B'+op.angle+' (#'+op.ids.join('/#')+')';
+        stockStage.appendChild(opt);
+      });
+      stockStage.disabled=false;
+      stockStage.value=String(report.operations.length-1);
+      const sim=report.stockRemoval;
+      const summary=sim.operations.map(op=>
+        'B'+op.angle+': срезано '+op.removedVoxels+' ячеек, осталось '+
+        op.remainingVoxels+', связных частей '+op.componentCount+
+        '; вход после предыдущих резов — '+
+        op.entry.map(c=>c.route+': '+c.occupiedVoxelHits).join(', ')+
+        '; выход после реза — '+
+        op.exit.map(c=>c.route+': '+c.occupiedVoxelHits).join(', ')
+      ).join(' | ');
+      stockSimResult.className='note crit';
+      stockSimResult.textContent='Диагностическая сетка '+
+        sim.voxelSize.map(v=>v.toFixed(2)).join('×')+
+        ' мм; снято торцеванием '+sim.trimmedVoxels+' ячеек. '+summary+
+        '. Числа после двоеточия — пересечённые ячейки оставшегося пенопласта. '+
+        'Облако показывает выбранный остаток. Сохранность STEP-детали ещё не подтверждена; G-code заблокирован.';
+      showStockStage();
+    }catch(e){
+      resetStockSimulation();
+      stockSimResult.className='note crit';
+      stockSimResult.textContent='Не удалось смоделировать остаток: '+e.message;
+    }
   });
 
   const guideConfirmButton = document.getElementById('gnGuideConfirm');
@@ -220,6 +290,7 @@ const generatorPreview = (() => {
       return false;
     }
     savedGuidePairs.push([idA, idB]); pendingGuide = [];
+    resetStockSimulation();
     guideEntryResult.textContent='Пары изменены: выполните проверку входа и выхода заново.';
     invalidate(); refreshGuideOperations();
     guideFeedback('Пара #' + idA + ' / #' + idB + ' назначена. Всего: ' +
@@ -315,6 +386,7 @@ const generatorPreview = (() => {
   document.getElementById('gnGuideUndo').addEventListener('click', () => {
     if (pendingGuide.length) pendingGuide = [];
     else savedGuidePairs.pop();
+    resetStockSimulation();
     guideEntryResult.textContent='Пары изменены: выполните проверку входа и выхода заново.';
     invalidate(); refreshGuideOperations(); guideFeedback(); updateGuideColors();
   });
@@ -379,7 +451,8 @@ const generatorPreview = (() => {
   }
   function rebuild() {
     document.getElementById('gnStockFromModel').disabled = !geometry;
-    guideWire = null; clear(); curveObjects = []; group = new THREE.Group(); scene.add(group);
+    guideWire = null;stockCloud=null;resetStockSimulation();
+    clear();curveObjects = []; group = new THREE.Group(); scene.add(group);
     if (guideEntryResult) guideEntryResult.textContent='Размещение или модель изменены. Повторите проверку входа и выхода.';
     const machineBox = new THREE.BoxGeometry(machine.FieldWidth, machine.HorizontalTravel, machine.VerticalTravel);
     envelope = new THREE.LineSegments(new THREE.EdgesGeometry(machineBox), new THREE.LineDashedMaterial({color:0x667788, dashSize:7, gapSize:5}));
