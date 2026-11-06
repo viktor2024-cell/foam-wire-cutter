@@ -4,7 +4,7 @@ const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
 // Exercise the production generator without DOM stubs or a second implementation.
 const source=html.slice(html.indexOf('const Gen ='),html.indexOf('//  Вкладки и экран генератора'))
- .replace('return { buildProgram, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };','return { buildProgram, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel, Model, sampleFace, Program, startBlock, endBlock };');
+ .replace('return { buildProgram, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, resolveGuideStart, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };','return { buildProgram, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel, Model, sampleFace, Program, startBlock, endBlock };');
 const gen=vm.runInNewContext(source+';Gen');
 const fixture=fs.readFileSync(path.join(__dirname,'fixtures/split-profile.stp'),'utf8');
 // Construct a genuine two-direction ruled STEP topology: the main sheet
@@ -716,6 +716,14 @@ test('manual guide kinematics returns left/right tower samples but never release
  assert.equal(path.operations.length,1);
  const op=path.operations[0];
  assert.equal(op.angle,0);assert.equal(op.samples.length,33);
+ const reverse=gen.manualGuideDiagnostics(step,[[910005,910006]],{
+  stock:[100,200,70],bottomZ:10,clearance:15,samples:32,
+  guideStarts:{'910005:910006':1}
+ });
+ assert.equal(reverse.operations[0].startU,1);
+ assert.equal(reverse.operations[0].reverseA,true);
+ assert.deepEqual(JSON.parse(JSON.stringify(reverse.operations[0].samples[0].profileA)),
+  JSON.parse(JSON.stringify(op.samples.at(-1).profileA)));
  assert.ok(op.samples.every(p=>[...p.left,...p.right].every(Number.isFinite)));
  assert.ok(op.samples.every(p=>Math.abs(p.left[0]-p.right[0])<1e-6));
  assert.equal(op.approvedForGcode,false);
@@ -876,4 +884,25 @@ test('F4 sequential simulation accounts for B0 or B90 trimming BEFORE profile cu
  assert.ok(trimmed.trimmedVoxels>0);
  assert.ok(trimmed.remainingVoxels<untrimmed.remainingVoxels);
  assert.equal(trimmed.approvedForGcode,false);
+});
+
+
+test('guide cut start: closed arbitrary phase, open from either endpoint',()=>{
+ const mk=(id,points,closed)=>({id,points,closed,fixedAxis:1});
+ const openA=mk(1,[[0,0,5],[20,0,15]],false);
+ const openB=mk(2,[[20,50,15],[0,50,5]],false);
+ const f=gen.resolveGuideStart(openA,openB,0);
+ const r=gen.resolveGuideStart(openA,openB,1);
+ assert.equal(f.reverseA,false);
+ assert.equal(r.reverseA,true);
+ assert.equal(r.mapA(0),1);assert.equal(r.mapA(1),0);
+ assert.equal(r.mapB(0),0);assert.equal(r.mapB(1),1);
+ const closedA=mk(3,[[0,0,0],[25,0,0],[25,0,25],[0,0,25],[0,0,0]],true);
+ const closedB=mk(4,[[0,60,0],[25,60,0],[25,60,25],[0,60,25],[0,60,0]],true);
+ const c=gen.resolveGuideStart(closedA,closedB,.375);
+ assert.equal(c.startU,.375);
+ assert.ok(Math.abs(c.mapA(0)-.375)<1e-9);
+ assert.ok(Math.abs(c.mapA(1)-.375)<1e-9);
+ assert.ok(Math.abs(c.mapB(0)-c.mapB(1))<1e-9);
+ assert.throws(()=>gen.resolveGuideStart(closedA,closedB,NaN),/Начало реза/);
 });
