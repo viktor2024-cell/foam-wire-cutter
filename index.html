@@ -1884,6 +1884,45 @@ const Gen = (() => {
     r[i][i] = r[j][j] = 0; r[i][j] = -turn; r[j][i] = turn;
     return r.map((row) => [0,1,2].map((col) => row.reduce((sum, v, k) => sum + v * rotation[k][col], 0)));
   }
+  // Shared STEP-guide correspondence resolver: same centroid/shape matching
+  // already used by guideAnalysis, now applied to explicitly chosen pairs too.
+  // Closed profiles include a duplicated endpoint; phase is searched over 128
+  // unique slots and wraps without a discontinuity at the seam.
+  function matchGuideCurves(a,b) {
+    if(a.closed!==b.closed||a.fixedAxis!==b.fixedAxis||a.fixedAxis<0)
+      throw new StepError("Несовместимая топология профилей");
+    const count=128,axis=a.fixedAxis,coords=[0,1,2].filter(k=>k!==axis);
+    const at=(curve,u)=>{
+      const last=curve.points.length-1;
+      const index=Math.max(0,Math.min(last,u*last)),i=Math.min(last-1,Math.floor(index)),t=index-i;
+      return curve.points[i].map((v,k)=>v+(curve.points[i+1][k]-v)*t);
+    };
+    const ca=coords.map(k=>a.points.reduce((n,p)=>n+p[k],0)/a.points.length);
+    const cb=coords.map(k=>b.points.reduce((n,p)=>n+p[k],0)/b.points.length);
+    let best=null;
+    for(const reverse of [false,true])for(let shift=0;shift<(a.closed?count:1);shift++) {
+      let loss=0;
+      for(let i=0;i<count;i+=4){
+        const u=i/count;
+        const v=a.closed
+          ? ((reverse?shift/count-u:shift/count+u)%1+1)%1
+          : reverse?1-u:u;
+        const pa=at(a,u),pb=at(b,v);
+        for(let j=0;j<coords.length;j++) {
+          const d=(pa[coords[j]]-ca[j])-(pb[coords[j]]-cb[j]);
+          loss+=d*d;
+        }
+      }
+      if(!best||loss<best.loss)best={loss,reverse,shift};
+    }
+    const correspondence={reverse:best.reverse,shift:best.shift,
+      shapeRms:Math.sqrt(best.loss/(count/4))};
+    const mapB=u=>a.closed
+      ? ((correspondence.reverse?correspondence.shift/count-u:
+        correspondence.shift/count+u)%1+1)%1
+      : correspondence.reverse?1-u:u;
+    return {correspondence,mapB,at};
+  }
   function previewGeometry(text, rotation = identityRotation(), scale = 1, tolerance = 0.1) {
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
     const model = new Model(text, rotation, scale, tolerance);
@@ -2142,26 +2181,9 @@ const Gen = (() => {
         const [a,b]=group,va=a.points[0][axis],vb=b.points[0][axis],span=Math.abs(va-vb);
         if(span<.1){ambiguous.push({axis,ids:[a.id,b.id],reason:"Плоскости направляющих совпадают"});continue;}
         if(a.closed!==b.closed){ambiguous.push({axis,ids:[a.id,b.id],reason:"Одна кривая замкнута, другая разомкнута"});continue;}
-        // Profiles may have different STEP seams/directions. Compare centered
-        // shapes to choose a suggested correspondence, not an approved cut.
-        const count=128, sample=(c,i)=>c.points[Math.round(i*(c.points.length-1)/count)];
-        const coords=[0,1,2].filter(i=>i!==axis);
-        const center=c=>coords.map(k=>c.points.reduce((v,p)=>v+p[k],0)/c.points.length);
-        const ca=center(a),cb=center(b);
-        const normalized=(c,ctr,i)=>coords.map((k,j)=>sample(c,i)[k]-ctr[j]);
-        const shifts=a.closed?Array.from({length:count},(_,i)=>i):[0];
-        let best=null;
-        for(const reverse of [false,true])for(const shift of shifts){
-          let loss=0;
-          for(let i=0;i<count;i+=4){
-            const j=a.closed?(reverse?(shift-i+count)%count:(shift+i)%count):(reverse?count-i:i);
-            const x=normalized(a,ca,i),y=normalized(b,cb,j);
-            loss+=(x[0]-y[0])**2+(x[1]-y[1])**2;
-          }
-          if(!best||loss<best.loss)best={loss,reverse,shift};
-        }
+        const {correspondence}=matchGuideCurves(a,b);
         pairs.push({axis,ids:[a.id,b.id],planes:[va,vb],span,closed:a.closed,
-          correspondence:{reverse:best.reverse,shift:best.shift,shapeRms:Math.sqrt(best.loss/(count/4))},
+          correspondence,
           status:"candidate"});
       }
       for(const c of curves)if(c.fixedAxis<0)unpaired.push({id:c.id,reason:"Кривая не лежит в координатной плоскости"});
@@ -3730,12 +3752,13 @@ const Gen = (() => {
       const den=bb-aa;
       if(Math.abs(den)<.1)throw new StepError("Направляющие лежат в одной плоскости");
       ids.forEach(id=>used.add(id));
+      const {correspondence,mapB}=matchGuideCurves(a,b);
       const samples=[], bounds=[Infinity,-Infinity,Infinity,-Infinity], axisName=axis===1?"B0":"B90";
       const zBase=bottom+stock[2]/2+offset[2];
       const crossBase=CONFIG.HorizontalTravel/2+
         (axis===1?offset[1]:offset[0]);
       for(let i=0;i<=nSamples;i++){
-        const u=i/nSamples,pa=at(a,u),pb=at(b,u);
+        const u=i/nSamples,pa=at(a,u),pb=at(b,mapB(u));
         const crossA=pa[cross]-origin[cross],crossB=pb[cross]-origin[cross];
         const zA=pa[2]-origin[2],zB=pb[2]-origin[2];
         const ext=(v1,v2,x)=>v1+(v2-v1)*(x-aa)/den;
@@ -3752,10 +3775,10 @@ const Gen = (() => {
       const insideWithClearance=insideEnvelope&&bounds[3]+clearance<=CONFIG.VerticalTravel;
       const insideStockHeight=bounds[2]>=bottom-1e-6&&bounds[3]<=bottom+stock[2]+1e-6;
       operations.push({ids:ids.slice(),angle:axis===1?0:90,operation:axisName,closed:a.closed,
-        planeSpan:Math.abs(den),towersDistance,samples,
+        planeSpan:Math.abs(den),towersDistance,correspondence,samples,
         bounds:{transverse:[bounds[0],bounds[1]],z:[bounds[2],bounds[3]]},
         insideEnvelope,insideWithClearance,insideStockHeight,approvedForGcode:false,
-        warnings:["Направление и начало синхронизации точек не сертифицированы",
+        warnings:["Направление и начальная точка согласованы по форме; соответствие требует геометрической проверки",
           "Прямолинейная струна не проверена на сохранность детали",
           "Не определены безопасные вход и выход", 
           ...(insideEnvelope?[]:["Предварительная траектория выходит за пределы рабочих ходов"]),
@@ -3766,7 +3789,7 @@ const Gen = (() => {
     return {schema:"foam-wire-f4-diagnostic-motion-v1",operations,origin,
       approvedForGcode:false,notes:"Диагностическая экстраполяция на две каретки. Не станочный код. Не проверена геометрия удаляемого материала."};
   }
-  return { buildProgram, manualGuideDiagnostics, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
+  return { buildProgram, manualGuideDiagnostics, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
 })();
 
 // ---------------------------------------------------------------------------------------------
