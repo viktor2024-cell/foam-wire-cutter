@@ -1440,6 +1440,14 @@ function showWarnings() {
 // ---------------------------------------------------------------------------------------------
 let original = null;        // - исходная программа: { text, name, base }
 let currentText = "", currentName = "", generationStamp = null;
+let previewOnlyProgram=false; // generated F4 visuals are never machine or exportable files
+function requireMachinableProgram() {
+  if(previewOnlyProgram){
+    showMsg("Это только визуальная траектория F4. Отправка, экспорт и копирование для станка отключены.",true);
+    return false;
+  }
+  return true;
+}
 function generatorSignature() {
   return JSON.stringify([stepFile?.text, modelRotation, modelOffset, generatorPreview.getGuidePairs(), [...document.querySelectorAll('#panelGen input, #panelGen select')].map(e=>[e.id,e.type==='checkbox'?e.checked:e.value])]);
 }
@@ -1481,7 +1489,7 @@ function updateTempInfo() {
     (r.hi * f > maxS ? " · часть значений упрётся в максимум" : "");
 }
 function applyTemperature() {
-  if (!original || original.base === null) return;
+  if (!requireMachinableProgram() || !original || original.base === null) return;
   const target = parseFloat($("tVal").value);
   if (!(target > 0)) { $("tNote").textContent = "Введите мощность больше нуля."; return; }
   const maxS = parseFloat($("tMax").value) || Infinity;
@@ -1502,7 +1510,7 @@ if (!isLocalFile) {
   } catch (e) {}
 }
 async function saveProgram() {
-  if (!requireCurrentProgram()) return;
+  if (!requireMachinableProgram() || !requireCurrentProgram()) return;
   if (prog && prog.check.warns.some((w) => w.level === "crit")) { showMsg("Экспорт заблокирован: устраните критические ошибки проверки траектории.", true); return; }
   const data = currentText.replace(/\r*\n/g, "\r\n");
   const name = currentName.replace(/^пример:\s*/, "");
@@ -1541,7 +1549,7 @@ async function saveProgram() {
   }
 }
 async function copyProgram() {
-  if (!requireCurrentProgram()) return;
+  if (!requireMachinableProgram() || !requireCurrentProgram()) return;
   if (prog && prog.check.warns.some((w) => w.level === "crit")) { showMsg("Экспорт заблокирован: устраните критические ошибки проверки траектории.", true); return; }
   try { await navigator.clipboard.writeText(currentText.replace(/\r*\n/g, "\r\n")); $("tNote").textContent = "G-code скопирован. Вставьте его в новый файл .gcode."; }
   catch (e) { $("tNote").textContent = "Копирование не разрешено в этом окне. Откройте локальную копию D:\\1800mm\\wire_sim.html, там есть сохранение файла."; }
@@ -1556,6 +1564,7 @@ $("tCopy").addEventListener("click", copyProgram);
 
 function loadProgram(text, name, opts = {}) {
   if (job) { showMsg("Во время реза программу менять нельзя.", true); return; }
+  previewOnlyProgram=opts.keepOriginal?previewOnlyProgram:!!opts.previewOnly;
   const parsed = parseGcode(text);
   if (parsed.stock) {
     for (const [id, k] of [["sL", "L"], ["sW", "W"], ["sH", "H"], ["sZ", "Z0"]]) if (parsed.stock[k] !== undefined) $(id).value = parsed.stock[k];
@@ -1569,7 +1578,9 @@ function loadProgram(text, name, opts = {}) {
     $("tNote").textContent = "";
   }
   updateTempInfo();
-  $("fileName").textContent = name;
+  $("fileName").textContent = (previewOnlyProgram?"ТОЛЬКО ПРОСМОТР · ":"")+name;
+  $("gStart").disabled=previewOnlyProgram;
+  $("tSave").disabled=$("tCopy").disabled=previewOnlyProgram;
   const t = simTime;
   recheck();
   simTime = opts.keepTime ? Math.min(t, prog.total) : 0;
@@ -1839,7 +1850,7 @@ function startPolling() {
   }, POLL_MS);
 }
 function startJob() {
-  if (!requireCurrentProgram()) return;
+  if (!requireMachinableProgram() || !requireCurrentProgram()) return;
   if (!mach.connected || job || !prog) return;
   const dry = $("gDry").checked, lines = buildStream(currentText, dry);
   const hasHome = lines.some((l) => /^\$H/i.test(l.text));
@@ -1873,7 +1884,7 @@ function refreshMachine() {
   chip.textContent = !on ? "нет связи" : mach.state ? (STATES[base] || mach.state) : "жду ответ";
   chip.className = "state " + (!on ? "off" : base === "Alarm" ? "crit" : base === "Idle" ? "ready" : "on");
   $("gHome").disabled = $("gUnlock").disabled = $("gCmd").disabled = !on || !!job;
-  $("gStart").disabled = !on || !!job;
+  $("gStart").disabled = !on || !!job || previewOnlyProgram;
   $("gPause").disabled = !job;
   $("gStop").disabled = !on;
   $("gProg").textContent = job ? "Выполнено строк: " + job.acked + " из " + job.lines.length + (job.dry ? " · холостой прогон" : "") : "";
@@ -4300,14 +4311,34 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
   const n = (id) => parseFloat($(id).value);
   const ul = $("gnWarn"); ul.innerHTML = "";
   $("gnDone").hidden = true;
-  try {
-    const r = Gen.buildProgram(stepFile.text, stepFile.name, {
+  const config = {
       manualGuidePairs: generatorPreview.getGuidePairs(),
       guideStarts: generatorPreview.getGuideStarts(),
       rotation: modelRotation, offset: [...modelOffset], scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
       clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked,
-      trimAngle:n("gnTrimAngle"), cutOrder:$("gnCutOrder").value, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair",
+      trimAngle:n("gnTrimAngle"), cutOrder:$("gnCutOrder").value, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair"
+  };
+  try {
+    if (generatorPreview.getGuidePairs().length && generatorPreview.hasAuxiliaryCurves()) {
+      const review=Gen.buildF4VisualPreview(stepFile.text,config.manualGuidePairs,config);
+      const outName=stepFile.name.replace(/\.(stp|step)$/i,"")+"_F4_VISUAL_ONLY";
+      $("gnOut").textContent="ВИЗУАЛИЗАЦИЯ: "+outName+" (не сохраняется)";
+      loadProgram(review.program,outName,{generationStamp:generatorSignature(),previewOnly:true});
+      setCamera("3d");
+      status.className="note crit";
+      status.textContent="F4: создана виртуальная траектория "+review.diagnostic.operations.length+
+        " резов для 3D-симулятора. НЕ программа станка: входы/выходы и сохранность детали не подтверждены. "+
+        "Сохранение, копирование и запуск на оборудовании заблокированы.";
+      $("gnDone").hidden=false;
+      $("gnSave").hidden=true;
+      $("gnToCut").textContent="Смотреть в РЕЗКЕ (симулятор)";
+      return;
+    }
+    $("gnSave").hidden=false;
+    $("gnToCut").textContent="Открыть в РЕЗКЕ";
+    const r = Gen.buildProgram(stepFile.text, stepFile.name, {
+      ...config
     });
     const outName = stepFile.name.replace(/\.(stp|step)$/i, "") + (mode === "normal" ? "" : "_" + mode) + "_auto.gcode";
     $("gnOut").textContent = outName;
