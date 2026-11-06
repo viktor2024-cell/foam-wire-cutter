@@ -3509,7 +3509,7 @@ const Gen = (() => {
     g += prog.travel("cut", yl, levelL, yr, levelR);       // - обратно по той же щели
     return [g, towers];
   }
-  function profileBlock(safe, prog, contour, layout, axis, kerf, notes, side, stockWidth, margin, sag, maxStep, sideEntry = false) {
+  function profileBlock(safe, prog, contour, layout, axis, kerf, notes, side, stockWidth, margin, sag, maxStep, sideEntry = false, stockCenter = 0) {
     const segments = prepareContour(contour.map(([f, fw]) => faceSegment(f, fw)), axis, kerf, true, notes);
     // Enter at a contour corner on the entry side, rather than the midpoint of a face.
     // Choose traversal so the upper branch is cut before the lower branch.
@@ -3559,7 +3559,7 @@ const Gen = (() => {
     }
     if(!orderedPath) throw new StepError("Не удалось однозначно выбрать верхний обход наружного контура");
     const towers=orderedPath;
-    const yOut = side * (stockWidth / 2 + margin);
+    const yOut = stockCenter + side * (stockWidth / 2 + margin);
     const [[yl, zl], [yr, zr]] = towers[0];
     let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", corner entry, upper first, " + (hasUpperCorner ? "exit Z+5 mm" : "exit via entry slit") + " ***" + EOL;
     // Move to the entry height outside the block, then enter horizontally.
@@ -3656,8 +3656,13 @@ const Gen = (() => {
     const shifted=offset.some(v=>Math.abs(v)>1e-9);
     if(shifted && (o.pair || model.wireframe || secondaryContours.length))
       throw new StepError("Смещение пока доступно для одиночной детали без дополнительных направлений и STEP только с кривыми");
-    if (Math.abs(offset[0])+part.span/2>stockLength/2+1e-6 || Math.abs(offset[1])+(part.x1-part.x0)/2>stockWidth/2+1e-6 || Math.abs(offset[2])+(part.z1-part.z0)/2>stockHeight/2+1e-6)
-      throw new Error("Смещённая модель не помещается в заготовку; увеличьте её размер или сдвиньте модель к центру");
+    // Model and stock now translate together: fit is independent of offset.
+    // Check the translated stock against the physical machine separately.
+    if(o.bottomZ+offset[2]<0||
+       o.bottomZ+offset[2]+stockHeight+o.clearance>cfg.VerticalTravel||
+       stockLength/2+Math.abs(offset[0])>cfg.FieldWidth/2||
+       stockWidth/2+Math.abs(offset[1])>cfg.HorizontalTravel/2)
+      throw new StepError("Смещённая заготовка выходит за физические пределы станка");
     const xc = (part.x0 + part.x1) / 2, yc = (planeA + planeB) / 2, zc = (part.z0 + part.z1) / 2;
     const half = cfg.FieldWidth / 2;
     // - spanSign и chordSign меняют стороны размаха и хорды, zSign отражает по высоте, zMid - высота середины детали
@@ -3677,7 +3682,8 @@ const Gen = (() => {
     const finishedDimension=trimAngle===90?part.span:part.x1-part.x0;
     const trim = { Length: trimDimension, Width: trimAngle===90?stockWidth:stockLength,
       Height: stockHeight, TrimEnds: (trimDimension-finishedDimension)/2-kerf/2,
-      BottomZ:o.bottomZ, RetractOffset:o.retract, Angle:trimAngle };
+      BottomZ:o.bottomZ+offset[2], RetractOffset:o.retract, Angle:trimAngle,
+      CenterOffset:trimAngle===90?offset[0]:offset[1] };
     const hasTrim = o.trim !== false && trim.TrimEnds > 0;
     // The selected angle swaps which stock dimension lies along the wire.
     // Reject stock too long for the tower spacing even if transverse/Z travel fits.
@@ -3689,11 +3695,12 @@ const Gen = (() => {
     if(o.trim!==false && trim.TrimEnds<=0)
       warnings.push("Торцевание B"+trimAngle+" пропущено: по выбранной оси нет положительного припуска");
     const sideEntry = o.sideEntry === true;
-    if(hasTrim && (trimAngle===90?Math.abs(offset[0]):Math.abs(offset[1]))>1e-9)
-      throw new StepError("Торцевание со смещением по подрезаемой оси пока не поддерживается; центрируйте модель или отключите торцевание");
+    if(hasTrim && (trimAngle===90?stockWidth/2+Math.abs(offset[1]):stockLength/2+Math.abs(offset[0]))>cfg.FieldWidth/2)
+      throw new StepError("Смещённая заготовка не помещается между башнями при торцевании B"+trimAngle);
     if(model.wireframe && (o.pair||o.mirror||sideEntry))
       throw new StepError("Для STEP только с кривыми пока поддержана одна обычная деталь; пара, зеркало и боковой вход заблокированы до проверки соответствия щелей");
     if (secondaryContours.length && (o.pair || o.mirror || sideEntry)) throw new StepError("Дополнительные направления: режим пары, зеркала и бокового входа ещё не поддержан; G-code заблокирован");
+    if (sideEntry && shifted) throw new StepError("Боковой вход со смещённой заготовкой пока не поддерживается");
     if (sideEntry && (o.trim !== false || o.pair || holes.length || o.side !== 1)) throw new Error("Боковой вход справа требует одну деталь без отверстий, торцевания и входа слева");
     if (sideEntry && (stockWidth / 2 + o.leadMargin > cfg.ParkX || o.leadMargin <= 0)) throw new Error("Нет внешнего коридора между правым краем заготовки и парковкой");
     const errors = checkTrim(cfg, hasTrim ? trim : { ...trim, TrimEnds: 0 }, !sideEntry);
@@ -3709,15 +3716,16 @@ const Gen = (() => {
     if(model.tolerance>.1) warnings.push("Допуск поверхности "+model.tolerance.toFixed(2)+" мм; выборочная оценка до "+model.maxCheckedDeviation.toFixed(2)+" мм до компенсации реза");
     let program = "; FM_step2gcode: " + fileName + (o.pair ? " (pair: upper reflected over gap, turned 180)" : o.mirror ? " (mirror)" : "") + EOL;
     program += "; STEP TOLERANCE=" + model.tolerance.toFixed(3) + " mm; sampled upper estimate=" + model.maxCheckedDeviation.toFixed(3) + " mm" + EOL;
-    program += "; MODEL OFFSET X="+fmtG(offset[0])+" Y="+fmtG(offset[1])+" Z="+fmtG(offset[2])+" mm"+EOL;
+    program += "; STOCK+MODEL OFFSET X="+fmtG(offset[0])+" Y="+fmtG(offset[1])+" Z="+fmtG(offset[2])+" mm"+EOL;
     program += "; CUT MODE=" + (o.pair ? "PAIR PIECES=2" : o.mirror ? "MIRROR PIECES=1" : "SINGLE PIECES=1") + EOL;
     program += "; TRIM B="+trimAngle+" ENABLED="+(hasTrim?1:0)+"; ORDER="+cutOrder+EOL;
     if(model.wireframe)program+="; STEP GEOMETRY=CURVES_ONLY; reconstructed ruled interpolation, original surfaces unavailable"+EOL;
-    program += "; STOCK L=" + fmtG(stockWidth) + " W=" + fmtG(stockLength) + " H=" + fmtG(stockHeight) + " Z0=" + fmtG(o.bottomZ) + EOL;
+    program += "; STOCK L=" + fmtG(stockWidth) + " W=" + fmtG(stockLength) + " H=" + fmtG(stockHeight) + " Z0=" + fmtG(o.bottomZ) +
+      " OX="+fmtG(offset[0])+" OY="+fmtG(offset[1])+" OZ="+fmtG(offset[2])+EOL;
     program += "; CUT F=" + fmtG(cfg.FeedRateCut) + " mm/s S=" + fmtG(cfg.WireMinPower) + ".." + fmtG(cfg.WireMaxPower) + " kerf=" + fmtG(kerf) + EOL;
     const prog = new Program(cfg, o.powerComp, 5);
     program += startBlock(cfg, prog);
-    const allTowers = [], safe = sideEntry ? cfg.ParkZ : o.bottomZ + stockHeight + cfg.TravelClearance;
+    const allTowers = [], safe = sideEntry ? cfg.ParkZ : o.bottomZ + offset[2] + stockHeight + cfg.TravelClearance;
     // - Сначала отводим каретки в безопасную позицию; торцевание выполняется при столе 90°
     program += ";" + EOL + "; - Safe position before cutting" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe);
     if (hasTrim) {
@@ -3741,7 +3749,7 @@ const Gen = (() => {
         throw new StepError("При повороте для второго реза заготовка задевает парковочный коридор (радиус "+radius90.toFixed(1)+" мм)");
       if(stockWidth>cfg.FieldWidth-2)
         throw new StepError("Ширина заготовки "+stockWidth+" мм не помещается между башнями после поворота стола");
-      const zMid=o.bottomZ+stockHeight/2;
+      const zMid=o.bottomZ+stockHeight/2+offset[2];
       for(const op of secondaryContours) {
         const [dx,dy]=op.dir;
         let angle=Math.atan2(dx,-dy)*180/Math.PI;
@@ -3782,7 +3790,7 @@ const Gen = (() => {
       program += block; allTowers.push(...towers);
     };
     const addProfile = (layout, side) => {
-      const [block, towers] = profileBlock(safe, prog, outer, layout, axis, kerf, warnings, side, stockWidth, o.leadMargin, sag, maxStep, sideEntry);
+      const [block, towers] = profileBlock(safe, prog, outer, layout, axis, kerf, warnings, side, stockWidth, o.leadMargin, sag, maxStep, sideEntry, offset[1]);
       program += block; allTowers.push(...towers);
     };
     if (o.pair) {
