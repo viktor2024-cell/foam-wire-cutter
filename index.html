@@ -172,6 +172,8 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
     <div class="row" aria-label="Выбор пар направляющих">
       <button id="gnGuideMode" type="button" aria-pressed="false">Выбрать кривые в 3D</button>
       <button id="gnGuideConfirm" type="button" disabled title="Подтвердить две выбранные кривые (или правая кнопка мыши / Enter)">ПОДТВЕРДИТЬ</button>
+      <button id="gnGuideStartMode" type="button" aria-pressed="false">Задать начало реза</button>
+      <button id="gnGuideStartReset" type="button">Сбросить начало</button>
       <button id="gnGuideUndo" type="button">Отменить пару</button>
       <button id="gnGuideExport" type="button">Сохранить пары JSON</button>
       <button id="gnGuideEntryExit" type="button">Проверить вход и выход</button>
@@ -4248,6 +4250,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
   try {
     const r = Gen.buildProgram(stepFile.text, stepFile.name, {
       manualGuidePairs: generatorPreview.getGuidePairs(),
+      guideStarts: generatorPreview.getGuideStarts(),
       rotation: modelRotation, offset: [...modelOffset], scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
       clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked,
