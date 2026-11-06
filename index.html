@@ -1947,6 +1947,20 @@ const Gen = (() => {
       : correspondence.reverse?1-u:u;
     return {correspondence,mapB,at};
   }
+  // User-selected beginning of a manually paired guide operation.
+  // A closed profile may start at any normalized point on curve A.
+  // An open profile must start at an end (otherwise one continuous pass
+  // cannot cover the entire curve without a second unvalidated move).
+  function resolveGuideStart(a,b,startU=0) {
+    const matched=matchGuideCurves(a,b);
+    if(!Number.isFinite(startU)||startU<0||startU>1)
+      throw new StepError("Начало реза должно лежать на выбранной направляющей");
+    const u0=a.closed?(startU===1?0:startU):(startU>=.5?1:0);
+    const mapA=t=>a.closed?((u0+t)%1+1)%1:(u0===1?1-t:t);
+    const mapB=t=>matched.mapB(mapA(t));
+    return {correspondence:matched.correspondence,startU:u0,
+      reverseA:!a.closed&&u0===1,mapA,mapB};
+  }
   function previewGeometry(text, rotation = identityRotation(), scale = 1, tolerance = 0.1) {
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
     const model = new Model(text, rotation, scale, tolerance);
@@ -4102,13 +4116,15 @@ const Gen = (() => {
       const den=bb-aa;
       if(Math.abs(den)<.1)throw new StepError("Направляющие лежат в одной плоскости");
       ids.forEach(id=>used.add(id));
-      const {correspondence,mapB}=matchGuideCurves(a,b);
+      const key=ids.join(':');
+      const userStart=o.guideStarts?.[key]??0;
+      const {correspondence,mapA,mapB,startU,reverseA}=resolveGuideStart(a,b,userStart);
       const samples=[], bounds=[Infinity,-Infinity,Infinity,-Infinity], axisName=axis===1?"B0":"B90";
       const zBase=bottom+stock[2]/2+offset[2];
       const crossBase=CONFIG.HorizontalTravel/2+
         (axis===1?offset[1]:offset[0]);
       for(let i=0;i<=nSamples;i++){
-        const u=i/nSamples,pa=at(a,u),pb=at(b,mapB(u));
+        const u=i/nSamples,pa=at(a,mapA(u)),pb=at(b,mapB(u));
         const crossA=pa[cross]-origin[cross],crossB=pb[cross]-origin[cross];
         const zA=pa[2]-origin[2],zB=pb[2]-origin[2];
         const ext=(v1,v2,x)=>v1+(v2-v1)*(x-aa)/den;
@@ -4131,7 +4147,7 @@ const Gen = (() => {
       ],{clearance,margin:Math.max(2,Number(o.kerf)||0),field:CONFIG.HorizontalTravel,
         vertical:CONFIG.VerticalTravel});
       operations.push({ids:ids.slice(),angle:axis===1?0:90,operation:axisName,closed:a.closed,
-        planeSpan:Math.abs(den),towersDistance,correspondence,samples,
+        planeSpan:Math.abs(den),towersDistance,correspondence,startU,reverseA,samples,
         alignmentNeedsReview:correspondence.shapeRms>2,
         bounds:{transverse:[bounds[0],bounds[1]],z:[bounds[2],bounds[3]]},
         insideEnvelope,insideWithClearance,insideStockHeight,entryExit,approvedForGcode:false,
@@ -4182,7 +4198,7 @@ const Gen = (() => {
       trimAngle,cutOrder,trimOperation,plannedSequence,stockRemoval,
       approvedForGcode:false,notes:"Моделирование последовательного удаления материала выполнено на объёмной сетке. Сохранность STEP-детали и безопасные режущие входы ещё не сертифицированы. Не станочный код."};
   }
-  return { buildProgram, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
+  return { buildProgram, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, resolveGuideStart, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
 })();
 
 // ---------------------------------------------------------------------------------------------
