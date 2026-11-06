@@ -950,6 +950,22 @@ test('operator-directed F4 outputs actual G-code with two tower coordinates and 
    /вертикальный ход/);
  assert.throws(()=>gen.buildF4Program(step,[[910005,910006]],{...base,offset:[0,150,0]}),
    /поперечный ход/);
+ // Trimming coordinates must follow the same offset at either table angle.
+ for(const [angle,deltaOffset,dy] of [
+   [0,[0,7,3],7],
+   [90,[5,0,3],5]
+ ]){
+   const opts={...base,trim:true,trimAngle:angle};
+   const t0=gen.buildF4Program(step,[[910005,910006]],opts);
+   const t1=gen.buildF4Program(step,[[910005,910006]],{...opts,offset:deltaOffset});
+   assert.match(t0.program,new RegExp('TRIM B'+angle));
+   const first=r=>sim.parseGcode(r.program).moves.find(m=>m.type==='G1');
+   const a=first(t0),b=first(t1);
+   assert.ok(a&&b,'expected a trimming cut at B'+angle);
+   for(const [axis,delta] of [['X',dy],['Y',3],['Z',dy],['A',3]])
+     assert.ok(Math.abs(b.to[axis]-a.to[axis]-delta)<.03,
+       'trim B'+angle+' axis '+axis);
+ }
 
  // Invalid motion parameters must be rejected rather than normalized or
  // passed through to the postprocessor.
