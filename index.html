@@ -3658,11 +3658,14 @@ const Gen = (() => {
       throw new StepError("Смещение пока доступно для одиночной детали без дополнительных направлений и STEP только с кривыми");
     // Model and stock now translate together: fit is independent of offset.
     // Check the translated stock against the physical machine separately.
-    if(o.bottomZ+offset[2]<0||
-       o.bottomZ+offset[2]+stockHeight+o.clearance>cfg.VerticalTravel||
+    const stockBottom=o.bottomZ+offset[2];
+    const requiredStockTop=stockBottom+stockHeight+(o.sideEntry?0:o.clearance);
+    if(stockBottom<0||requiredStockTop>cfg.VerticalTravel||
        stockLength/2+Math.abs(offset[0])>cfg.FieldWidth/2||
        stockWidth/2+Math.abs(offset[1])>cfg.HorizontalTravel/2)
-      throw new StepError("Смещённая заготовка выходит за физические пределы станка");
+      throw new StepError("Смещённая заготовка выходит за физические пределы станка: "+
+        "верх с запасом Z="+requiredStockTop.toFixed(1)+
+        " мм, предел Z="+cfg.VerticalTravel.toFixed(1)+" мм");
     const xc = (part.x0 + part.x1) / 2, yc = (planeA + planeB) / 2, zc = (part.z0 + part.z1) / 2;
     const half = cfg.FieldWidth / 2;
     // - spanSign и chordSign меняют стороны размаха и хорды, zSign отражает по высоте, zMid - высота середины детали
