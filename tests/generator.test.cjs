@@ -650,3 +650,15 @@ test('paired planar STEP guides extrapolate to both towers at B0 without releasi
  assert.ok(op.samples.every(p=>Math.abs(p.left[1]-p.right[1])<1e-7));
  assert.equal(motion.safeForGcode,false);
 });
+
+test('external F4-11 ambiguous BREP must still preview model edges and selectable curves',
+ {skip:!process.env.F4_11_STEP},()=>{
+ const step=fs.readFileSync(process.env.F4_11_STEP,'utf8');
+ const g=gen.previewGeometry(step);
+ assert.match(g.previewError,/Углы грани.*не соединены боковым ребром/);
+ assert.ok(g.edgeLines.length>0,'BREP edge skeleton must remain visible');
+ assert.deepEqual(Array.from(g.auxiliaryCurves,c=>c.id),[197,337,544,681,694,707]);
+ assert.ok(g.size.every(v=>Number.isFinite(v)&&v>0));
+ assert.equal(g.diagnosticOnly,true);
+ assert.throws(()=>gen.buildProgram(step,'F4-11.stp',options()),/вспомогательных кривых.*заблокирована/);
+});
