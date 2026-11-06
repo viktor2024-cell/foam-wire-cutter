@@ -440,6 +440,7 @@ const generatorPreview = (() => {
     pendingGuide = [];
     guideDot.style.display = 'none';
     guideFeedback(guideMode ? 'Выберите две кривые мышкой, затем ПКМ или ПОДТВЕРДИТЬ.' : undefined);
+    renderer.domElement.style.cursor=guideMode?'crosshair':'';
     updateGuideColors();
   });
   startButton.addEventListener('click',()=>{
@@ -447,11 +448,11 @@ const generatorPreview = (() => {
     if(startMode){guideMode=false;pendingGuide=[];guideFeedback();}
     startButton.setAttribute('aria-pressed',String(startMode));
     startButton.textContent=startMode?'Начало реза: выбор в 3D':'Задать начало реза';
-    renderer.domElement.style.cursor=startMode?'crosshair':'';
     guideDot.style.display='none';
     guideFeedback(startMode?
       'Выбери точку на первой кривой активной пары. Открытый профиль — только концы.':
       'Режим выбора начала выключен.');
+    renderer.domElement.style.cursor=startMode?'crosshair':'';
   });
   startResetButton.addEventListener('click',()=>{
     const ids=selectedGuidePair();
