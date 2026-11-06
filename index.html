@@ -3757,6 +3757,48 @@ const Gen = (() => {
       }
       return t0<t1+1e-10;
     };
+    // Conservatively cover the *entire swept wire* between two tower
+    // positions, not just 65 sampled snapshots. The convex hull may flag
+    // extra intersections, but it must not overlook a narrow collision.
+    const hullTouchesStock=points=>{
+      const cross=(a,b,c)=>(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+      const sorted=points.slice().sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+      const lower=[],upper=[];
+      for(const p of sorted){
+        while(lower.length>=2&&cross(lower.at(-2),lower.at(-1),p)<=0)lower.pop();
+        lower.push(p);
+      }
+      for(const p of sorted.slice().reverse()){
+        while(upper.length>=2&&cross(upper.at(-2),upper.at(-1),p)<=0)upper.pop();
+        upper.push(p);
+      }
+      let poly=lower.slice(0,-1).concat(upper.slice(0,-1));
+      const clip=(axis,edge,greater)=>{
+        if(!poly.length)return;
+        const old=poly,output=[];
+        const ok=p=>greater?p[axis]>=edge:p[axis]<=edge;
+        const intersect=(a,b)=>{
+          const k=(edge-a[axis])/(b[axis]-a[axis]);
+          return a.map((v,i)=>v+(b[i]-v)*k);
+        };
+        for(let i=0;i<old.length;i++){
+          const a=old[i],b=old[(i+1)%old.length],insideA=ok(a),insideB=ok(b);
+          if(insideA&&insideB)output.push(b);
+          else if(insideA&&!insideB)output.push(intersect(a,b));
+          else if(!insideA&&insideB){output.push(intersect(a,b));output.push(b);}
+        }
+        poly=output;
+      };
+      clip(0,xmin+.01,true);clip(0,xmax-.01,false);
+      clip(1,zmin+.01,true);clip(1,zmax-.01,false);
+      if(poly.length<3)return false;
+      let area=0;
+      for(let i=0;i<poly.length;i++){
+        const a=poly[i],b=poly[(i+1)%poly.length];
+        area+=a[0]*b[1]-b[0]*a[1];
+      }
+      return Math.abs(area)>.000001;
+    };
     const inspect=(from,to)=>{
       const steps=64;let intersects=false,firstContact=null;
       for(let k=0;k<=steps;k++){
@@ -3765,6 +3807,10 @@ const Gen = (() => {
         const r=from.right.map((v,i)=>v+(to.right[i]-v)*u);
         if(inside(l,r)){intersects=true;if(firstContact===null)firstContact=u;}
       }
+      // Hull-based overapproximation also catches thin contacts occurring
+      // strictly between the sampled wire positions.
+      intersects=intersects||inside(from.left,to.left)||inside(from.right,to.right)||
+        hullTouchesStock([from.left,from.right,to.left,to.right]);
       const within=[from.left,from.right,to.left,to.right].every(limit);
       return {from,to,withinMachineTravel:within,intersectsUncutStock:intersects,
         firstStockContactFraction:firstContact,
@@ -3784,14 +3830,14 @@ const Gen = (() => {
     const inspectEnd=(tip,entry)=>{
       const target=endpoint(tip);
       const high={left:[tip.left[0],safeZ],right:[tip.right[0],safeZ]};
+      const evaluate=(standby)=>entry?inspect(standby,target):inspect(target,standby);
       const candidates=[
-        {route:"ABOVE_STOCK",...inspect(high,target)},
+        {route:"ABOVE_STOCK",...evaluate(high)},
         ...["left","right"].map(side=>({
           route:side==="left"?"OUTSIDE_LEFT":"OUTSIDE_RIGHT",
-          ...inspect(sideStart(target,side),target)
+          ...evaluate(sideStart(target,side))
         }))
       ];
-      if(!entry)for(const c of candidates){const old=c.from;c.from=c.to;c.to=old;}
       const clear=candidates.find(c=>c.rapidTravelAllowed);
       return {candidates,
         recommended:clear?clear.route:null,
