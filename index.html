@@ -3103,6 +3103,7 @@ const Gen = (() => {
     constructor(cfg, compensate, powerStep) {
       this.cfg = cfg; this.compensate = compensate; this.powerStep = powerStep;
       this.pos = null; this.power = cfg.WireMinPower; this.minPower = this.maxPower = this.power; this.changes = 0; this.clipped = false;
+      this.probeTargets = cfg.PlacementProbe ? [] : null;
     }
     wireLength(pos) { const a = pos[0] - pos[2], b = pos[1] - pos[3]; return Math.sqrt(this.cfg.FieldWidth ** 2 + a * a + b * b); }
     powerFor(length) {
@@ -3113,7 +3114,9 @@ const Gen = (() => {
     travel(kind, yl, zl, yr, zr) {
       const target = [yl, zl, yr, zr];
       const halfY = this.cfg.HorizontalTravel / 2;
-      if (!target.every(Number.isFinite) || Math.abs(yl) > halfY || Math.abs(yr) > halfY || Math.min(zl, zr) < 0 || Math.max(zl, zr) > this.cfg.VerticalTravel) {
+      if (!target.every(Number.isFinite) ||
+          (!this.cfg.PlacementProbe && (Math.abs(yl) > halfY || Math.abs(yr) > halfY ||
+           Math.min(zl, zr) < 0 || Math.max(zl, zr) > this.cfg.VerticalTravel))) {
         throw new Error("Перемещение выходит за ход кареток: Y=" + yl + "/" + yr + ", Z=" + zl + "/" + zr);
       }
       let g = "";
@@ -3128,6 +3131,7 @@ const Gen = (() => {
         }
       }
       this.pos = target;
+      if(this.probeTargets)this.probeTargets.push(target.slice());
       return g + travel(this.cfg, kind, yl, zl, yr, zr);
     }
   }
@@ -3586,7 +3590,8 @@ const Gen = (() => {
     TravelClearance: 20, FeedRateCut: 7, FeedRateMove: 14, FeedRateRotate: 30, WireMinPower: 500, WireMaxPower: 1000,
   };
   function buildProgram(text, fileName, o) {
-    const cfg = { ...CONFIG, TravelClearance: o.clearance, FeedRateCut: o.feed, WireMinPower: o.minS, WireMaxPower: o.maxS };
+    const cfg = { ...CONFIG, TravelClearance: o.clearance, FeedRateCut: o.feed, WireMinPower: o.minS, WireMaxPower: o.maxS,
+      PlacementProbe: o._autoPlacementProbe === true };
     const warnings = [], [stockLength, stockWidth, stockHeight] = o.stock, kerf = o.kerf, sag = 0.01, maxStep = 1, RadialMargin = 2;
     const trimAngle=o.trimAngle===undefined?90:Number(o.trimAngle);
     const cutOrder=o.cutOrder||'B90_B0';
@@ -3660,9 +3665,9 @@ const Gen = (() => {
     // Check the translated stock against the physical machine separately.
     const stockBottom=o.bottomZ+offset[2];
     const requiredStockTop=stockBottom+stockHeight+(o.sideEntry?0:o.clearance);
-    if(stockBottom<0||requiredStockTop>cfg.VerticalTravel||
+    if(!cfg.PlacementProbe && (stockBottom<0||requiredStockTop>cfg.VerticalTravel||
        stockLength/2+Math.abs(offset[0])>cfg.FieldWidth/2||
-       stockWidth/2+Math.abs(offset[1])>cfg.HorizontalTravel/2)
+       stockWidth/2+Math.abs(offset[1])>cfg.HorizontalTravel/2))
       throw new StepError("Смещённая заготовка выходит за физические пределы станка: "+
         "Верх заготовки с запасом Z="+requiredStockTop.toFixed(1)+
         " мм, предел Z="+cfg.VerticalTravel.toFixed(1)+" мм");
@@ -3706,7 +3711,7 @@ const Gen = (() => {
     if (sideEntry && shifted) throw new StepError("Боковой вход со смещённой заготовкой пока не поддерживается");
     if (sideEntry && (o.trim !== false || o.pair || holes.length || o.side !== 1)) throw new Error("Боковой вход справа требует одну деталь без отверстий, торцевания и входа слева");
     if (sideEntry && (stockWidth / 2 + o.leadMargin > cfg.ParkX || o.leadMargin <= 0)) throw new Error("Нет внешнего коридора между правым краем заготовки и парковкой");
-    const errors = checkTrim(cfg, hasTrim ? trim : { ...trim, TrimEnds: 0 }, !sideEntry);
+    const errors = cfg.PlacementProbe ? [] : checkTrim(cfg, hasTrim ? trim : { ...trim, TrimEnds: 0 }, !sideEntry);
     if (errors.length) throw new Error(errors.join("; "));
     if (hasTrim && Math.abs(trim.Length / 2 - trim.TrimEnds) < 0.01) warnings.push("Рез идёт через ось стола: припуск больше половины размера");
     // - При торцевании заготовка поворачивается на 90°, затем возвращается в 0° для резки профиля
@@ -3831,12 +3836,15 @@ const Gen = (() => {
     // --- Проверка пределов хода
     const halfY = cfg.HorizontalTravel / 2;
     for (const [[yl, zl], [yr, zr]] of allTowers) {
-      if (Math.abs(yl) > halfY || Math.abs(yr) > halfY || Math.min(zl, zr) < 0 || Math.max(zl, zr) > cfg.VerticalTravel) {
+      if (!cfg.PlacementProbe && (Math.abs(yl) > halfY || Math.abs(yr) > halfY || Math.min(zl, zr) < 0 || Math.max(zl, zr) > cfg.VerticalTravel)) {
         throw new Error("Контур выходит за ход кареток: Y=(" + yl.toFixed(1) + ", " + yr.toFixed(1) + ") Z=(" + zl.toFixed(1) + ", " + zr.toFixed(1) + ")");
       }
     }
     if (prog.clipped) warnings.push("Мощность проволоки упёрлась в максимум S=" + fmtG(cfg.WireMaxPower) + ": проволока слишком длинная для этой формулы");
-    return { program, warnings: [...new Set(warnings)], part, points: allTowers.length, holes: holes.length+secondaryContours.length, secondary: secondaryContours.length, power: [prog.minPower, prog.maxPower, prog.changes] };
+    return { program, warnings: [...new Set(warnings)], part, points: allTowers.length,
+      holes: holes.length+secondaryContours.length, secondary: secondaryContours.length,
+      power: [prog.minPower, prog.maxPower, prog.changes],
+      ...(cfg.PlacementProbe?{probeTargets:prog.probeTargets}: {}) };
   }
   // Preliminary F4 two-carriage motion from explicitly assigned guide pairs.
   // Coordinates are machine-frame candidates, NOT verified cutting moves.
