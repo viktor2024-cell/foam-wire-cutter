@@ -4209,7 +4209,51 @@ const Gen = (() => {
       trimAngle,cutOrder,trimOperation,plannedSequence,stockRemoval,
       approvedForGcode:false,notes:"Моделирование последовательного удаления материала выполнено на объёмной сетке. Сохранность STEP-детали и безопасные режущие входы ещё не сертифицированы. Не станочный код."};
   }
-  return { buildProgram, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, resolveGuideStart, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
+  // Review-only path encoding for the existing 3D G-code simulator.
+  // This is NOT a production postprocessor: leads, stock-preservation,
+  // turntable fixture and machine collisions remain unverified.
+  function buildF4VisualPreview(text,pairs,o={}) {
+    const diagnostic=manualGuideDiagnostics(text,pairs,o);
+    const f=n=>Number(n).toFixed(3);
+    const lines=[
+      '; *** SIMULATION ONLY / F4 UNVERIFIED / DO NOT SEND TO MACHINE ***',
+      '; No homing, no verified lead-in/out, no machine-safe output.',
+      '; STOCK L='+f(o.stock[0])+' W='+f(o.stock[1])+
+        ' H='+f(o.stock[2])+' Z0='+f(o.bottomZ),
+      '; CUT ORDER='+diagnostic.cutOrder+'; TRIM B='+diagnostic.trimAngle,
+      '; *** VIRTUAL CUTTING PATH - NOT A MACHINE PROGRAM ***',
+      'G21 G90 G94'
+    ];
+    const midpoint=CONFIG.HorizontalTravel/2;
+    const format=s=>'X'+f(s.left[0]-midpoint)+' Y'+f(s.left[1])+
+      ' Z'+f(s.right[0]-midpoint)+' A'+f(s.right[1]);
+    // Visual marker for selected stock trimming. Actual trim path must be
+    // independently modeled before any machining export.
+    if(diagnostic.trimOperation)lines.push('; VIRTUAL TRIM B'+diagnostic.trimAngle+
+      ' allowance '+f(diagnostic.trimOperation.trimAllowance)+
+      'mm - NOT EXECUTED IN THIS VISUAL PREVIEW');
+    for(const op of diagnostic.operations){
+      if(!op.samples.length)continue;
+      lines.push('; *** PREVIEW B'+op.angle+' #'+op.ids.join('/#')+' ***');
+      lines.push('G00 B'+f(op.angle)+' F'+f(CONFIG.FeedRateRotate*60));
+      lines.push('; UNVERIFIED APPROACH: teleport-like simulator positioning');
+      lines.push('G00 '+format(op.samples[0])+' F'+f(CONFIG.FeedRateMove*60));
+      // The simulator renders the wire only when it is switched on.
+      // This M03 exists only inside in-memory preview state. All forms of
+      // transmission, export and copy are blocked for preview-only jobs.
+      lines.push('M03 S'+f(Math.max(1,Number(o.minS)||500)));
+      for(let i=1;i<op.samples.length;i++)
+        lines.push('G01 '+format(op.samples[i])+' F'+f(Math.max(.1,Number(o.feed)||7)*60));
+      lines.push('M05');
+      lines.push('; EXIT NOT VERIFIED; NO PARK COMMAND GENERATED');
+    }
+    lines.push('; *** END OF SIMULATION-ONLY DATA ***');
+    return {program:lines.join('\r\n')+'\r\n',diagnostic,
+      previewOnly:true,
+      warnings:['F4 review only: machine output, copy and export disabled',
+        'Start and exit cutting leads, kerf side, safe B rotation and preserved STEP solid are NOT validated']};
+  }
+  return { buildProgram, buildF4VisualPreview, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, resolveGuideStart, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
 })();
 
 // ---------------------------------------------------------------------------------------------
