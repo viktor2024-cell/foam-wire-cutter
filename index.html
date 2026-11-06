@@ -3099,6 +3099,7 @@ const Gen = (() => {
   const rotate = (cfg, angle) => command("G00", "B" + fix2(angle), cfg.FeedRateRotate);
   const travel = (cfg, kind, yl, zl, yr, zr) => (kind === "cut" ? command("G01", travelPosition(yl, zl, yr, zr), cfg.FeedRateCut) : command("G00", travelPosition(yl, zl, yr, zr), cfg.FeedRateMove));
 
+  let placementProbeDepth=0; // private: never export unvalidated probe moves
   class Program {   // - Подстраивает мощность под длину проволоки: S = WireMinPower * длина / FieldWidth, не больше WireMaxPower
     constructor(cfg, compensate, powerStep) {
       this.cfg = cfg; this.compensate = compensate; this.powerStep = powerStep;
@@ -3591,7 +3592,7 @@ const Gen = (() => {
   };
   function buildProgram(text, fileName, o) {
     const cfg = { ...CONFIG, TravelClearance: o.clearance, FeedRateCut: o.feed, WireMinPower: o.minS, WireMaxPower: o.maxS,
-      PlacementProbe: o._autoPlacementProbe === true };
+      PlacementProbe: placementProbeDepth>0 };
     const warnings = [], [stockLength, stockWidth, stockHeight] = o.stock, kerf = o.kerf, sag = 0.01, maxStep = 1, RadialMargin = 2;
     const trimAngle=o.trimAngle===undefined?90:Number(o.trimAngle);
     const cutOrder=o.cutOrder||'B90_B0';
@@ -3857,11 +3858,13 @@ const Gen = (() => {
       throw new StepError("Авторазмещение: сначала отключите пару, зеркало и боковой вход");
     if(o.manualGuidePairs?.length)
       throw new StepError("Авторазмещение ручных пар F4 пока не поддерживается");
-    const step=1,base={...o,offset:[0,0,0],_autoPlacementProbe:true};
+    const step=1,base={...o,offset:[0,0,0]};
     const probes=[];
     for(let k=0;k<4;k++){
       const offset=k===0?[0,0,0]:[0,0,0].map((v,i)=>i===k-1?step:v);
-      probes.push(buildProgram(text,fileName,{...base,offset}).probeTargets);
+      placementProbeDepth++;
+      try{probes.push(buildProgram(text,fileName,{...base,offset}).probeTargets);}
+      finally{placementProbeDepth--;}
     }
     const n=probes[0].length;
     if(!n||probes.some(p=>p.length!==n))
@@ -3925,7 +3928,7 @@ const Gen = (() => {
     const offset=position.map(v=>Math.round(v*1000)/1000);
     // Quantization can push a very tight fit outside a limit. Never
     // return an unchecked suggestion or bypass the normal postprocessor.
-    const result=buildProgram(text,fileName,{...o,offset,_autoPlacementProbe:false});
+    const result=buildProgram(text,fileName,{...o,offset});
     return {offset,rotation:o.rotation||identityRotation(),program:result.program,
       points:result.points,displacement:Math.hypot(...offset),
       warnings:result.warnings,geometry:result.part};
