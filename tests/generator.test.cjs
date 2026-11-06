@@ -766,6 +766,18 @@ test('F4 lead check tests whole angled wire, not just its carriage endpoints',()
  assert.equal(path.entry.candidates[0].intersectsUncutStock,true);
  assert.equal(path.entry.candidates[0].rapidTravelAllowed,false);
 });
+test('F4 lead checker catches a very thin foam strip between sampled positions',()=>{
+ // The wire sweeps horizontally from x=70 to x=130, endpoints remain at
+ // z=10 and z=30. Foam is only 0.06 mm wide at x=100: 64 samples miss it.
+ const a={left:[70,10],right:[70,30]};
+ const b={left:[130,10],right:[130,30]};
+ const r=gen.inspectGuideEntryExit([b,b],[100,100.06,15,25],
+   {clearance:15});
+ // The above-stock lead to x=130 does not cross foam. The independent
+ // full-sweep function is exercised by the side candidate from x≈98 to x=130.
+ assert.ok(r.entry.candidates.some(c=>c.intersectsUncutStock));
+ assert.ok(r.entry.candidates.every(c=>!c.approvedForGcode));
+});
 test('F4 entry/exit rejects out-of-range approach positions',()=>{
  const pt=(x,z)=>({left:[x,z],right:[x,z]});
  const r=gen.inspectGuideEntryExit([pt(100,45),pt(100,44)],
