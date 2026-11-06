@@ -3664,7 +3664,7 @@ const Gen = (() => {
        stockLength/2+Math.abs(offset[0])>cfg.FieldWidth/2||
        stockWidth/2+Math.abs(offset[1])>cfg.HorizontalTravel/2)
       throw new StepError("Смещённая заготовка выходит за физические пределы станка: "+
-        "верх с запасом Z="+requiredStockTop.toFixed(1)+
+        "Верх заготовки с запасом Z="+requiredStockTop.toFixed(1)+
         " мм, предел Z="+cfg.VerticalTravel.toFixed(1)+" мм");
     const xc = (part.x0 + part.x1) / 2, yc = (planeA + planeB) / 2, zc = (part.z0 + part.z1) / 2;
     const half = cfg.FieldWidth / 2;
