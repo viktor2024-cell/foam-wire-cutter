@@ -15,7 +15,8 @@ function pairing() {
    {id:681,fixedAxis:0,closed:true,points:[[251,0,0],[251,1,0]]},
    {id:694,fixedAxis:0,closed:false,points:[[0,0,0],[0,5,0]]}
   ]},messages:[],guideFeedback(message){this.messages.push(message)},updateGuideColors(){},
-  invalidate(){}};
+  invalidate(){},resetStockSimulation(){},refreshGuideOperations(){},
+  guideEntryResult:{textContent:''}};
  ctx.guideFeedback=(message)=>ctx.messages.push(message);
  vm.createContext(ctx);
  vm.runInContext(source.slice(start,end)+';globalThis.pick=chooseGuide;globalThis.confirm=confirmGuidePair;',ctx);
