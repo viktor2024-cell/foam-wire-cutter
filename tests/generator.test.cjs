@@ -660,5 +660,14 @@ test('external F4-11 ambiguous BREP must still preview model edges and selectabl
  assert.deepEqual(Array.from(g.auxiliaryCurves,c=>c.id),[197,337,544,681,694,707]);
  assert.ok(g.size.every(v=>Number.isFinite(v)&&v>0));
  assert.equal(g.diagnosticOnly,true);
- assert.throws(()=>gen.buildProgram(step,'F4-11.stp',options()),/вспомогательных кривых.*заблокирована/);
+ assert.throws(()=>gen.buildProgram(step,'F4-11.stp',options()),/Ручных подтверждённых пар не передано/);
+ assert.throws(()=>gen.buildProgram(step,'F4-11.stp',options({
+  manualGuidePairs:[[197,544],[337,681]]
+ })),/Принято ручных пар: 2.*Станочный G-code для F4 пока запрещён/);
+ assert.throws(()=>gen.buildProgram(step,'F4-11.stp',options({
+  manualGuidePairs:[[197,544],[544,681]]
+ })),/используется повторно/);
+ assert.throws(()=>gen.buildProgram(step,'F4-11.stp',options({
+  manualGuidePairs:[[197,337]]
+ })),/геометрически несовместима/);
 });
