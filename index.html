@@ -1065,7 +1065,9 @@ let simTime = 0, playing = false, lastFrame = 0;
 
 function readSettings() {
   const n = (id) => parseFloat($(id).value) || 0;
-  return { L: n("sL"), W: n("sW"), H: n("sH"), Z0: n("sZ"), FW: n("mFW"), HT: n("mHT"), VT: n("mVT"),
+  return { L: n("sL"), W: n("sW"), H: n("sH"), Z0: n("sZ"),
+           OX: prog?.stock?.OX||0, OY: prog?.stock?.OY||0, OZ: prog?.stock?.OZ||0,
+           FW: n("mFW"), HT: n("mHT"), VT: n("mVT"),
            angle: n("mAng"), invB: $("invB").checked, laser: $("laser").checked };
 }
 
@@ -1078,7 +1080,11 @@ function parseGcode(text) {
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
     const sm = raw.match(/;\s*STOCK\s+L=([\d.]+)\s+W=([\d.]+)\s+H=([\d.]+)\s+Z0=(-?[\d.]+)/);
-    if (sm) stock = { L: +sm[1], W: +sm[2], H: +sm[3], Z0: +sm[4] };
+    if (sm) {
+      const om=raw.match(/\bOX=(-?[\d.]+)\s+OY=(-?[\d.]+)\s+OZ=(-?[\d.]+)/);
+      stock = { L: +sm[1], W: +sm[2], H: +sm[3], Z0: +sm[4],
+        OX: om?+om[1]:0, OY: om?+om[2]:0, OZ: om?+om[3]:0 };
+    }
     const tm = raw.match(/TRIM BLOCK:\s*L=([\d.]+)\s+W=([\d.]+)\s+H=([\d.]+)/);
     if (tm && !stock) stock = { L: +tm[1], W: +tm[2], H: +tm[3] };
     const cm = raw.match(/;\s*(\*\*\*.*?\*\*\*|\*\*\*.*|- .*)/);
@@ -1133,7 +1139,8 @@ function toLocal(pt, ang) {     // - точка станка -> координа
   return [pt[0] * c - pt[1] * sn, pt[0] * sn + pt[1] * c, pt[2]];
 }
 function clipToBox(p, q, s) {   // - Лян-Барски: часть отрезка p-q внутри заготовки; [s0, s1] либо null
-  const lo = [-s.W / 2, -s.L / 2, s.Z0], hi = [s.W / 2, s.L / 2, s.Z0 + s.H];
+  const lo = [(s.OX||0)-s.W/2,(s.OY||0)-s.L/2,s.Z0+(s.OZ||0)];
+  const hi = [(s.OX||0)+s.W/2,(s.OY||0)+s.L/2,s.Z0+(s.OZ||0)+s.H];
   let t0 = 0, t1 = 1;
   for (let k = 0; k < 3; k++) {
     const d = q[k] - p[k];
@@ -1324,7 +1331,9 @@ function buildScene(s) {
   // - Заготовка (вращается вместе со столом) и след реза в её координатах
   stockGroup = new THREE.Group(); machineGroup.add(stockGroup);
   const foamGeo = new THREE.BoxGeometry(s.W, s.L, s.H);
-  const foam = new THREE.Mesh(foamGeo, mats.foam); foam.position.z = s.Z0 + s.H / 2; stockGroup.add(foam);
+  const foam = new THREE.Mesh(foamGeo, mats.foam);
+  foam.position.set(s.OX||0,s.OY||0,s.Z0+s.H/2+(s.OZ||0));
+  stockGroup.add(foam);
   const edges = new THREE.LineSegments(new THREE.EdgesGeometry(foamGeo), mats.foamEdge); edges.position.copy(foam.position); stockGroup.add(edges);
   if (prog && prog.check) {
     const g1 = new THREE.BufferGeometry(); g1.setAttribute("position", new THREE.BufferAttribute(prog.check.trail, 3));
@@ -1347,7 +1356,7 @@ function countUpTo(times, t) {   // - сколько вершин следа у�
 function setCamera(mode) {
   for (const [id, m] of [["v3d", "3d"], ["vside", "side"], ["vtop", "top"]]) $(id).setAttribute("aria-pressed", String(m === mode));
   const s = readSettings();
-  controls.target.set(0, 0, s.Z0 + s.H / 2);
+  controls.target.set(s.OX||0,s.OY||0,s.Z0+s.H/2+(s.OZ||0));
   // - Камера со стороны оператора: станок стоит развёрнутым на 180° вокруг Z
   if (mode === "3d") camera.position.set(520, 640, 420);
   if (mode === "side") camera.position.set(900, 0, s.Z0 + s.H / 2 + 0.01);
