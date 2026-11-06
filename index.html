@@ -4404,18 +4404,24 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
   };
   try {
     if (generatorPreview.getGuidePairs().length && generatorPreview.hasAuxiliaryCurves()) {
-      const review=Gen.buildF4VisualPreview(stepFile.text,config.manualGuidePairs,config);
-      const outName=stepFile.name.replace(/\.(stp|step)$/i,"")+"_F4_VISUAL_ONLY";
-      $("gnOut").textContent="ВИЗУАЛИЗАЦИЯ: "+outName+" (не сохраняется)";
-      loadProgram(review.program,outName,{generationStamp:generatorSignature(),previewOnly:true});
+      const result=Gen.buildF4Program(stepFile.text,config.manualGuidePairs,config);
+      const outName=stepFile.name.replace(/\.(stp|step)$/i,"")+"_F4_auto.gcode";
+      $("gnOut").textContent=outName;
+      loadProgram(result.program,outName,{generationStamp:generatorSignature(),previewOnly:false});
       setCamera("3d");
-      status.className="note crit";
-      status.textContent="F4: создана виртуальная траектория "+review.diagnostic.operations.length+
-        " резов для 3D-симулятора. НЕ программа станка: входы/выходы и сохранность детали не подтверждены. "+
-        "Сохранение, копирование и запуск на оборудовании заблокированы.";
+      status.className="note";
+      const critical=prog.check.warns.filter(x=>x.level==="crit");
+      status.textContent="F4: создан G-code по "+result.diagnostic.operations.length+
+        " подтверждённым операциям. Строк: "+result.program.split("\n").length+
+        ". Проверьте движение в 3D и предупреждения."+
+        (critical.length?" Критических замечаний симулятора: "+critical.length+".":"");
+      for(const w of result.warnings){
+        const li=document.createElement("li");li.className="warn";
+        li.textContent=w;ul.appendChild(li);
+      }
       $("gnDone").hidden=false;
-      $("gnSave").hidden=true;
-      $("gnToCut").textContent="Смотреть в РЕЗКЕ (симулятор)";
+      $("gnSave").hidden=false;
+      $("gnToCut").textContent="Открыть в РЕЗКЕ";
       return;
     }
     $("gnSave").hidden=false;
