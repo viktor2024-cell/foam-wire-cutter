@@ -15,6 +15,67 @@ const generatorPreview = (() => {
   let guideMode = false, pendingGuide = [], savedGuidePairs = [], curveObjects = [];
   const guideModeButton = document.getElementById('gnGuideMode');
   const guideStatus = document.getElementById('gnGuideStatus');
+  const guideOp = document.getElementById('gnGuideOperation');
+  const guideProgress = document.getElementById('gnGuideProgress');
+  const guideProgressText = document.getElementById('gnGuideProgressText');
+  const guideMotion = document.getElementById('gnGuideMotion');
+  let guideWire = null;
+  // The wire preview is geometric only. No toolpath is approved by this UI.
+  const guideSample = (curve, u) => {
+    const pts = curve.points, end = pts.length - 1;
+    const at = Math.max(0, Math.min(end, u * end));
+    const i = Math.min(end - 1, Math.floor(at)), t = at - i;
+    return pts[i].map((x,k) => x + t * (pts[i+1][k]-x));
+  };
+  const guideToScene = p => new THREE.Vector3(
+    -p[1]-geometry.center[0]+modelOffset[0],
+    p[0]-geometry.center[1]+modelOffset[1],
+    p[2]-geometry.center[2]+(n('gnZ')+n('gnH')/2)+modelOffset[2]
+  );
+  function updateGuideMotion() {
+    guideProgressText.textContent = guideProgress.value + '%';
+    if (guideWire) {guideWire.parent?.remove(guideWire);guideWire.geometry.dispose();guideWire.material.dispose();guideWire=null;}
+    const pair = savedGuidePairs[Number(guideOp.value)];
+    if (!geometry || !pair) {
+      guideMotion.textContent='Назначьте пару кривых для диагностического просмотра. Станочный G-code не разрешён.';
+      return draw();
+    }
+    const curves = geometry.auxiliaryCurves;
+    const a=curves.find(c=>c.id===pair[0]), b=curves.find(c=>c.id===pair[1]);
+    if (!a || !b) return draw();
+    const t=Number(guideProgress.value)/100;
+    const pa=guideSample(a,t),pb=guideSample(b,t);
+    // This segment joins corresponding *parameters* of the two curves.
+    // A user-supplied pair does not yet resolve phase/reversal/seam matching.
+    const vertices=[guideToScene(pa),guideToScene(pb)];
+    const lineGeo=new THREE.BufferGeometry().setFromPoints(vertices);
+    guideWire=new THREE.Line(lineGeo,new THREE.LineBasicMaterial({color:0xff6c00,depthTest:false}));
+    guideWire.renderOrder=30;
+    group.add(guideWire);
+    const length=Math.hypot(...pa.map((x,k)=>x-pb[k]));
+    guideMotion.textContent='Диагностика #'+pair.join('/#')+
+      ' · '+Math.round(100*t)+'% · струна '+length.toFixed(1)+' мм · '+ 
+      (a.fixedAxis===1?'B0':a.fixedAxis===0?'B90':'ось Z')+
+      '. Синхронизация параметрическая, вход/выход и сохранность детали НЕ проверены.';
+    draw();
+  }
+  function refreshGuideOperations() {
+    const current=guideOp.value;
+    guideOp.replaceChildren();
+    for (let i=0;i<savedGuidePairs.length;i++) {
+      const o=document.createElement('option');o.value=String(i);
+      const ids=savedGuidePairs[i],a=geometry?.auxiliaryCurves?.find(c=>c.id===ids[0]);
+      o.textContent='#'+ids.join(' / #')+' · '+(a?.fixedAxis===1?'B0':a?.fixedAxis===0?'B90':'ось Z');
+      guideOp.appendChild(o);
+    }
+    guideOp.disabled=guideProgress.disabled=!savedGuidePairs.length;
+    if ([...guideOp.options].some(o=>o.value===current)) guideOp.value=current;
+    else guideOp.value=String(Math.max(0,savedGuidePairs.length-1));
+    updateGuideMotion();
+  }
+  guideOp.addEventListener('change',updateGuideMotion);
+  guideProgress.addEventListener('input',updateGuideMotion);
+
   const guideConfirmButton = document.getElementById('gnGuideConfirm');
   // Keep Three.js navigation intact; a 3 px dot marks the pick cursor centre.
   host.style.position = 'relative';
@@ -73,7 +134,7 @@ const generatorPreview = (() => {
       return false;
     }
     savedGuidePairs.push([idA, idB]); pendingGuide = [];
-    invalidate();
+    invalidate(); refreshGuideOperations();
     guideFeedback('Пара #' + idA + ' / #' + idB + ' назначена. Всего: ' +
       savedGuidePairs.length + '. Можно выбрать следующую пару.');
     updateGuideColors();
@@ -167,7 +228,7 @@ const generatorPreview = (() => {
   document.getElementById('gnGuideUndo').addEventListener('click', () => {
     if (pendingGuide.length) pendingGuide = [];
     else savedGuidePairs.pop();
-    invalidate(); guideFeedback(); updateGuideColors();
+    invalidate(); refreshGuideOperations(); guideFeedback(); updateGuideColors();
   });
   document.getElementById('gnGuideExport').addEventListener('click', () => {
     if (!stepFile || !savedGuidePairs.length) {
@@ -230,7 +291,7 @@ const generatorPreview = (() => {
   }
   function rebuild() {
     document.getElementById('gnStockFromModel').disabled = !geometry;
-    clear(); curveObjects = []; group = new THREE.Group(); scene.add(group);
+    guideWire = null; clear(); curveObjects = []; group = new THREE.Group(); scene.add(group);
     const machineBox = new THREE.BoxGeometry(machine.FieldWidth, machine.HorizontalTravel, machine.VerticalTravel);
     envelope = new THREE.LineSegments(new THREE.EdgesGeometry(machineBox), new THREE.LineDashedMaterial({color:0x667788, dashSize:7, gapSize:5}));
     machineBox.dispose();
@@ -322,7 +383,7 @@ const generatorPreview = (() => {
       fit.textContent = error || 'Откройте STEP для проверки размещения.';
       if (error) fit.className = 'note crit';
     }
-    aim();
+    aim(); updateGuideMotion();
   }
   let generatorPreviewLoadedFile = null;
   function load() {
@@ -335,7 +396,7 @@ const generatorPreview = (() => {
     savedGuidePairs = savedGuidePairs.filter(pair => pair.every(id =>
       geometry?.auxiliaryCurves?.some(c => c.id === id)));
     pendingGuide = []; guideFeedback();
-    rebuild();
+    rebuild(); refreshGuideOperations();
   }
   for (const [id,m] of [['gnView3d','3d'],['gnViewTop','top'],['gnViewSide','side']]) {
     document.getElementById(id).addEventListener('click',()=>{
