@@ -189,6 +189,13 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
     </div>
     <div class="note" id="gnGuideMotion" role="status">Назначьте пару кривых, чтобы увидеть перемещение струны; это диагностический просмотр, не G-code.</div>
     <div class="note" id="gnGuideEntryExitResult" role="status" aria-live="polite">Проверка входа/выхода не выполнялась. Не отправляйте движения на станок до подтверждения.</div>
+    <div class="row" aria-label="Проверка остатка материала">
+      <button id="gnStockSimulate" type="button">Смоделировать удаление материала</button>
+      <label for="gnStockStage">Показать остаток после</label>
+      <select id="gnStockStage" disabled></select>
+      <label class="check"><input id="gnStockCloud" type="checkbox" checked> Остаток в 3D</label>
+    </div>
+    <div class="note" id="gnStockSimResult" role="status" aria-live="polite">Объёмная симуляция ещё не выполнялась. Результат носит диагностический характер.</div>
     <div class="note" id="gnEnvelopeLegend"></div>
     <div class="row" id="gnRotate" aria-label="Поворот модели">
       <span>Модель, шаг 90°:</span>
