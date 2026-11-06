@@ -4,7 +4,8 @@ const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
 // Exercise the production generator without DOM stubs or a second implementation.
 const source=html.slice(html.indexOf('const Gen ='),html.indexOf('//  Вкладки и экран генератора'))
- .replace('return { buildProgram, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, resolveGuideStart, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };','return { buildProgram, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, resolveGuideStart, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel, Model, sampleFace, Program, startBlock, endBlock };');
+ .replace(/return \{ buildProgram,.*?CONFIG, previewGeometry, previewPair, identityRotation, rotateModel \};/,
+  match=>match.replace(' };', ', Model, sampleFace, Program, startBlock, endBlock };'));
 const gen=vm.runInNewContext(source+';Gen');
 const fixture=fs.readFileSync(path.join(__dirname,'fixtures/split-profile.stp'),'utf8');
 // Construct a genuine two-direction ruled STEP topology: the main sheet
@@ -905,4 +906,36 @@ test('guide cut start: closed arbitrary phase, open from either endpoint',()=>{
  assert.ok(Math.abs(c.mapA(1)-.375)<1e-9);
  assert.ok(Math.abs(c.mapB(0)-c.mapB(1))<1e-9);
  assert.throws(()=>gen.resolveGuideStart(closedA,closedB,NaN),/Начало реза/);
+});
+
+
+test('operator-directed F4 outputs actual G-code with two tower coordinates and user start',()=>{
+ const extra=[
+  "#910001 = CARTESIAN_POINT('',(0.,-30.,10.));",
+  "#910002 = CARTESIAN_POINT('',(15.,-30.,20.));",
+  "#910003 = CARTESIAN_POINT('',(0.,30.,10.));",
+  "#910004 = CARTESIAN_POINT('',(15.,30.,20.));",
+  "#910005 = B_SPLINE_CURVE_WITH_KNOTS ('guide',1,(#910001,#910002),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
+  "#910006 = B_SPLINE_CURVE_WITH_KNOTS ('guide',1,(#910003,#910004),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
+  "#910007 = GEOMETRIC_CURVE_SET ('guides',(#910005,#910006));"
+ ].join('\n');
+ const idx=fixture.lastIndexOf('ENDSEC;');
+ const step=fixture.slice(0,idx)+extra+'\n'+fixture.slice(idx);
+ const base={stock:[100,200,70],bottomZ:10,kerf:1,feed:7,
+   minS:500,maxS:1000,clearance:15,retract:20,
+   leadMargin:5,rotation:gen.identityRotation(),offset:[0,0,0],
+   scale:1,tolerance:.1,trim:false,trimAngle:0,cutOrder:'B0_B90',
+   guideStarts:{'910005:910006':1},powerComp:false};
+ const p=gen.buildF4Program(step,[[910005,910006]],base);
+ assert.match(p.program,/G92 X/);
+ assert.match(p.program,/GUIDES #910005\/#910006 START=1.0000/);
+ assert.match(p.program,/G00 B0.00/);
+ assert.match(p.program,/G01 X[-\d.]+ Y[-\d.]+ Z[-\d.]+ A[-\d.]+/);
+ assert.match(p.program,/M03 S500/);
+ assert.equal(p.operatorDirected,true);
+ assert.ok(p.points>0);
+ const broken=JSON.parse(JSON.stringify(base));
+ broken.stock=[1000,200,70];
+ assert.throws(()=>gen.buildF4Program(step,[[910005,910006]],broken),
+  /выходит за физические ходы|Превышен лимит/);
 });
