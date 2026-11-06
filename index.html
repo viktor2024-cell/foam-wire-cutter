@@ -240,7 +240,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
         <select id="gnTrimAngle"><option value="90" selected>B90 — по длине</option><option value="0">B0 — по ширине</option></select>
       </label>
       <label>Порядок основных резов
-        <select id="gnCutOrder"><option value="B0_B90" selected>Сначала B0, затем B90</option><option value="B90_B0">Сначала B90, затем B0</option></select>
+        <select id="gnCutOrder"><option value="B0_B90">Сначала B0, затем B90</option><option value="B90_B0" selected>Сначала B90, затем B0</option></select>
       </label>
     </div>
     <div class="note" id="gnOrderExplanation">При двух направлениях порядок относится к главным контурам; технологические отверстия и входы проверяются отдельно. Для F4 G-code разрешается только после проверки безопасной траектории.</div>
@@ -3540,7 +3540,7 @@ const Gen = (() => {
     const cfg = { ...CONFIG, TravelClearance: o.clearance, FeedRateCut: o.feed, WireMinPower: o.minS, WireMaxPower: o.maxS };
     const warnings = [], [stockLength, stockWidth, stockHeight] = o.stock, kerf = o.kerf, sag = 0.01, maxStep = 1, RadialMargin = 2;
     const trimAngle=o.trimAngle===undefined?90:Number(o.trimAngle);
-    const cutOrder=o.cutOrder||'B0_B90';
+    const cutOrder=o.cutOrder||'B90_B0';
     if(![0,90].includes(trimAngle))throw new StepError("Угол торцевания должен быть B0 или B90");
     if(!['B0_B90','B90_B0'].includes(cutOrder))throw new StepError("Порядок должен быть B0 → B90 или B90 → B0");
     if (![...o.stock, o.bottomZ, o.kerf, o.clearance, o.leadMargin, o.feed, o.minS, o.maxS, o.retract].every(Number.isFinite) ||
@@ -3618,6 +3618,8 @@ const Gen = (() => {
       Height: stockHeight, TrimEnds: (trimDimension-finishedDimension)/2-kerf/2,
       BottomZ:o.bottomZ, RetractOffset:o.retract, Angle:trimAngle };
     const hasTrim = o.trim !== false && trim.TrimEnds > 0;
+    if(o.trim!==false && trim.TrimEnds<=0)
+      warnings.push("Торцевание B"+trimAngle+" пропущено: по выбранной оси нет положительного припуска");
     const sideEntry = o.sideEntry === true;
     if(hasTrim && (trimAngle===90?Math.abs(offset[0]):Math.abs(offset[1]))>1e-9)
       throw new StepError("Торцевание со смещением по подрезаемой оси пока не поддерживается; центрируйте модель или отключите торцевание");
@@ -3656,6 +3658,11 @@ const Gen = (() => {
       // - После торцевания возвращаем стол в 0°: основной профиль всегда режется в этой позиции
       program += ";" + EOL + "; - Return table to B0 after trimming" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe) + rotate(cfg, 0);
     }
+    // The existing solid-only secondary CAM can safely cut cross-sections
+    // before releasing the outer profile. Cutting the outer first may drop
+    // the part, so B0-first is rejected until material removal is simulated.
+    if(secondaryContours.length && cutOrder==='B0_B90')
+      throw new StepError("Порядок B0 → B90 не подтверждён: наружный профиль B0 может освободить деталь до реза B90. Выберите B90 → B0 или проверьте сохранность детали после B0.");
     // Cross-direction operations run BEFORE the outer profile releases the
     // part. B rotates the original (X,Y) stock frame, not the foam geometry.
     // For a rotation theta, along-wire = X*sin(theta)-Y*cos(theta),
