@@ -1412,7 +1412,7 @@ function showWarnings() {
 let original = null;        // - исходная программа: { text, name, base }
 let currentText = "", currentName = "", generationStamp = null;
 function generatorSignature() {
-  return JSON.stringify([stepFile?.text, modelRotation, modelOffset, [...document.querySelectorAll('#panelGen input, #panelGen select')].map(e=>[e.id,e.type==='checkbox'?e.checked:e.value])]);
+  return JSON.stringify([stepFile?.text, modelRotation, modelOffset, generatorPreview.getGuidePairs(), [...document.querySelectorAll('#panelGen input, #panelGen select')].map(e=>[e.id,e.type==='checkbox'?e.checked:e.value])]);
 }
 function requireCurrentProgram() {
   if (generationStamp !== null && generationStamp !== generatorSignature()) {
@@ -3503,9 +3503,29 @@ const Gen = (() => {
     if(!model.wireframe && model.auxiliaryCurveRefs.length) {
       const curves=model.auxiliaryCurves();
       const axes=curves.map(c=>c.fixedAxis<0?"3D":"XYZ"[c.fixedAxis]).join(", ");
-      throw new StepError("STEP содержит тело и "+curves.length+
-        " вспомогательных кривых (плоскости: "+axes+
-        "). Их направления резки пока не проверены: генерация G-code заблокирована.");
+      const assignments=Array.isArray(o.manualGuidePairs)?o.manualGuidePairs:[];
+      const index=new Map(curves.map(c=>[c.id,c]));
+      const taken=new Set();
+      for(const entry of assignments) {
+        if(!Array.isArray(entry)||entry.length!==2||entry[0]===entry[1])
+          throw new StepError("Неверная ручная пара направляющих.");
+        const [a,b]=entry.map(id=>index.get(id));
+        if(!a||!b||taken.has(entry[0])||taken.has(entry[1]))
+          throw new StepError("Ручная пара отсутствует в текущем STEP или используется повторно.");
+        if(a.fixedAxis<0||a.fixedAxis!==b.fixedAxis||a.closed!==b.closed||
+            Math.abs(a.points[0][a.fixedAxis]-b.points[0][b.fixedAxis])<0.1)
+          throw new StepError("Ручная пара #"+entry.join("/")+" геометрически несовместима.");
+        entry.forEach(id=>taken.add(id));
+      }
+      const details=assignments.length
+        ? "Принято ручных пар: "+assignments.length+" ("+
+          assignments.map(p=>"#"+p.join("/#")).join(", ")+"). "
+        : "Ручных подтверждённых пар не передано. ";
+      throw new StepError(details+"STEP содержит тело и "+curves.length+
+        " вспомогательных кривых (плоскости: "+axes+"). "+
+        "Ручные соответствия получены, но расчёт безопасной траектории, "+
+        "входа/выхода струны и проверки удаления материала ещё не реализован. "+
+        "Станочный G-code для F4 пока запрещён.");
     }
     const { outer, holes, secondaryContours, axis, planeA, planeB } = model.build();
     if (axis !== 1) throw new StepError("Поверните модель: размах должен идти вдоль струны (сейчас ось модели " + "XYZ"[axis] + ")");
@@ -3719,6 +3739,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
   $("gnDone").hidden = true;
   try {
     const r = Gen.buildProgram(stepFile.text, stepFile.name, {
+      manualGuidePairs: generatorPreview.getGuidePairs(),
       rotation: modelRotation, offset: [...modelOffset], scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
       clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair",
