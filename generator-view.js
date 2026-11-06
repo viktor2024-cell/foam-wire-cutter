@@ -78,18 +78,40 @@ const generatorPreview = (() => {
   }
   guideOp.addEventListener('change',updateGuideMotion);
   guideProgress.addEventListener('input',updateGuideMotion);
-  document.getElementById('gnGuideDiagnostic').addEventListener('click',()=>{
-    if(!stepFile || !savedGuidePairs.length){
-      guideFeedback('Выберите и подтвердите хотя бы одну пару направляющих.');
-      return;
-    }
+  const guideEntryResult=document.getElementById('gnGuideEntryExitResult');
+  const getGuideDiagnostic=()=>{
+    if(!stepFile || !savedGuidePairs.length)
+      throw new Error('Сначала выберите и подтвердите хотя бы одну пару направляющих.');
+    const n=id=>Number(document.getElementById(id).value);
+    return Gen.manualGuideDiagnostics(stepFile.text,savedGuidePairs,{
+      rotation:modelRotation,offset:[...modelOffset],scale:n('gnScale')/100,
+      tolerance:n('gnTolerance'),stock:[n('gnL'),n('gnW'),n('gnH')],
+      bottomZ:n('gnZ'),clearance:n('gnClear'),kerf:n('gnKerf'),samples:128
+    });
+  };
+  const guideEntrySummary=report=>report.operations.map(op=>{
+    const label=end=>end.hasClearRapid?'свободный проход найден':
+      'проход через необработанную заготовку — нужен режущий вход/выход';
+    return op.operation+' #'+op.ids.join('/#')+
+      ': вход — '+label(op.entryExit.entry)+
+      ', выход — '+label(op.entryExit.exit)+
+      (op.closed?'. Замкнутый профиль: требуется подход к контуру (прорезь либо отверстие).':'');
+  }).join(' | ');
+  document.getElementById('gnGuideEntryExit').addEventListener('click',()=>{
     try {
-      const n = id=>Number(document.getElementById(id).value);
-      const report=Gen.manualGuideDiagnostics(stepFile.text,savedGuidePairs,{
-        rotation:modelRotation,offset:[...modelOffset],scale:n('gnScale')/100,
-        tolerance:n('gnTolerance'),stock:[n('gnL'),n('gnW'),n('gnH')],
-        bottomZ:n('gnZ'),samples:128
-      });
+      const report=getGuideDiagnostic();
+      guideEntryResult.className='note crit';
+      guideEntryResult.textContent='Проверка геометрии исходного блока: '+
+        guideEntrySummary(report)+
+        ' Проверены 3 варианта подхода и отхода на каждом конце; это не проверка сохранности готовой детали. G-code запрещён.';
+    } catch(e) {
+      guideEntryResult.className='note crit';
+      guideEntryResult.textContent='Проверка не выполнена: '+e.message;
+    }
+  });
+  document.getElementById('gnGuideDiagnostic').addEventListener('click',()=>{
+    try {
+      const report=getGuideDiagnostic();
       const blob=new Blob([JSON.stringify(report,null,2)],{type:'application/json'});
       const url=URL.createObjectURL(blob),a=document.createElement('a');
       a.href=url;a.download=stepFile.name.replace(/\\.(stp|step)$/i,'')+'-motion-DIAGNOSTIC.json';
@@ -100,6 +122,8 @@ const generatorPreview = (() => {
         (op.insideEnvelope?' мм (в ходах)':' мм (ВНЕ ХОДОВ)')).join('; ');
       guideMotion.textContent='Экспортировано '+report.operations.length+
         ' диагностических операций: '+summary+'. Это НЕ G-code.';
+      guideEntryResult.className='note crit';
+      guideEntryResult.textContent=guideEntrySummary(report)+'. Это не разрешение на резку.';
     } catch(e) {guideFeedback('Не удалось рассчитать диагностическую траекторию: '+e.message);}
   });
 
@@ -161,6 +185,7 @@ const generatorPreview = (() => {
       return false;
     }
     savedGuidePairs.push([idA, idB]); pendingGuide = [];
+    guideEntryResult.textContent='Пары изменены: выполните проверку входа и выхода заново.';
     invalidate(); refreshGuideOperations();
     guideFeedback('Пара #' + idA + ' / #' + idB + ' назначена. Всего: ' +
       savedGuidePairs.length + '. Можно выбрать следующую пару.');
@@ -255,6 +280,7 @@ const generatorPreview = (() => {
   document.getElementById('gnGuideUndo').addEventListener('click', () => {
     if (pendingGuide.length) pendingGuide = [];
     else savedGuidePairs.pop();
+    guideEntryResult.textContent='Пары изменены: выполните проверку входа и выхода заново.';
     invalidate(); refreshGuideOperations(); guideFeedback(); updateGuideColors();
   });
   document.getElementById('gnGuideExport').addEventListener('click', () => {
@@ -423,6 +449,7 @@ const generatorPreview = (() => {
     savedGuidePairs = savedGuidePairs.filter(pair => pair.every(id =>
       geometry?.auxiliaryCurves?.some(c => c.id === id)));
     pendingGuide = []; guideFeedback();
+    guideEntryResult.textContent='Модель перестроена: проверка входа/выхода ещё не выполнялась.';
     rebuild(); refreshGuideOperations();
   }
   for (const [id,m] of [['gnView3d','3d'],['gnViewTop','top'],['gnViewSide','side']]) {
