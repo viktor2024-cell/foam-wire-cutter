@@ -3134,10 +3134,12 @@ const Gen = (() => {
   }
   function trimBlock(cfg, trim, prog) {
     const safe = trim.BottomZ + trim.Height + cfg.TravelClearance, y0 = trim.Length / 2 - trim.TrimEnds;
+    const center=trim.CenterOffset||0;
     let g = ";" + EOL + "; *** TRIM BLOCK B"+trim.Angle+": transverse="+fmtG(trim.Length)+
       " wireSpan="+fmtG(trim.Width)+" H="+fmtG(trim.Height)+" ***"+EOL;
-    for (const y of [-y0, y0]) {
-      const yOut = y + (y < 0 || Object.is(y, -0) ? -trim.RetractOffset : trim.RetractOffset);
+    for (const localY of [-y0, y0]) {
+      const y=localY+center;
+      const yOut = y + (localY < 0 || Object.is(localY, -0) ? -trim.RetractOffset : trim.RetractOffset);
       g += "; - Trim Y=" + fix2(y) + " at B"+trim.Angle+EOL;
       g += prog.travel("move", y, safe, y, safe);                 // - к точке входа на высоте холостых ходов
       g += prog.travel("cut", y, trim.BottomZ, y, trim.BottomZ);  // - рез вниз
@@ -3150,9 +3152,10 @@ const Gen = (() => {
     const errors = [], halfY = cfg.HorizontalTravel / 2, top = trim.BottomZ + trim.Height;
     if (Math.min(trim.Length, trim.Width, trim.Height) <= 0) return ["Размеры заготовки должны быть положительными"];
     if (trim.TrimEnds > 0) {
-      const y = trim.Length / 2 - trim.TrimEnds, yOut = y + trim.RetractOffset;
-      if (Math.abs(y) > halfY) errors.push("Рез Y=" + y.toFixed(2) + " выходит за ход каретки +-" + halfY.toFixed(1));
-      if (Math.abs(yOut) > halfY) errors.push("Отвод Y=" + yOut.toFixed(2) + " выходит за ход каретки +-" + halfY.toFixed(1));
+      const y = trim.Length / 2 - trim.TrimEnds, center=trim.CenterOffset||0;
+      const yOut = y + trim.RetractOffset;
+      if (y+Math.abs(center) > halfY) errors.push("Рез Y=" + (y+Math.abs(center)).toFixed(2) + " выходит за ход каретки +-" + halfY.toFixed(1));
+      if (yOut+Math.abs(center) > halfY) errors.push("Отвод Y=" + (yOut+Math.abs(center)).toFixed(2) + " выходит за ход каретки +-" + halfY.toFixed(1));
     }
     if (trim.TrimEnds >= trim.Length / 2) errors.push("Припуск на подрезку больше половины размера заготовки");
     if (!overhead && top > cfg.VerticalTravel) errors.push("Верх заготовки Z=" + top + " больше хода каретки " + cfg.VerticalTravel);
@@ -4115,11 +4118,14 @@ const Gen = (() => {
     const pairs = manualGuidePairs || [];
     if (!Array.isArray(pairs) || !pairs.length) throw new StepError("Не заданы пары направляющих");
     const scale=o.scale===undefined?1:o.scale;
+    const offset=o.offset||[0,0,0];
+    if(!Array.isArray(offset)||offset.length!==3||!offset.every(Number.isFinite))
+      throw new StepError("Недопустимое смещение заготовки F4");
     const model=new Model(text,o.rotation||identityRotation(),scale,o.tolerance===undefined?.1:o.tolerance);
     const curves=new Map(model.auxiliaryCurves().map(c=>[c.id,c]));
     const all=[...model.edges.values()].flat().concat([...curves.values()].flatMap(c=>c.points));
     const origin=[0,1,2].map(k=>(Math.min(...all.map(p=>p[k]))+Math.max(...all.map(p=>p[k])))/2);
-    const stock=o.stock||[100,300,100],bottom=o.bottomZ||0,offset=o.offset||[0,0,0];
+    const stock=o.stock||[100,300,100],bottom=o.bottomZ||0;
     const towersDistance=CONFIG.FieldWidth;
     const nSamples=o.samples||128;
     if(!Number.isInteger(nSamples)||nSamples<16||nSamples>1024)throw new StepError("Неверное число отсчётов");
@@ -4147,13 +4153,16 @@ const Gen = (() => {
       const zBase=bottom+stock[2]/2+offset[2];
       const crossBase=CONFIG.HorizontalTravel/2+
         (axis===1?offset[1]:offset[0]);
+      // The stock is translated as one body and rotates about the table centre.
+      // At B90 a positive initial Y translation becomes negative along-wire X.
+      const alongShift=axis===1?offset[0]:-offset[1];
       for(let i=0;i<=nSamples;i++){
         const u=i/nSamples,pa=at(a,mapA(u)),pb=at(b,mapB(u));
         const crossA=pa[cross]-origin[cross],crossB=pb[cross]-origin[cross];
         const zA=pa[2]-origin[2],zB=pb[2]-origin[2];
         const ext=(v1,v2,x)=>v1+(v2-v1)*(x-aa)/den;
-        const left=[crossBase+ext(crossA,crossB,-towersDistance/2), zBase+ext(zA,zB,-towersDistance/2)];
-        const right=[crossBase+ext(crossA,crossB,towersDistance/2),zBase+ext(zA,zB,towersDistance/2)];
+        const left=[crossBase+ext(crossA,crossB,-towersDistance/2-alongShift), zBase+ext(zA,zB,-towersDistance/2-alongShift)];
+        const right=[crossBase+ext(crossA,crossB,towersDistance/2-alongShift),zBase+ext(zA,zB,towersDistance/2-alongShift)];
         if([...left,...right].some(v=>!Number.isFinite(v)))throw new StepError("Некорректная экстраполяция струны");
         bounds[0]=Math.min(bounds[0],left[0],right[0]);bounds[1]=Math.max(bounds[1],left[0],right[0]);
         bounds[2]=Math.min(bounds[2],left[1],right[1]);bounds[3]=Math.max(bounds[3],left[1],right[1]);
@@ -4163,11 +4172,12 @@ const Gen = (() => {
         bounds[2]>=0&&bounds[3]<=CONFIG.VerticalTravel;
       const clearance=Math.max(0,Number(o.clearance)||0);
       const insideWithClearance=insideEnvelope&&bounds[3]+clearance<=CONFIG.VerticalTravel;
-      const insideStockHeight=bounds[2]>=bottom-1e-6&&bounds[3]<=bottom+stock[2]+1e-6;
+      const insideStockHeight=bounds[2]>=bottom+offset[2]-1e-6&&
+        bounds[3]<=bottom+offset[2]+stock[2]+1e-6;
       const stockCrossWidth=axis===1?stock[1]:stock[0];
       const entryExit=inspectGuideEntryExit(samples,[
         crossBase-stockCrossWidth/2,crossBase+stockCrossWidth/2,
-        bottom,bottom+stock[2]
+        bottom+offset[2],bottom+offset[2]+stock[2]
       ],{clearance,margin:Math.max(2,Number(o.kerf)||0),field:CONFIG.HorizontalTravel,
         vertical:CONFIG.VerticalTravel});
       operations.push({ids:ids.slice(),angle:axis===1?0:90,operation:axisName,closed:a.closed,
@@ -4234,11 +4244,17 @@ const Gen = (() => {
        Math.min(...o.stock,o.feed,o.minS,o.kerf)<=0||o.maxS<o.minS||
        o.bottomZ<0||o.clearance<0||o.retract<0)
       throw new StepError("Некорректные параметры F4");
+    const offset=o.offset||[0,0,0];
+    if(!Array.isArray(offset)||offset.length!==3||!offset.every(Number.isFinite))
+      throw new StepError("Некорректное смещение заготовки F4");
     const report=manualGuideDiagnostics(text,pairs,{...o,voxelSize:o.voxelSize||6});
     const cfg={...CONFIG,TravelClearance:o.clearance,FeedRateCut:o.feed,
       WireMinPower:o.minS,WireMaxPower:o.maxS};
     const p=new Program(cfg,!!o.powerComp,1);
     const midpoint=cfg.HorizontalTravel/2;
+    const stockZ=o.bottomZ+offset[2];
+    if(stockZ<0||stockZ+o.stock[2]+o.clearance>cfg.VerticalTravel)
+      throw new StepError("Смещённая заготовка выходит за вертикальный ход станка");
     const move=(kind,s)=>p.travel(kind,s.left[0]-midpoint,s.left[1],
       s.right[0]-midpoint,s.right[1]);
     const eol=EOL, warnings=[
@@ -4248,7 +4264,8 @@ const Gen = (() => {
     ];
     let program="; *** F4 OPERATOR-DIRECTED G-CODE ***"+eol+
       "; WARNING: UNVERIFIED LEADS AND PRESERVED SOLID - REVIEW BEFORE MACHINING"+eol+
-      "; STOCK L="+o.stock[0]+" W="+o.stock[1]+" H="+o.stock[2]+" Z0="+o.bottomZ+eol+
+      "; STOCK L="+o.stock[0]+" W="+o.stock[1]+" H="+o.stock[2]+" Z0="+o.bottomZ+
+        " OX="+offset[0]+" OY="+offset[1]+" OZ="+offset[2]+eol+
       "; CUT ORDER="+report.cutOrder+" TRIM="+(report.trimOperation?"B"+report.trimAngle:"OFF")+eol+
       "$H"+eol+"G21 G90 G94"+eol+
       "G92 "+travelPosition(cfg.HomingX1,cfg.HomingZ1,cfg.HomingX2,cfg.HomingZ2)+
@@ -4267,15 +4284,17 @@ const Gen = (() => {
       const dim=trim.angle===90?o.stock[0]:o.stock[1];
       const along=trim.angle===90?o.stock[1]:o.stock[0];
       const task={Length:dim,Width:along,Height:o.stock[2],TrimEnds:trim.trimAllowance,
-        BottomZ:o.bottomZ,RetractOffset:o.retract,Angle:trim.angle};
+        BottomZ:stockZ,RetractOffset:o.retract,Angle:trim.angle,
+        CenterOffset:trim.angle===90?offset[0]:offset[1]};
       const check=checkTrim(cfg,task,true);
       if(check.length)throw new StepError("Торцевание B"+trim.angle+": "+check.join("; "));
       program+="; *** TRIM B"+trim.angle+" ***"+eol;
       program+=setAngle(trim.angle);
       const safe=task.BottomZ+task.Height+cfg.TravelClearance;
       const half=task.Length/2-task.TrimEnds;
-      for(const y of [-half,half]){
-        const outer=y+(y<=0?-task.RetractOffset:task.RetractOffset);
+      for(const localY of [-half,half]){
+        const y=localY+task.CenterOffset;
+        const outer=y+(localY<=0?-task.RetractOffset:task.RetractOffset);
         program+="; TRIM AT "+fix2(y)+" B"+trim.angle+eol+"M05"+eol;
         program+=p.travel("move",y,safe,y,safe);
         program+="M03 S"+fix2(o.minS)+eol;
@@ -4289,9 +4308,14 @@ const Gen = (() => {
     let count=0;
     for(const op of report.operations){
       const alongWire=op.angle===0?o.stock[0]:o.stock[1];
-      if(alongWire>cfg.FieldWidth)
+      const alongOffset=op.angle===0?offset[0]:offset[1];
+      if(alongWire/2+Math.abs(alongOffset)>cfg.FieldWidth/2)
         throw new StepError("B"+op.angle+": длина заготовки вдоль струны "+
           alongWire+" мм превышает расстояние между башнями "+cfg.FieldWidth+" мм");
+      const crossOffset=op.angle===0?offset[1]:offset[0];
+      const crossLength=op.angle===0?o.stock[1]:o.stock[0];
+      if(crossLength/2+Math.abs(crossOffset)>cfg.HorizontalTravel/2)
+        throw new StepError("B"+op.angle+": смещённая заготовка выходит за поперечный ход кареток");
       if(!op.insideEnvelope)
         throw new StepError("Операция B"+op.angle+" #"+op.ids.join("/#")+
           " выходит за физические ходы кареток");
