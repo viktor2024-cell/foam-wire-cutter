@@ -3782,9 +3782,13 @@ const Gen = (() => {
       const insideStockHeight=bounds[2]>=bottom-1e-6&&bounds[3]<=bottom+stock[2]+1e-6;
       operations.push({ids:ids.slice(),angle:axis===1?0:90,operation:axisName,closed:a.closed,
         planeSpan:Math.abs(den),towersDistance,correspondence,samples,
+        alignmentNeedsReview:correspondence.shapeRms>2,
         bounds:{transverse:[bounds[0],bounds[1]],z:[bounds[2],bounds[3]]},
         insideEnvelope,insideWithClearance,insideStockHeight,approvedForGcode:false,
-        warnings:["Направление и начальная точка согласованы по форме; соответствие требует геометрической проверки",
+        warnings:["Начало и направление обхода автоматически согласованы по форме",
+          ...(correspondence.shapeRms>2?
+            ["Расхождение форм после согласования RMS "+correspondence.shapeRms.toFixed(2)+
+              " мм — требуется визуальная проверка положения струны"]:[]),
           "Прямолинейная струна не проверена на сохранность детали",
           "Не определены безопасные вход и выход", 
           ...(insideEnvelope?[]:["Предварительная траектория выходит за пределы рабочих ходов"]),
