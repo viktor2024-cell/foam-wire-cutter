@@ -3729,6 +3729,80 @@ const Gen = (() => {
   }
   // Preliminary F4 two-carriage motion from explicitly assigned guide pairs.
   // Coordinates are machine-frame candidates, NOT verified cutting moves.
+  // Conservative two-carriage approach/exit inspection. A wire is a line
+  // segment between towers; its sweep must not enter *uncut stock* during
+  // any rapid approach. Cutting leads touching stock need separate validation.
+  function inspectGuideEntryExit(samples, stockRect, options={}) {
+    if(!Array.isArray(samples)||samples.length<2)throw new StepError("Нет траектории для проверки входа и выхода");
+    const [xmin,xmax,zmin,zmax]=stockRect;
+    if(![xmin,xmax,zmin,zmax].every(Number.isFinite)||xmin>=xmax||zmin>=zmax)
+      throw new StepError("Некорректная геометрия заготовки для проверки входа");
+    const field=options.field||CONFIG.HorizontalTravel,vertical=options.vertical||CONFIG.VerticalTravel;
+    const clearance=Number.isFinite(options.clearance)?Math.max(.1,options.clearance):10;
+    const margin=Number.isFinite(options.margin)?Math.max(.1,options.margin):2;
+    const limit=p=>p.every(v=>Number.isFinite(v))&&p[0]>=0&&p[0]<=field&&p[1]>=0&&p[1]<=vertical;
+    // Clip line against the interior of the cross-section. Touching the
+    // surface within 0.01 mm is not counted as a cut into virgin stock.
+    const inside=(l,r)=>{
+      const eps=.01,loX=xmin+eps,hiX=xmax-eps,loZ=zmin+eps,hiZ=zmax-eps;
+      let t0=0,t1=1;
+      for(const [v,w,low,high] of [[l[0],r[0],loX,hiX],[l[1],r[1],loZ,hiZ]]){
+        const dv=w-v;
+        if(Math.abs(dv)<1e-10){if(v<=low||v>=high)return false;continue;}
+        const a=(low-v)/dv,b=(high-v)/dv;
+        t0=Math.max(t0,Math.min(a,b));t1=Math.min(t1,Math.max(a,b));
+        if(t0>t1)return false;
+      }
+      return t0<t1+1e-10;
+    };
+    const inspect=(from,to)=>{
+      const steps=64;let intersects=false,firstContact=null;
+      for(let k=0;k<=steps;k++){
+        const u=k/steps;
+        const l=from.left.map((v,i)=>v+(to.left[i]-v)*u);
+        const r=from.right.map((v,i)=>v+(to.right[i]-v)*u);
+        if(inside(l,r)){intersects=true;if(firstContact===null)firstContact=u;}
+      }
+      const within=[from.left,from.right,to.left,to.right].every(limit);
+      return {from,to,withinMachineTravel:within,intersectsUncutStock:intersects,
+        firstStockContactFraction:firstContact,
+        rapidTravelAllowed:within&&!intersects,
+        requiresCuttingLead:intersects,
+        status:!within?"OUT_OF_TRAVEL":intersects?"CUTTING_LEAD_REQUIRED":"CLEAR_RAPID"};
+    };
+    const safeZ=zmax+clearance;
+    const sideStart=(endpoint,side)=>{
+      const v=[endpoint.left[0],endpoint.right[0]];
+      const delta=side==="left"?(xmin-margin-Math.max(...v)):
+        (xmax+margin-Math.min(...v));
+      return {left:[endpoint.left[0]+delta,endpoint.left[1]],
+        right:[endpoint.right[0]+delta,endpoint.right[1]]};
+    };
+    const endpoint=s=>({left:s.left.slice(),right:s.right.slice()});
+    const inspectEnd=(tip,entry)=>{
+      const target=endpoint(tip);
+      const high={left:[tip.left[0],safeZ],right:[tip.right[0],safeZ]};
+      const candidates=[
+        {route:"ABOVE_STOCK",...inspect(high,target)},
+        ...["left","right"].map(side=>({
+          route:side==="left"?"OUTSIDE_LEFT":"OUTSIDE_RIGHT",
+          ...inspect(sideStart(target,side),target)
+        }))
+      ];
+      if(!entry)for(const c of candidates){const old=c.from;c.from=c.to;c.to=old;}
+      const clear=candidates.find(c=>c.rapidTravelAllowed);
+      return {candidates,
+        recommended:clear?clear.route:null,
+        hasClearRapid:!!clear,
+        status:clear?"CLEAR_RAPID":"UNVERIFIED_ENTRY_EXIT"};
+    };
+    const entry=inspectEnd(samples[0],true);
+    const exit=inspectEnd(samples.at(-1),false);
+    return {entry,exit,stockRect,clearance,margin,checkedAgainst:"UNCUT_STOCK_RECTANGLE",
+      // This check does not prove stock preservation, kerf, machine
+      // fixturing, ruled-surface accuracy, or ordered stock removal.
+      approvedForGcode:false};
+  }
   function manualGuideDiagnostics(text, manualGuidePairs, o = {}) {
     const pairs = manualGuidePairs || [];
     if (!Array.isArray(pairs) || !pairs.length) throw new StepError("Не заданы пары направляющих");
@@ -3780,17 +3854,28 @@ const Gen = (() => {
       const clearance=Math.max(0,Number(o.clearance)||0);
       const insideWithClearance=insideEnvelope&&bounds[3]+clearance<=CONFIG.VerticalTravel;
       const insideStockHeight=bounds[2]>=bottom-1e-6&&bounds[3]<=bottom+stock[2]+1e-6;
+      const stockCrossWidth=axis===1?stock[1]:stock[0];
+      const entryExit=inspectGuideEntryExit(samples,[
+        crossBase-stockCrossWidth/2,crossBase+stockCrossWidth/2,
+        bottom,bottom+stock[2]
+      ],{clearance,margin:Math.max(2,Number(o.kerf)||0),field:CONFIG.HorizontalTravel,
+        vertical:CONFIG.VerticalTravel});
       operations.push({ids:ids.slice(),angle:axis===1?0:90,operation:axisName,closed:a.closed,
         planeSpan:Math.abs(den),towersDistance,correspondence,samples,
         alignmentNeedsReview:correspondence.shapeRms>2,
         bounds:{transverse:[bounds[0],bounds[1]],z:[bounds[2],bounds[3]]},
-        insideEnvelope,insideWithClearance,insideStockHeight,approvedForGcode:false,
+        insideEnvelope,insideWithClearance,insideStockHeight,entryExit,approvedForGcode:false,
         warnings:["Начало и направление обхода автоматически согласованы по форме",
           ...(correspondence.shapeRms>2?
             ["Расхождение форм после согласования RMS "+correspondence.shapeRms.toFixed(2)+
               " мм — требуется визуальная проверка положения струны"]:[]),
           "Прямолинейная струна не проверена на сохранность детали",
-          "Не определены безопасные вход и выход", 
+          ...(entryExit.entry.hasClearRapid?[]:
+            ["Вход: не найден подход без проникновения струны в исходную заготовку"]),
+          ...(entryExit.exit.hasClearRapid?[]:
+            ["Выход: не найден отвод без проникновения струны в исходную заготовку"]),
+          ...(a.closed?["Замкнутый контур требует прорези входа или предварительного отверстия, если находится внутри блока"]:[]),
+          "Проверка использует только прямоугольник исходной заготовки, а не удалённый материал", 
           ...(insideEnvelope?[]:["Предварительная траектория выходит за пределы рабочих ходов"]),
           ...(insideWithClearance?[]:["Недостаточен заданный запас по верхней границе Z"]),
           ...(insideStockHeight?[]:["Часть траектории находится вне заданной высоты заготовки"]),
@@ -3799,7 +3884,7 @@ const Gen = (() => {
     return {schema:"foam-wire-f4-diagnostic-motion-v1",operations,origin,
       approvedForGcode:false,notes:"Диагностическая экстраполяция на две каретки. Не станочный код. Не проверена геометрия удаляемого материала."};
   }
-  return { buildProgram, manualGuideDiagnostics, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
+  return { buildProgram, manualGuideDiagnostics, inspectGuideEntryExit, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
 })();
 
 // ---------------------------------------------------------------------------------------------
