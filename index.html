@@ -3621,6 +3621,13 @@ const Gen = (() => {
       Height: stockHeight, TrimEnds: (trimDimension-finishedDimension)/2-kerf/2,
       BottomZ:o.bottomZ, RetractOffset:o.retract, Angle:trimAngle };
     const hasTrim = o.trim !== false && trim.TrimEnds > 0;
+    // The selected angle swaps which stock dimension lies along the wire.
+    // Reject stock too long for the tower spacing even if transverse/Z travel fits.
+    const stockAlongWire=trimAngle===90?stockWidth:stockLength;
+    if(hasTrim && stockAlongWire>cfg.FieldWidth+1e-6)
+      throw new StepError("Торцевание B"+trimAngle+": размер заготовки вдоль струны "+
+        stockAlongWire.toFixed(1)+" мм превышает расстояние между башнями "+
+        cfg.FieldWidth.toFixed(1)+" мм");
     if(o.trim!==false && trim.TrimEnds<=0)
       warnings.push("Торцевание B"+trimAngle+" пропущено: по выбранной оси нет положительного припуска");
     const sideEntry = o.sideEntry === true;
@@ -3967,10 +3974,15 @@ const Gen = (() => {
       throw new StepError("Некорректный угол торцевания или порядок операций");
     const angleOrder=cutOrder==='B0_B90'?[0,90]:[90,0];
     operations.sort((a,b)=>angleOrder.indexOf(a.angle)-angleOrder.indexOf(b.angle));
-    const trimEnabled=o.trim!==false;
+    const trimStockDimension=trimAngle===90?stock[0]:stock[1];
+    const finishedDimension=trimAngle===90?
+      Math.max(...all.map(p=>p[1]))-Math.min(...all.map(p=>p[1])):
+      Math.max(...all.map(p=>p[0]))-Math.min(...all.map(p=>p[0]));
+    const trimAllowance=(trimStockDimension-finishedDimension)/2-(Number(o.kerf)||0)/2;
+    const trimEnabled=o.trim!==false&&trimAllowance>1e-6;
     const trimOperation=trimEnabled?{
       type:'TRIM',angle:trimAngle,
-      stockDimension:trimAngle===90?stock[0]:stock[1],
+      stockDimension:trimStockDimension,finishedDimension,trimAllowance,
       status:'NOT_CERTIFIED_FOR_F4',
       description:trimAngle===90?'Торцевание по длине заготовки':'Торцевание по ширине заготовки'
     }:null;
