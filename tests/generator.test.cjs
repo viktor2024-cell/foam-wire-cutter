@@ -554,14 +554,17 @@ test('surface deviation tolerance must be finite and nonnegative',()=>{
  assert.throws(()=>gen.buildProgram(fixture,'invalid.stp',options({tolerance:NaN})),/Допуск/);
 });
 
-test('model offset is bounded by stock and moves both tower profiles',()=>{
+test('stock and model translate together inside machine envelope',()=>{
  const base=build({stock:[80,160,100],bottomZ:10,trim:false}), shifted=build({stock:[80,160,100],bottomZ:10,trim:false,offset:[0,5,5]});
- assert.match(shifted.program,/MODEL OFFSET X=0 Y=5 Z=5 mm/);
+ assert.match(shifted.program,/STOCK\+MODEL OFFSET X=0 Y=5 Z=5 mm/);
+ assert.match(shifted.program,/OX=0 OY=5 OZ=5/);
  const contour=r=>sim.parseGcode(r.program.split('corner entry, upper first')[1]).moves.filter(m=>m.type==='G1').slice(0,12);
  const a=contour(base),b=contour(shifted);assert.equal(a.length,b.length);
  for(let i=0;i<a.length;i++)for(const axis of ['X','Y','Z','A'])assert.ok(Math.abs(b[i].to[axis]-a[i].to[axis]-5)<.03,axis);
- assert.throws(()=>build({stock:[80,160,100],offset:[20,0,0],trim:false}),/не помещается/);
- assert.throws(()=>build({stock:[80,160,100],offset:[5,0,0],trim:true}),/Торцевание со смещением/);
+ // Offset no longer changes model/stock fit; only machine travel can reject it.
+ assert.doesNotThrow(()=>build({stock:[80,160,100],offset:[20,0,0],trim:false}));
+ assert.throws(()=>build({stock:[80,160,100],offset:[150,0,0],trim:false}),/физические пределы/);
+ assert.doesNotThrow(()=>build({stock:[80,160,100],offset:[5,0,0],trim:true}));
  assert.throws(()=>build({stock:[80,160,100],offset:[5,0,0],pair:true,trim:false}),/Смещение пока/);
 });
 
@@ -570,7 +573,7 @@ test('external F1-1 offset toward tower fixes travel limits',{skip:!process.env.
  const opts=options({rotation,tolerance:.6,stock:[100,145,135],bottomZ:40,clearance:20,trim:false,powerComp:false});
  assert.throws(()=>gen.buildProgram(text,'F1-1.stp',opts),/ход кареток/);
  const result=gen.buildProgram(text,'F1-1.stp',{...opts,offset:[-25,0,0]});
- assert.match(result.program,/MODEL OFFSET X=-25 Y=0 Z=0/);
+ assert.match(result.program,/STOCK\+MODEL OFFSET X=-25 Y=0 Z=0/);
  const p=sim.parseGcode(result.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
 });
@@ -934,6 +937,20 @@ test('operator-directed F4 outputs actual G-code with two tower coordinates and 
  assert.match(p.program,/M03 S500/);
  assert.equal(p.operatorDirected,true);
  assert.ok(p.points>0);
+ // Stock and guide profiles are translated in the same machine frame.
+ const moved=gen.buildF4Program(step,[[910005,910006]],{...base,offset:[0,7,3]});
+ assert.match(moved.program,/STOCK L=100 W=200 H=70 Z0=10 OX=0 OY=7 OZ=3/);
+ const getCut=r=>sim.parseGcode(r.program).moves.find(m=>m.type==='G1');
+ const before=getCut(p),after=getCut(moved);
+ assert.ok(before && after);
+ for(const [axis,delta] of [['X',7],['Y',3],['Z',7],['A',3]])
+   assert.ok(Math.abs(after.to[axis]-before.to[axis]-delta)<.03,
+     axis+' failed to follow stock translation');
+ assert.throws(()=>gen.buildF4Program(step,[[910005,910006]],{...base,offset:[0,0,-20]}),
+   /вертикальный ход/);
+ assert.throws(()=>gen.buildF4Program(step,[[910005,910006]],{...base,offset:[0,150,0]}),
+   /поперечный ход/);
+
  // Invalid motion parameters must be rejected rather than normalized or
  // passed through to the postprocessor.
  for(const invalid of [
