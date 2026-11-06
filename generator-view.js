@@ -572,10 +572,15 @@ const generatorPreview = (() => {
     if (!valid) { fit.className = 'note crit'; fit.textContent = 'Введите положительные размеры заготовки и неотрицательный низ Z.'; aim(); return; }
     const box = new THREE.BoxGeometry(...stock);
     const foam = new THREE.Mesh(box, new THREE.MeshBasicMaterial({color: 0x4499cc, transparent:true, opacity:.12, depthWrite:false}));
-    foam.position.z = bottom + stock[2]/2; group.add(foam);
+    // Keep the stock and model in the same preview coordinate frame.
+    // The model and auxiliary guides below already use modelOffset.
+    foam.position.set(modelOffset[0],modelOffset[1],bottom + stock[2]/2 + modelOffset[2]);
+    group.add(foam);
     const edge = new THREE.LineSegments(new THREE.EdgesGeometry(box), new THREE.LineBasicMaterial({color:0x4499cc}));
     edge.position.copy(foam.position); group.add(edge);
-    const axes = new THREE.AxesHelper(Math.max(...stock)*.35); axes.position.set(-stock[0]/2,-stock[1]/2,bottom); group.add(axes);
+    const axes = new THREE.AxesHelper(Math.max(...stock)*.35);
+    axes.position.set(modelOffset[0]-stock[0]/2,modelOffset[1]-stock[1]/2,bottom+modelOffset[2]);
+    group.add(axes);
     if (geometry) {
       const paired = document.getElementById('gnStockPair').checked;
       const kerf = n('gnKerf');
