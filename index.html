@@ -3593,6 +3593,15 @@ const Gen = (() => {
           throw new StepError("Ручная пара #"+entry.join("/")+" геометрически несовместима.");
         entry.forEach(id=>taken.add(id));
       }
+      const starts=o.guideStarts||{};
+      if(starts===null||typeof starts!=='object'||Array.isArray(starts))
+        throw new StepError("Неверный набор начальных точек реза.");
+      const usedPairs=new Set(assignments.map(p=>p.join(':')));
+      for(const [key,u] of Object.entries(starts)){
+        if(!usedPairs.has(key))throw new StepError("Начало реза задано для неизвестной пары "+key);
+        const ids=key.split(':').map(Number),a=index.get(ids[0]),b=index.get(ids[1]);
+        resolveGuideStart(a,b,u); // checks finite normalized start and matching.
+      }
       const details=assignments.length
         ? "Принято ручных пар: "+assignments.length+" ("+
           assignments.map(p=>"#"+p.join("/#")).join(", ")+"). "
