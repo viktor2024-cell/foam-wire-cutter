@@ -778,6 +778,7 @@ const generatorPreview = (() => {
   document.getElementById('gnKerf').addEventListener('input',()=>{invalidate();rebuild();});
   document.getElementById('gnTrim').addEventListener('change',()=>{invalidate();rebuild();});
   guideFeedback();
-  return {load,rebuild,chooseGuide,confirmGuidePair,getGuidePairs:()=>savedGuidePairs.map(p=>p.slice()),
+  return {load,rebuild,chooseGuide,confirmGuidePair,hasAuxiliaryCurves:()=>!!geometry?.auxiliaryCurves?.length,
+    getGuidePairs:()=>savedGuidePairs.map(p=>p.slice()),
     getGuideStarts:()=>({...guideStarts})};
 })();
