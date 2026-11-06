@@ -600,7 +600,7 @@ test('solid STEP keeps separate guide curves and refuses incomplete G-code',()=>
  assert.equal(preview.guideKinematics.operations.length,0);
  assert.equal(preview.guideKinematics.safeForGcode,false);
  assert.throws(()=>gen.buildProgram(solidWithCurves,'solid-guides.stp',options()),
-  /вспомогательных кривых.*заблокирована/);
+  /вспомогательных кривых.*Станочный G-code для F4 пока запрещён/);
 });
 test('external F4-1: retains all four design B-splines without unsafe G-code',
  {skip:!process.env.F4_STEP},()=>{
@@ -623,7 +623,7 @@ test('external F4-1: retains all four design B-splines without unsafe G-code',
  assert.equal(motion.origin.length,3);
  assert.ok(motion.operations.every(op=>Math.abs(op.transverseCenter-motion.origin[op.axis===1?0:1])<1e-9));
  assert.throws(()=>gen.buildProgram(step,'F4-1.stp',options()),
-  /вспомогательных кривых.*заблокирована/);
+  /вспомогательных кривых.*Станочный G-code для F4 пока запрещён/);
 });
 
 test('paired planar STEP guides extrapolate to both towers at B0 without releasing G-code',()=>{
