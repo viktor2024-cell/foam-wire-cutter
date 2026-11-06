@@ -3892,6 +3892,154 @@ const Gen = (() => {
       // fixturing, ruled-surface accuracy, or ordered stock removal.
       approvedForGcode:false};
   }
+  // Conservative voxel model of sequential hot-wire material removal.
+  // The initial block is *fully filled*. Each operation sweeps its finite
+  // wire segment through 3D, eroding occupied voxels near the swept surface.
+  // Afterwards entry checks query the material remaining after prior cuts,
+  // while exit checks query the stock after the current cut. Connectivity
+  // estimates are diagnostic only and must not certify a finished part.
+  function simulateSequentialStockRemoval(operations, origin, stock, o = {}) {
+    if(!Array.isArray(operations)||!operations.length)
+      throw new StepError("Нет операций для моделирования удаления материала");
+    const voxel=Math.max(1,Math.min(8,Number(o.voxelSize)||4));
+    const kerf=Math.max(.01,Number(o.kerf)||1);
+    const offset=o.offset||[0,0,0];
+    const sizes=[stock[1],stock[0],stock[2]];
+    if(!sizes.every(n=>Number.isFinite(n)&&n>0))
+      throw new StepError("Некорректные размеры заготовки для объёмного моделирования");
+    const nx=sizes.map(n=>Math.ceil(n/voxel)), total=nx.reduce((a,b)=>a*b,1);
+    if(total>400000)throw new StepError("Превышен лимит объёмной сетки 400000 ячеек: увеличьте шаг");
+    const lo=[origin[0]-sizes[0]/2,origin[1]-sizes[1]/2,origin[2]-sizes[2]/2];
+    const cell=sizes.map((v,k)=>v/nx[k]), [sx,sy,sz]=nx;
+    const occupancy=new Uint8Array(total).fill(1);
+    const index=(x,y,z)=>(z*sy+y)*sx+x;
+    const point=(x,y,z)=>[lo[0]+(x+.5)*cell[0],lo[1]+(y+.5)*cell[1],lo[2]+(z+.5)*cell[2]];
+    const sub=(a,b)=>a.map((v,k)=>v-b[k]);
+    const dot=(a,b)=>a.reduce((sum,v,k)=>sum+v*b[k],0);
+    const dist2=(a,b)=>dot(sub(a,b),sub(a,b));
+    const segmentDist2=(p,a,b)=>{
+      const ab=sub(b,a),d=dot(ab,ab),t=d>1e-18?Math.max(0,Math.min(1,dot(sub(p,a),ab)/d)):0;
+      return dist2(p,a.map((v,k)=>v+t*ab[k]));
+    };
+    const pointTriangleDist2=(p,a,b,c)=>{
+      // Closest-point regions from Real-Time Collision Detection, with a
+      // degenerate triangle fallback for collinear wire positions.
+      const ab=sub(b,a),ac=sub(c,a),ap=sub(p,a);
+      const d1=dot(ab,ap),d2=dot(ac,ap);
+      if(d1<=0&&d2<=0)return dist2(p,a);
+      const bp=sub(p,b),d3=dot(ab,bp),d4=dot(ac,bp);
+      if(d3>=0&&d4<=d3)return dist2(p,b);
+      const vc=d1*d4-d3*d2;
+      if(vc<=0&&d1>=0&&d3<=0){
+        const t=d1/(d1-d3);
+        return dist2(p,a.map((v,k)=>v+t*ab[k]));
+      }
+      const cp=sub(p,c),d5=dot(ab,cp),d6=dot(ac,cp);
+      if(d6>=0&&d5<=d6)return dist2(p,c);
+      const vb=d5*d2-d1*d6;
+      if(vb<=0&&d2>=0&&d6<=0){
+        const t=d2/(d2-d6);
+        return dist2(p,a.map((v,k)=>v+t*ac[k]));
+      }
+      const va=d3*d6-d5*d4;
+      if(va<=0&&d4-d3>=0&&d5-d6>=0){
+        const bc=sub(c,b),t=(d4-d3)/((d4-d3)+(d5-d6));
+        return dist2(p,b.map((v,k)=>v+t*bc[k]));
+      }
+      const den=va+vb+vc;
+      if(Math.abs(den)<1e-15)
+        return Math.min(segmentDist2(p,a,b),segmentDist2(p,b,c),segmentDist2(p,c,a));
+      const v=vb/den,w=vc/den;
+      return dist2(p,a.map((x,k)=>x+ab[k]*v+ac[k]*w));
+    };
+    // Voxel centres are expanded by half the cell diagonal, producing a
+    // conservative overapproximation of occupied/cut material.
+    const radius=kerf/2+Math.hypot(...cell)/2,radius2=radius*radius;
+    const scanTriangle=(a,b,c,callback)=>{
+      const mins=[0,1,2].map(k=>Math.max(0,Math.ceil((Math.min(a[k],b[k],c[k])-radius-lo[k])/cell[k]-.5)));
+      const maxs=[0,1,2].map(k=>Math.min(nx[k]-1,Math.floor((Math.max(a[k],b[k],c[k])+radius-lo[k])/cell[k]-.5)));
+      for(let z=mins[2];z<=maxs[2];z++)
+        for(let y=mins[1];y<=maxs[1];y++)
+          for(let x=mins[0];x<=maxs[0];x++){
+            const p=point(x,y,z);
+            if(pointTriangleDist2(p,a,b,c)<=radius2)callback(index(x,y,z));
+          }
+    };
+    const scanSweep=(wire0,wire1,callback)=>{
+      const [a,b]=wire0,[c,d]=wire1;
+      scanTriangle(a,b,c,callback);
+      scanTriangle(c,b,d,callback);
+    };
+    const towerToModel=(op,pos)=>{
+      const along=op.angle===0?1:0,cross=along===1?0:1;
+      const crossBase=CONFIG.HorizontalTravel/2+(along===1?offset[1]:offset[0]);
+      const zBase=(Number(o.bottomZ)||0)+stock[2]/2+offset[2];
+      return [-1,1].map((sign,i)=>{
+        const p=origin.slice();
+        p[along]+=sign*CONFIG.FieldWidth/2;
+        p[cross]+=pos[i][0]-crossBase;
+        p[2]+=pos[i][1]-zBase;
+        return p;
+      });
+    };
+    const candidateHits=(op,c)=>{
+      const from=towerToModel(op,[c.from.left,c.from.right]);
+      const to=towerToModel(op,[c.to.left,c.to.right]);
+      const hit=new Set();
+      scanSweep(from,to,i=>{if(occupancy[i])hit.add(i)});
+      return {occupiedVoxelHits:hit.size,clearAfterPriorCuts:hit.size===0&&c.withinMachineTravel};
+    };
+    const connected=()=>{
+      const visited=new Uint8Array(total),parts=[],queue=new Int32Array(total);
+      for(let start=0;start<total;start++){
+        if(!occupancy[start]||visited[start])continue;
+        let head=0,tail=1;queue[0]=start;visited[start]=1;
+        while(head<tail){
+          const i=queue[head++],x=i%sx,y=Math.floor(i/sx)%sy,z=Math.floor(i/(sx*sy));
+          const around=[
+            x>0?i-1:-1,x<sx-1?i+1:-1,
+            y>0?i-sx:-1,y<sy-1?i+sx:-1,
+            z>0?i-sx*sy:-1,z<sz-1?i+sx*sy:-1
+          ];
+          for(const j of around)if(j>=0&&occupancy[j]&&!visited[j]){
+            visited[j]=1;queue[tail++]=j;
+          }
+        }
+        parts.push(tail);
+      }
+      return parts.sort((a,b)=>b-a);
+    };
+    const reports=[];
+    for(const op of operations){
+      const entry=op.entryExit.entry.candidates.map(c=>({route:c.route,...candidateHits(op,c)}));
+      let removed=0;
+      for(let k=1;k<op.samples.length;k++){
+        const w0=[op.samples[k-1].profileA,op.samples[k-1].profileB];
+        const w1=[op.samples[k].profileA,op.samples[k].profileB];
+        scanSweep(w0,w1,i=>{
+          if(occupancy[i]){occupancy[i]=0;removed++;}
+        });
+      }
+      const exit=op.entryExit.exit.candidates.map(c=>({route:c.route,...candidateHits(op,c)}));
+      const parts=connected();
+      const remaining=parts.reduce((a,b)=>a+b,0);
+      op.sequentialStock={
+        voxelResolution:cell.slice(),removedVoxels:removed,remainingVoxels:remaining,
+        remainingPercent:100*remaining/total,componentVoxelCounts:parts.slice(0,12),
+        componentCount:parts.length,entry,exit,
+        // Never assert the largest component is the actual desired STEP body
+        // until an independently classified BREP solid has been voxelized.
+        protectedSolidIdentified:false,validatedKerfSide:false,
+        approvedForGcode:false
+      };
+      reports.push({angle:op.angle,ids:op.ids.slice(),...op.sequentialStock});
+    }
+    return {schema:"foam-wire-stock-removal-v1",voxelSize:cell,
+      grid: nx,initialVoxels:total,operations:reports,
+      remainingVoxels:reports.at(-1).remainingVoxels,
+      protectedSolidIdentified:false,approvedForGcode:false,
+      limitation:"Консервативная дискретная симуляция резов. Не распознаёт внутри ячеек сохранённую STEP-деталь, не проверяет крепления и режущие подводы."};
+  }
   function manualGuideDiagnostics(text, manualGuidePairs, o = {}) {
     const pairs = manualGuidePairs || [];
     if (!Array.isArray(pairs) || !pairs.length) throw new StepError("Не заданы пары направляющих");
@@ -3992,11 +4140,14 @@ const Gen = (() => {
       ...operations.map((op,i)=>({type:'PROFILE',angle:op.angle,ids:op.ids.slice(),
         step:i+1,status:'NOT_CERTIFIED_FOR_F4'}))
     ];
+    const stockRemoval=simulateSequentialStockRemoval(operations,origin,stock,{
+      kerf:o.kerf,offset,bottomZ:bottom,voxelSize:o.voxelSize
+    });
     return {schema:"foam-wire-f4-diagnostic-motion-v1",operations,origin,
-      trimAngle,cutOrder,trimOperation,plannedSequence,
-      approvedForGcode:false,notes:"Последовательность операций спланирована, но ещё не подтверждены безопасность входов и удаление материала. Не станочный код."};
+      trimAngle,cutOrder,trimOperation,plannedSequence,stockRemoval,
+      approvedForGcode:false,notes:"Моделирование последовательного удаления материала выполнено на объёмной сетке. Сохранность STEP-детали и безопасные режущие входы ещё не сертифицированы. Не станочный код."};
   }
-  return { buildProgram, manualGuideDiagnostics, inspectGuideEntryExit, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
+  return { buildProgram, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
 })();
 
 // ---------------------------------------------------------------------------------------------
