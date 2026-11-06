@@ -234,7 +234,16 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       <label>Низ Z<input id="gnZ" type="number" step="1" value="10"></label>
     </div>
     <label class="check"><input type="checkbox" id="gnSideEntry"> Вход и выход справа без подъёма над заготовкой (одна деталь, без отверстий и торцевания)</label>
-    <label class="check"><input type="checkbox" id="gnTrim" checked> Торцевать заготовку (стол 90°)</label>
+    <label class="check"><input type="checkbox" id="gnTrim" checked> Торцевать заготовку</label>
+    <div class="fields">
+      <label>Угол торцевания
+        <select id="gnTrimAngle"><option value="90" selected>B90 — по длине</option><option value="0">B0 — по ширине</option></select>
+      </label>
+      <label>Порядок основных резов
+        <select id="gnCutOrder"><option value="B0_B90" selected>Сначала B0, затем B90</option><option value="B90_B0">Сначала B90, затем B0</option></select>
+      </label>
+    </div>
+    <div class="note" id="gnOrderExplanation">При двух направлениях порядок относится к главным контурам; технологические отверстия и входы проверяются отдельно. Для F4 G-code разрешается только после проверки безопасной траектории.</div>
     <div class="note">Размеры заданы при столе 0°. Для листа 340×230×50 мм на ребре введите 50, 340, 230 мм соответственно. При отключении торцевания профиль режется при столе 0°.</div>
   </section>
   <section class="box">
@@ -3530,6 +3539,10 @@ const Gen = (() => {
   function buildProgram(text, fileName, o) {
     const cfg = { ...CONFIG, TravelClearance: o.clearance, FeedRateCut: o.feed, WireMinPower: o.minS, WireMaxPower: o.maxS };
     const warnings = [], [stockLength, stockWidth, stockHeight] = o.stock, kerf = o.kerf, sag = 0.01, maxStep = 1, RadialMargin = 2;
+    const trimAngle=o.trimAngle===undefined?90:Number(o.trimAngle);
+    const cutOrder=o.cutOrder||'B0_B90';
+    if(![0,90].includes(trimAngle))throw new StepError("Угол торцевания должен быть B0 или B90");
+    if(!['B0_B90','B90_B0'].includes(cutOrder))throw new StepError("Порядок должен быть B0 → B90 или B90 → B0");
     if (![...o.stock, o.bottomZ, o.kerf, o.clearance, o.leadMargin, o.feed, o.minS, o.maxS, o.retract].every(Number.isFinite) ||
         Math.min(...o.stock, o.feed) <= 0 || Math.min(o.bottomZ, o.kerf, o.clearance, o.leadMargin, o.retract, o.minS) < 0 || o.maxS < o.minS) {
       throw new Error("Недопустимые параметры заготовки или реза");
@@ -3597,10 +3610,17 @@ const Gen = (() => {
     });
 
     // --- Торцевание до размера детали по размаху (стол 0: размах вдоль струны)
-    const trim = { Length: stockLength, Width: stockWidth, Height: stockHeight, TrimEnds: (stockLength - part.span) / 2 - kerf / 2, BottomZ: o.bottomZ, RetractOffset: o.retract };
+    // B90 cuts the two ends along stockLength; B0 trims the lateral
+    // stockWidth sides. These are distinct geometric operations.
+    const trimDimension=trimAngle===90?stockLength:stockWidth;
+    const finishedDimension=trimAngle===90?part.span:part.x1-part.x0;
+    const trim = { Length: trimDimension, Width: trimAngle===90?stockWidth:stockLength,
+      Height: stockHeight, TrimEnds: (trimDimension-finishedDimension)/2-kerf/2,
+      BottomZ:o.bottomZ, RetractOffset:o.retract, Angle:trimAngle };
     const hasTrim = o.trim !== false && trim.TrimEnds > 0;
     const sideEntry = o.sideEntry === true;
-    if(hasTrim && Math.abs(offset[0])>1e-9) throw new StepError("Торцевание со смещением по X пока не поддерживается; отключите торцевание или верните X в центр");
+    if(hasTrim && (trimAngle===90?Math.abs(offset[0]):Math.abs(offset[1]))>1e-9)
+      throw new StepError("Торцевание со смещением по подрезаемой оси пока не поддерживается; центрируйте модель или отключите торцевание");
     if(model.wireframe && (o.pair||o.mirror||sideEntry))
       throw new StepError("Для STEP только с кривыми пока поддержана одна обычная деталь; пара, зеркало и боковой вход заблокированы до проверки соответствия щелей");
     if (secondaryContours.length && (o.pair || o.mirror || sideEntry)) throw new StepError("Дополнительные направления: режим пары, зеркала и бокового входа ещё не поддержан; G-code заблокирован");
@@ -3610,8 +3630,10 @@ const Gen = (() => {
     if (errors.length) throw new Error(errors.join("; "));
     if (hasTrim && Math.abs(trim.Length / 2 - trim.TrimEnds) < 0.01) warnings.push("Рез идёт через ось стола: припуск больше половины размера");
     // - При торцевании заготовка поворачивается на 90°, затем возвращается в 0° для резки профиля
-    const radius = Math.hypot(part.span, stockWidth) / 2;
-    if (hasTrim && cfg.ParkX - radius < RadialMargin) warnings.push("При повороте на 90 радиус заготовки " + radius.toFixed(1) + " мм, каретки отведены только на " + cfg.ParkX.toFixed(1) + " мм: проверьте зазор");
+    const radius = Math.hypot(stockLength,stockWidth)/2;
+    if (hasTrim && trimAngle===90 && cfg.ParkX-radius<RadialMargin)
+      throw new StepError("Торцевание B90: радиус исходной заготовки "+radius.toFixed(1)+
+        " мм превышает безопасный парковочный коридор; уменьшите заготовку или проверьте кинематику");
 
     // - Шапка: сведения для симулятора и для человека
     if(model.tolerance>.1) warnings.push("Допуск поверхности "+model.tolerance.toFixed(2)+" мм; выборочная оценка до "+model.maxCheckedDeviation.toFixed(2)+" мм до компенсации реза");
@@ -3619,6 +3641,7 @@ const Gen = (() => {
     program += "; STEP TOLERANCE=" + model.tolerance.toFixed(3) + " mm; sampled upper estimate=" + model.maxCheckedDeviation.toFixed(3) + " mm" + EOL;
     program += "; MODEL OFFSET X="+fmtG(offset[0])+" Y="+fmtG(offset[1])+" Z="+fmtG(offset[2])+" mm"+EOL;
     program += "; CUT MODE=" + (o.pair ? "PAIR PIECES=2" : o.mirror ? "MIRROR PIECES=1" : "SINGLE PIECES=1") + EOL;
+    program += "; TRIM B="+trimAngle+" ENABLED="+(hasTrim?1:0)+"; ORDER="+cutOrder+EOL;
     if(model.wireframe)program+="; STEP GEOMETRY=CURVES_ONLY; reconstructed ruled interpolation, original surfaces unavailable"+EOL;
     program += "; STOCK L=" + fmtG(stockWidth) + " W=" + fmtG(stockLength) + " H=" + fmtG(stockHeight) + " Z0=" + fmtG(o.bottomZ) + EOL;
     program += "; CUT F=" + fmtG(cfg.FeedRateCut) + " mm/s S=" + fmtG(cfg.WireMinPower) + ".." + fmtG(cfg.WireMaxPower) + " kerf=" + fmtG(kerf) + EOL;
@@ -3628,10 +3651,10 @@ const Gen = (() => {
     // - Сначала отводим каретки в безопасную позицию; торцевание выполняется при столе 90°
     program += ";" + EOL + "; - Safe position before cutting" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe);
     if (hasTrim) {
-      program += ";" + EOL + "; - Rotation 90 for end trimming" + EOL + rotate(cfg, 90);
+      program += ";" + EOL + "; - Rotation B"+trimAngle+" for trimming" + EOL + rotate(cfg, trimAngle);
       program += trimBlock(cfg, trim, prog);
       // - После торцевания возвращаем стол в 0°: основной профиль всегда режется в этой позиции
-      program += ";" + EOL + "; - Return table to 0 for profile cutting" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe) + rotate(cfg, 0);
+      program += ";" + EOL + "; - Return table to B0 after trimming" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe) + rotate(cfg, 0);
     }
     // Cross-direction operations run BEFORE the outer profile releases the
     // part. B rotates the original (X,Y) stock frame, not the foam geometry.
@@ -3984,7 +4007,8 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
       manualGuidePairs: generatorPreview.getGuidePairs(),
       rotation: modelRotation, offset: [...modelOffset], scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
-      clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair",
+      clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked,
+      trimAngle:n("gnTrimAngle"), cutOrder:$("gnCutOrder").value, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair",
     });
     const outName = stepFile.name.replace(/\.(stp|step)$/i, "") + (mode === "normal" ? "" : "_" + mode) + "_auto.gcode";
     $("gnOut").textContent = outName;
