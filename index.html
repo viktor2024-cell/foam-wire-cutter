@@ -3914,6 +3914,23 @@ const Gen = (() => {
     const occupancy=new Uint8Array(total).fill(1);
     const index=(x,y,z)=>(z*sy+y)*sx+x;
     const point=(x,y,z)=>[lo[0]+(x+.5)*cell[0],lo[1]+(y+.5)*cell[1],lo[2]+(z+.5)*cell[2]];
+    // Trim slabs are physically removed before either main operation.
+    // The expected finished dimension is centred in the same model frame.
+    const trimOp=o.trimOperation||null;
+    let trimmedVoxels=0;
+    if(trimOp){
+      const axis=trimOp.angle===90?1:0;
+      const allowance=trimOp.trimAllowance;
+      if(allowance>0){
+        const half=(trimOp.finishedDimension+(Number(o.kerf)||0))/2;
+        for(let z=0;z<sz;z++)for(let y=0;y<sy;y++)for(let x=0;x<sx;x++){
+          const idx=index(x,y,z),coord=point(x,y,z)[axis];
+          if(Math.abs(coord-origin[axis])>half){
+            occupancy[idx]=0;trimmedVoxels++;
+          }
+        }
+      }
+    }
     const sub=(a,b)=>a.map((v,k)=>v-b[k]);
     const dot=(a,b)=>a.reduce((sum,v,k)=>sum+v*b[k],0);
     const dist2=(a,b)=>dot(sub(a,b),sub(a,b));
@@ -4023,8 +4040,17 @@ const Gen = (() => {
       const exit=op.entryExit.exit.candidates.map(c=>({route:c.route,...candidateHits(op,c)}));
       const parts=connected();
       const remaining=parts.reduce((a,b)=>a+b,0);
+      // Deterministic sparse cloud for 3D visualization; the full binary
+      // occupancy stays private to the simulator to avoid giant JSON exports.
+      const cloud=[],maxVisualPoints=3500,stride=Math.max(1,Math.ceil(remaining/maxVisualPoints));
+      let seen=0;
+      for(let z=0;z<sz;z++)for(let y=0;y<sy;y++)for(let x=0;x<sx;x++){
+        if(!occupancy[index(x,y,z)])continue;
+        if(seen++%stride===0)cloud.push(...point(x,y,z));
+      }
       op.sequentialStock={
         voxelResolution:cell.slice(),removedVoxels:removed,remainingVoxels:remaining,
+        sparseRemainingPoints:cloud,
         remainingPercent:100*remaining/total,componentVoxelCounts:parts.slice(0,12),
         componentCount:parts.length,entry,exit,
         // Never assert the largest component is the actual desired STEP body
@@ -4035,7 +4061,7 @@ const Gen = (() => {
       reports.push({angle:op.angle,ids:op.ids.slice(),...op.sequentialStock});
     }
     return {schema:"foam-wire-stock-removal-v1",voxelSize:cell,
-      grid: nx,initialVoxels:total,operations:reports,
+      grid: nx,initialVoxels:total,trimmedVoxels,operations:reports,
       remainingVoxels:reports.at(-1).remainingVoxels,
       protectedSolidIdentified:false,approvedForGcode:false,
       limitation:"Консервативная дискретная симуляция резов. Не распознаёт внутри ячеек сохранённую STEP-деталь, не проверяет крепления и режущие подводы."};
@@ -4141,7 +4167,7 @@ const Gen = (() => {
         step:i+1,status:'NOT_CERTIFIED_FOR_F4'}))
     ];
     const stockRemoval=simulateSequentialStockRemoval(operations,origin,stock,{
-      kerf:o.kerf,offset,bottomZ:bottom,voxelSize:o.voxelSize
+      kerf:o.kerf,offset,bottomZ:bottom,voxelSize:o.voxelSize,trimOperation
     });
     return {schema:"foam-wire-f4-diagnostic-motion-v1",operations,origin,
       trimAngle,cutOrder,trimOperation,plannedSequence,stockRemoval,
