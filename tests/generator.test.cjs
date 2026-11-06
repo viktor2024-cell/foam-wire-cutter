@@ -668,6 +668,14 @@ test('external F4-11 ambiguous BREP must still preview model edges and selectabl
  assert.ok(motion.operations.every(x=>x.samples.length===129));
  assert.ok(motion.operations.every(x=>x.samples.every(p=>
   [...p.left,...p.right].every(Number.isFinite))));
+ assert.equal(motion.operations[0].correspondence.reverse,false);
+ assert.equal(motion.operations[0].correspondence.shift,0);
+ assert.equal(motion.operations[0].correspondence.shapeRms,0);
+ assert.ok(motion.operations[1].correspondence.shapeRms>=0);
+ const last=motion.operations[1].samples.at(-1),first=motion.operations[1].samples[0];
+ assert.ok(Math.hypot(...first.profileA.map((v,k)=>v-last.profileA[k]))<1e-5);
+ assert.ok(Math.hypot(...first.profileB.map((v,k)=>v-last.profileB[k]))<1e-5);
+
  assert.equal(motion.approvedForGcode,false);
 
  assert.throws(()=>gen.buildProgram(step,'F4-11.stp',options()),/Ручных подтверждённых пар не передано/);
@@ -710,4 +718,22 @@ test('manual guide kinematics returns left/right tower samples but never release
  assert.throws(()=>gen.buildProgram(step,'guides.stp',options({
   manualGuidePairs:[[910005,910006]]
  })),/Станочный G-code для F4 пока запрещён/);
+});
+
+
+test('guide matcher resolves reversed open profile and shifted closed seam',()=>{
+ const mk=(id,points,closed)=>({id,points,closed,fixedAxis:1});
+ const openA=mk(1,[[0,0,0],[10,0,4],[13,0,10],[22,0,3]],false);
+ const openB=mk(2,[[22,50,3],[13,50,10],[10,50,4],[0,50,0]],false);
+ const open=gen.matchGuideCurves(openA,openB);
+ assert.equal(open.correspondence.reverse,true);
+ assert.equal(open.correspondence.shift,0);
+ assert.ok(open.correspondence.shapeRms<1e-6);
+ const pa=[[0,0,0],[20,0,0],[17,0,8],[1,0,12],[0,0,0]];
+ const pb=[[17,50,8],[1,50,12],[0,50,0],[20,50,0],[17,50,8]];
+ const closed=gen.matchGuideCurves(mk(3,pa,true),mk(4,pb,true));
+ assert.ok(closed.correspondence.shapeRms<1);
+ const start=closed.at(mk(4,pb,true),closed.mapB(0));
+ const end=closed.at(mk(4,pb,true),closed.mapB(1));
+ assert.ok(Math.hypot(...start.map((v,k)=>v-end[k]))<1e-6);
 });
