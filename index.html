@@ -3698,7 +3698,68 @@ const Gen = (() => {
     if (prog.clipped) warnings.push("Мощность проволоки упёрлась в максимум S=" + fmtG(cfg.WireMaxPower) + ": проволока слишком длинная для этой формулы");
     return { program, warnings: [...new Set(warnings)], part, points: allTowers.length, holes: holes.length+secondaryContours.length, secondary: secondaryContours.length, power: [prog.minPower, prog.maxPower, prog.changes] };
   }
-  return { buildProgram, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
+  // Preliminary F4 two-carriage motion from explicitly assigned guide pairs.
+  // Coordinates are machine-frame candidates, NOT verified cutting moves.
+  function manualGuideDiagnostics(text, manualGuidePairs, o = {}) {
+    const pairs = manualGuidePairs || [];
+    if (!Array.isArray(pairs) || !pairs.length) throw new StepError("Не заданы пары направляющих");
+    const scale=o.scale===undefined?1:o.scale;
+    const model=new Model(text,o.rotation||identityRotation(),scale,o.tolerance===undefined?.1:o.tolerance);
+    const curves=new Map(model.auxiliaryCurves().map(c=>[c.id,c]));
+    const all=[...model.edges.values()].flat().concat([...curves.values()].flatMap(c=>c.points));
+    const origin=[0,1,2].map(k=>(Math.min(...all.map(p=>p[k]))+Math.max(...all.map(p=>p[k])))/2);
+    const stock=o.stock||[100,300,100],bottom=o.bottomZ||0,offset=o.offset||[0,0,0];
+    const towersDistance=CONFIG.FieldWidth;
+    const nSamples=o.samples||128;
+    if(!Number.isInteger(nSamples)||nSamples<16||nSamples>1024)throw new StepError("Неверное число отсчётов");
+    const at=(curve,u)=>{
+      const v=Math.max(0,Math.min(curve.points.length-1,u*(curve.points.length-1)));
+      const i=Math.min(curve.points.length-2,Math.floor(v)),f=v-i;
+      return curve.points[i].map((n,k)=>n+(curve.points[i+1][k]-n)*f);
+    };
+    const used=new Set(), operations=[];
+    for(const ids of pairs){
+      if(!Array.isArray(ids)||ids.length!==2||ids[0]===ids[1]||ids.some(id=>used.has(id)))
+        throw new StepError("Недопустимое повторное назначение направляющих");
+      const [a,b]=ids.map(id=>curves.get(id));
+      if(!a||!b||a.fixedAxis!==b.fixedAxis||a.fixedAxis===2||a.fixedAxis<0||a.closed!==b.closed)
+        throw new StepError("Несовместимая пара направляющих #"+ids.join("/#"));
+      const axis=a.fixedAxis,cross=axis===1?0:1;
+      const aa=a.points[0][axis]-origin[axis],bb=b.points[0][axis]-origin[axis];
+      const den=bb-aa;
+      if(Math.abs(den)<.1)throw new StepError("Направляющие лежат в одной плоскости");
+      ids.forEach(id=>used.add(id));
+      const samples=[], bounds=[Infinity,-Infinity,Infinity,-Infinity], axisName=axis===1?"B0":"B90";
+      const zBase=bottom+stock[2]/2+offset[2];
+      const crossBase=CONFIG.HorizontalTravel/2+
+        (axis===1?offset[1]:offset[0]);
+      for(let i=0;i<=nSamples;i++){
+        const u=i/nSamples,pa=at(a,u),pb=at(b,u);
+        const crossA=pa[cross]-origin[cross],crossB=pb[cross]-origin[cross];
+        const zA=pa[2]-origin[2],zB=pb[2]-origin[2];
+        const ext=(v1,v2,x)=>v1+(v2-v1)*(x-aa)/den;
+        const left=[crossBase+ext(crossA,crossB,-towersDistance/2), zBase+ext(zA,zB,-towersDistance/2)];
+        const right=[crossBase+ext(crossA,crossB,towersDistance/2),zBase+ext(zA,zB,towersDistance/2)];
+        if([...left,...right].some(v=>!Number.isFinite(v)))throw new StepError("Некорректная экстраполяция струны");
+        bounds[0]=Math.min(bounds[0],left[0],right[0]);bounds[1]=Math.max(bounds[1],left[0],right[0]);
+        bounds[2]=Math.min(bounds[2],left[1],right[1]);bounds[3]=Math.max(bounds[3],left[1],right[1]);
+        samples.push({u,left,right,profileA:pa,profileB:pb});
+      }
+      const insideEnvelope=bounds[0]>=0&&bounds[1]<=CONFIG.HorizontalTravel&&
+        bounds[2]>=0&&bounds[3]<=CONFIG.VerticalTravel;
+      operations.push({ids:ids.slice(),angle:axis===1?0:90,operation:axisName,closed:a.closed,
+        planeSpan:Math.abs(den),towersDistance,samples,
+        bounds:{transverse:[bounds[0],bounds[1]],z:[bounds[2],bounds[3]]},
+        insideEnvelope,approvedForGcode:false,
+        warnings:["Направление и начало синхронизации точек не сертифицированы",
+          "Прямолинейная струна не проверена на сохранность детали",
+          "Не определены безопасные вход и выход", 
+          ...(insideEnvelope?[]:["Предварительная траектория выходит за пределы рабочих ходов"]) ]});
+    }
+    return {schema:"foam-wire-f4-diagnostic-motion-v1",operations,origin,
+      approvedForGcode:false,notes:"Диагностическая экстраполяция на две каретки. Не станочный код. Не проверена геометрия удаляемого материала."};
+  }
+  return { buildProgram, manualGuideDiagnostics, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
 })();
 
 // ---------------------------------------------------------------------------------------------
