@@ -81,3 +81,37 @@ test('right-button gestures have explicit navigation roles',()=>{
  // The bundled OrbitControls swaps PAN to ROTATE for ctrlKey,
  // and leaves PAN as PAN for altKey.
 });
+
+test('3D start pick chooses active pair and blocks midcurve starts on open profiles',()=>{
+ const start=source.indexOf('  const guideStarts={};');
+ const end=source.indexOf("  const guideModeButton = ",start);
+ assert.ok(start>0&&end>start);
+ const ctx={
+  savedGuidePairs:[[197,544],[337,681]],guideOp:{value:'0'},
+  guideProgress:{value:'50'},guideEntryResult:{textContent:''},
+  geometry:{auxiliaryCurves:[
+   {id:197,closed:false,points:[[0,0,0],[10,0,5],[20,0,0]]},
+   {id:337,closed:true,points:[[0,0,0],[10,0,0],[10,10,0],[0,0,0]]}
+  ]},guideFeedback:()=>{},invalidate:()=>{},
+  resetStockSimulation:()=>{},updateGuideMotion:()=>{}
+ };
+ vm.createContext(ctx);
+ vm.runInContext(source.slice(start,end)+
+  ';globalThis.testPick=setGuideStart;globalThis.starts=guideStarts;',ctx);
+ assert.equal(ctx.testPick(197,.5),false);
+ assert.equal(ctx.testPick(544,0),false);
+ assert.equal(ctx.testPick(197,.98),true);
+ assert.equal(ctx.starts['197:544'],1);
+ assert.equal(ctx.guideProgress.value,'0');
+ ctx.guideOp.value='1';
+ assert.equal(ctx.testPick(337,.4),true);
+ assert.ok(Math.abs(ctx.starts['337:681']-.4)<1e-12);
+});
+test('native 3D start controls and normalized hit coordinate feed diagnostic motion',()=>{
+ assert.match(source,/gnGuideStartMode/);
+ assert.match(source,/gnGuideStartReset/);
+ assert.match(source,/setGuideStart\(hit\.id,hit\.u\)/);
+ assert.match(source,/u:\(i-1\+t\)\/\(positions\.length-1\)/);
+ assert.match(source,/Gen\.resolveGuideStart\(a,b,guideStartFor\(pair\)\)/);
+ assert.match(source,/guideStarts:\{\.\.\.guideStarts\}/);
+});
