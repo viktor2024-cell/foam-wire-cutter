@@ -3959,8 +3959,26 @@ const Gen = (() => {
           ...(insideStockHeight?[]:["Часть траектории находится вне заданной высоты заготовки"]),
           "Кинематика поворота стола и знак поперечной оси B90 требуют калибровки"]});
     }
+    const cutOrder=o.cutOrder||'B90_B0',trimAngle=o.trimAngle===undefined?90:Number(o.trimAngle);
+    if(!['B0_B90','B90_B0'].includes(cutOrder)||![0,90].includes(trimAngle))
+      throw new StepError("Некорректный угол торцевания или порядок операций");
+    const angleOrder=cutOrder==='B0_B90'?[0,90]:[90,0];
+    operations.sort((a,b)=>angleOrder.indexOf(a.angle)-angleOrder.indexOf(b.angle));
+    const trimEnabled=o.trim!==false;
+    const trimOperation=trimEnabled?{
+      type:'TRIM',angle:trimAngle,
+      stockDimension:trimAngle===90?stock[0]:stock[1],
+      status:'NOT_CERTIFIED_FOR_F4',
+      description:trimAngle===90?'Торцевание по длине заготовки':'Торцевание по ширине заготовки'
+    }:null;
+    const plannedSequence=[
+      ...(trimOperation?[trimOperation]:[]),
+      ...operations.map((op,i)=>({type:'PROFILE',angle:op.angle,ids:op.ids.slice(),
+        step:i+1,status:'NOT_CERTIFIED_FOR_F4'}))
+    ];
     return {schema:"foam-wire-f4-diagnostic-motion-v1",operations,origin,
-      approvedForGcode:false,notes:"Диагностическая экстраполяция на две каретки. Не станочный код. Не проверена геометрия удаляемого материала."};
+      trimAngle,cutOrder,trimOperation,plannedSequence,
+      approvedForGcode:false,notes:"Последовательность операций спланирована, но ещё не подтверждены безопасность входов и удаление материала. Не станочный код."};
   }
   return { buildProgram, manualGuideDiagnostics, inspectGuideEntryExit, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
 })();
