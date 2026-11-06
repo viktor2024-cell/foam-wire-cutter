@@ -681,3 +681,33 @@ test('external F4-11 ambiguous BREP must still preview model edges and selectabl
   manualGuidePairs:[[197,337]]
  })),/геометрически несовместима/);
 });
+
+
+test('manual guide kinematics returns left/right tower samples but never releases machine code',()=>{
+ const extra=[
+  "#910001 = CARTESIAN_POINT('',(0.,-30.,10.));",
+  "#910002 = CARTESIAN_POINT('',(15.,-30.,20.));",
+  "#910003 = CARTESIAN_POINT('',(0.,30.,10.));",
+  "#910004 = CARTESIAN_POINT('',(15.,30.,20.));",
+  "#910005 = B_SPLINE_CURVE_WITH_KNOTS ('guide',1,(#910001,#910002),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
+  "#910006 = B_SPLINE_CURVE_WITH_KNOTS ('guide',1,(#910003,#910004),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
+  "#910007 = GEOMETRIC_CURVE_SET ('guides',(#910005,#910006));"
+ ].join('\n');
+ const idx=fixture.lastIndexOf('ENDSEC;');
+ const step=fixture.slice(0,idx)+extra+'\n'+fixture.slice(idx);
+ const path=gen.manualGuideDiagnostics(step,[[910005,910006]],{
+  stock:[100,200,70],bottomZ:10,clearance:15,samples:32
+ });
+ assert.equal(path.schema,'foam-wire-f4-diagnostic-motion-v1');
+ assert.equal(path.approvedForGcode,false);
+ assert.equal(path.operations.length,1);
+ const op=path.operations[0];
+ assert.equal(op.angle,0);assert.equal(op.samples.length,33);
+ assert.ok(op.samples.every(p=>[...p.left,...p.right].every(Number.isFinite)));
+ assert.ok(op.samples.every(p=>Math.abs(p.left[0]-p.right[0])<1e-6));
+ assert.equal(op.approvedForGcode,false);
+ assert.throws(()=>gen.manualGuideDiagnostics(step,[[910005,910005]]),/повторное назначение/);
+ assert.throws(()=>gen.buildProgram(step,'guides.stp',options({
+  manualGuidePairs:[[910005,910006]]
+ })),/Станочный G-code для F4 пока запрещён/);
+});
