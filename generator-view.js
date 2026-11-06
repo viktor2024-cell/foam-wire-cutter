@@ -556,6 +556,7 @@ const generatorPreview = (() => {
   }
   function rebuild() {
     document.getElementById('gnStockFromModel').disabled = !geometry;
+    document.getElementById('gnAutoPlace').disabled = !geometry;
     guideWire = null;guideStartMarker=null;stockCloud=null;resetStockSimulation();
     clear();curveObjects = []; group = new THREE.Group(); scene.add(group);
     if (guideEntryResult) guideEntryResult.textContent='Размещение или модель изменены. Повторите проверку входа и выхода.';
@@ -698,6 +699,90 @@ const generatorPreview = (() => {
     modelOffset[Number(button.dataset.axis)]+=5*Number(button.dataset.step);showOffset();invalidate();rebuild();
   });
   document.getElementById('gnResetOffset').addEventListener('click',()=>{modelOffset=[0,0,0];showOffset();invalidate();rebuild();});
+
+  // Full toolpath placement: analyse possible 90-degree orientations, solve
+  // machine-axis displacement analytically, then run the normal postprocessor.
+  // The existing +/- 5 mm controls remain available for manual adjustment.
+  let autoPlacementBusy=false;
+  document.getElementById('gnAutoPlace').addEventListener('click',async()=>{
+    if(!stepFile||autoPlacementBusy)return;
+    const button=document.getElementById('gnAutoPlace');
+    const fit=document.getElementById('gnFit');
+    const config={
+      rotation:modelRotation,scale:n('gnScale')/100,tolerance:n('gnTolerance'),
+      stock:[n('gnL'),n('gnW'),n('gnH')],bottomZ:n('gnZ'),
+      kerf:n('gnKerf'),feed:n('gnFeed'),minS:n('gnMinS'),maxS:n('gnMaxS'),
+      clearance:n('gnClear'),retract:n('gnRetract'),leadMargin:n('gnLead'),
+      trim:document.getElementById('gnTrim').checked,
+      trimAngle:n('gnTrimAngle'),cutOrder:document.getElementById('gnCutOrder').value,
+      sideEntry:document.getElementById('gnSideEntry').checked,
+      side:document.getElementById('gnSide').value==='-'?-1:1,
+      powerComp:document.getElementById('gnComp').checked,
+      pair:document.getElementById('gnStockPair').checked,
+      mirror:false,manualGuidePairs:savedGuidePairs.map(p=>p.slice())
+    };
+    if(geometry?.auxiliaryCurves?.length){
+      fit.className='note warn';
+      fit.textContent='Авторазмещение ручных STEP-направляющих F4 ещё не поддержано. Для них сохраняется ручная установка.';
+      return;
+    }
+    if(config.pair||config.sideEntry){
+      fit.className='note warn';
+      fit.textContent='Для авторазмещения отключите режим пары и боковой вход.';
+      return;
+    }
+    autoPlacementBusy=true;button.disabled=true;
+    const rotations=[],seen=new Set(),queue=[{matrix:modelRotation,turns:0}];
+    let best=null,checked=0,firstError='';
+    try {
+      for(let i=0;i<queue.length&&rotations.length<24;i++){
+        const candidate=queue[i],key=candidate.matrix.flat().map(x=>Math.round(x*1e6)).join(',');
+        if(seen.has(key))continue;
+        seen.add(key);rotations.push(candidate);
+        for(let axis=0;axis<3;axis++)
+          queue.push({matrix:Gen.rotateModel(candidate.matrix,axis,1),turns:candidate.turns+1});
+      }
+      for(const item of rotations){
+        checked++;
+        fit.className='note';
+        fit.textContent='Проверка поворотов '+checked+'/'+rotations.length+
+          ': рассчитываю полные траектории обеих кареток…';
+        // Refresh the canvas and status between computational candidates.
+        await new Promise(resolve=>setTimeout(resolve,0));
+        try{
+          const g=Gen.previewGeometry(stepFile.text,item.matrix,config.scale,config.tolerance);
+          if(g.axis!==1||g.secondaryCount||g.wireframe||
+             g.size[0]>config.stock[0]+.001||g.size[1]>config.stock[1]+.001||
+             g.size[2]>config.stock[2]+.001) continue;
+          const result=Gen.autoPlace(stepFile.text,stepFile.name,{...config,rotation:item.matrix});
+          // Prefer a small translation; a quarter turn costs a little to
+          // retain the operator's chosen orientation when both are valid.
+          const score=result.displacement+Math.min(item.turns,6)*2;
+          if(!best||score<best.score)best={...result,score,turns:item.turns};
+        }catch(e){if(!firstError)firstError=e.message;}
+      }
+      if(!best){
+        fit.className='note crit';
+        fit.textContent='Авторазмещение не найдено для заданной заготовки и ходов станка. '+
+          (firstError?'Причина одного из отклонённых вариантов: '+firstError:'Проверьте размеры STEP и заготовки.');
+        return;
+      }
+      modelRotation=best.rotation;
+      modelOffset=best.offset.slice();
+      showOffset();
+      load();
+      fit.className='note';
+      fit.textContent+=' Авторазмещение: X='+best.offset[0].toFixed(2)+
+        ', Y='+best.offset[1].toFixed(2)+', Z='+best.offset[2].toFixed(2)+
+        ' мм; поворотов от исходного положения: '+best.turns+
+        '. Траектория успешно проверена обычным генератором. Проверяйте G-code в РЕЗКЕ.';
+    }catch(e){
+      fit.className='note crit';
+      fit.textContent='Ошибка авторазмещения: '+e.message;
+    }finally{
+      autoPlacementBusy=false;button.disabled=!geometry;
+    }
+  });
   // Evaluate the actual model at every 90-degree orientation around the
   // wire axis, without rotating the span away from the wire. Choose stock
   // thickness first (20/50/100 if possible), then the smallest footprint.
