@@ -128,3 +128,13 @@ test('preview stock, edge outline and local axes share the model displacement',(
  assert.match(source,/edge\.position\.copy\(foam\.position\)/);
  assert.match(source,/axes\.position\.set\(modelOffset\[0\]-stock\[0\]\/2,modelOffset\[1\]-stock\[1\]\/2,bottom\+modelOffset\[2\]\)/);
 });
+
+test('automatic placement button uses actual solver and keeps operator controls',()=>{
+ const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+ assert.match(html,/id="gnAutoPlace"/);
+ assert.match(source,/gnAutoPlace'\)\.addEventListener\('click',async/);
+ assert.match(source,/Gen\.autoPlace\(stepFile\.text,stepFile\.name/);
+ assert.match(source,/modelRotation=best\.rotation/);
+ assert.match(source,/modelOffset=best\.offset\.slice\(\)/);
+ assert.match(source,/showOffset\(\)/);
+});
