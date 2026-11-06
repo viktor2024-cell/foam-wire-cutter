@@ -65,9 +65,13 @@ const generatorPreview = (() => {
   function refreshGuideOperations() {
     const current=guideOp.value;
     guideOp.replaceChildren();
-    for (let i=0;i<savedGuidePairs.length;i++) {
+    const first=document.getElementById('gnCutOrder').value==='B0_B90'?1:0;
+    const order=savedGuidePairs.map((ids,i)=>({ids,i,
+      axis:geometry?.auxiliaryCurves?.find(c=>c.id===ids[0])?.fixedAxis}));
+    order.sort((a,b)=>(a.axis===first?0:1)-(b.axis===first?0:1));
+    for (const {i,ids} of order) {
       const o=document.createElement('option');o.value=String(i);
-      const ids=savedGuidePairs[i],a=geometry?.auxiliaryCurves?.find(c=>c.id===ids[0]);
+      const a=geometry?.auxiliaryCurves?.find(c=>c.id===ids[0]);
       o.textContent='#'+ids.join(' / #')+' · '+(a?.fixedAxis===1?'B0':a?.fixedAxis===0?'B90':'ось Z');
       guideOp.appendChild(o);
     }
@@ -86,7 +90,9 @@ const generatorPreview = (() => {
     return Gen.manualGuideDiagnostics(stepFile.text,savedGuidePairs,{
       rotation:modelRotation,offset:[...modelOffset],scale:n('gnScale')/100,
       tolerance:n('gnTolerance'),stock:[n('gnL'),n('gnW'),n('gnH')],
-      bottomZ:n('gnZ'),clearance:n('gnClear'),kerf:n('gnKerf'),samples:128
+      bottomZ:n('gnZ'),clearance:n('gnClear'),kerf:n('gnKerf'),
+      trim:document.getElementById('gnTrim').checked,
+      trimAngle:n('gnTrimAngle'),cutOrder:document.getElementById('gnCutOrder').value,samples:128
     });
   };
   guideEntryResult.style.whiteSpace='pre-wrap';
@@ -113,6 +119,17 @@ const generatorPreview = (() => {
       guideEntryResult.textContent='Проверка не выполнена: '+e.message;
     }
   });
+  document.getElementById('gnCutOrder').addEventListener('change',()=>{
+    refreshGuideOperations();
+    guideEntryResult.textContent='Изменён порядок B0/B90: повторите проверку входов и выходов.';
+  });
+  document.getElementById('gnTrimAngle').addEventListener('change',()=>{
+    guideEntryResult.textContent='Изменён угол торцевания: повторите проверку.';
+    rebuild();
+  });
+  document.getElementById('gnTrim').addEventListener('change',()=>{
+    guideEntryResult.textContent='Изменён режим торцевания: повторите проверку.';
+  });
   document.getElementById('gnGuideDiagnostic').addEventListener('click',()=>{
     try {
       const report=getGuideDiagnostic();
@@ -120,11 +137,13 @@ const generatorPreview = (() => {
       const url=URL.createObjectURL(blob),a=document.createElement('a');
       a.href=url;a.download=stepFile.name.replace(/\\.(stp|step)$/i,'')+'-motion-DIAGNOSTIC.json';
       document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+      const plan=report.plannedSequence.map(op=>op.type==='TRIM'?'Торцевание B'+op.angle:
+        'Рез B'+op.angle+' #'+op.ids.join('/#')).join(' → ');
       const summary=report.operations.map(op=>op.operation+' #'+op.ids.join('/#')+
         ': X '+op.bounds.transverse.map(v=>v.toFixed(1)).join('…')+
         ', Z '+op.bounds.z.map(v=>v.toFixed(1)).join('…')+
         (op.insideEnvelope?' мм (в ходах)':' мм (ВНЕ ХОДОВ)')).join('; ');
-      guideMotion.textContent='Экспортировано '+report.operations.length+
+      guideMotion.textContent='План: '+plan+'. Экспортировано '+report.operations.length+
         ' диагностических операций: '+summary+'. Это НЕ G-code.';
       guideEntryResult.className='note crit';
       guideEntryResult.textContent=guideEntrySummary(report)+'. Это не разрешение на резку.';
