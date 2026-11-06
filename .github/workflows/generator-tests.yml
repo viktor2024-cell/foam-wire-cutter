@@ -20,3 +20,5 @@ jobs:
           node-version: '22'
       - name: Run generator tests (no CNC hardware)
         run: node --test tests/generator.test.cjs tests/guide-editor.test.cjs tests/generator-3d-guides.test.cjs
+      - name: Validate OpenCascade checker syntax
+        run: python3 -m py_compile tools/verify_f4_solid.py
