@@ -1876,17 +1876,49 @@ const Gen = (() => {
   function previewGeometry(text, rotation = identityRotation(), scale = 1, tolerance = 0.1) {
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
     const model = new Model(text, rotation, scale, tolerance);
-    const { outer, holes, secondaryContours, axis, wireframe } = model.build();
     const auxiliaryCurves = model.wireframe ? [] : model.auxiliaryCurves();
-    const guideAnalysis = model.wireframe ? null : model.guideAnalysis();
-    const guideKinematics = model.wireframe || !auxiliaryCurves.length ? null : model.guideKinematics(CONFIG.FieldWidth);
+    let built, previewError = null;
+    try { built = model.build(); }
+    catch(e) {
+      // The toolpath topology may be ambiguous; editing its guide selection
+      // must still be possible. This is a preview-only wireframe fallback.
+      if (!auxiliaryCurves.length) throw e;
+      previewError = e.message;
+    }
+    const {outer=[], holes=[], secondaryContours=[], axis=1, wireframe=false} = built || {};
+    let guideAnalysis = null, guideKinematics = null;
+    try {
+      if (!model.wireframe && auxiliaryCurves.length) {
+        guideAnalysis = model.guideAnalysis();
+        guideKinematics = model.guideKinematics(CONFIG.FieldWidth);
+      }
+    } catch(e) {
+      // Analysis is advisory and must not prevent manual curve selection.
+      if (!previewError) previewError = e.message;
+    }
     const sampled = outer.map(([face]) => sampleFace(face, face.t0, face.t1, 0.05, 5));
-    const rails = [...outer, ...holes.flat(), ...secondaryContours.flatMap(g=>g.contour)].map(([face]) => sampleFace(face, face.t0, face.t1, 0.01, 2)
-      .map((pair) => pair.map((p) => [-p[1], p[0], p[2]])));
-    const points = sampled.flat(2).map(p => [-p[1],p[0],p[2]]);
-    const low = [0,1,2].map((k) => Math.min(...points.map((p) => p[k])));
-    const high = [0,1,2].map((k) => Math.max(...points.map((p) => p[k])));
-    return { rails, axis, sampled, wireframe: !!wireframe, auxiliaryCurves, guideAnalysis, guideKinematics, secondaryCount: secondaryContours.length, center: low.map((v,k) => (v+high[k])/2), size: low.map((v,k) => high[k]-v) };
+    const rails = [...outer, ...holes.flat(), ...secondaryContours.flatMap(g=>g.contour)].map(([face]) =>
+      sampleFace(face, face.t0, face.t1, 0.01, 2)
+        .map(pair => pair.map(p => [-p[1],p[0],p[2]])));
+    const edgeLines = [];
+    if (!built) for (const ends of model.edges.values()) {
+      if (ends.length===2 && ends.every(p=>p.every(Number.isFinite)))
+        edgeLines.push(ends.map(p=>[-p[1],p[0],p[2]]));
+    }
+    // Stock placement uses the BREP boundary where available; for the manual
+    // recovery preview use STEP edge endpoints, not unbounded surface poles.
+    let points = sampled.flat(2).map(p => [-p[1],p[0],p[2]]);
+    if (!points.length) points = edgeLines.flat();
+    if (!points.length) points = auxiliaryCurves.flatMap(c =>
+      c.points.map(p=>[-p[1],p[0],p[2]]));
+    if (!points.length) throw new StepError("В STEP нет геометрии для предпросмотра");
+    const low=[0,1,2].map(k=>Math.min(...points.map(p=>p[k])));
+    const high=[0,1,2].map(k=>Math.max(...points.map(p=>p[k])));
+    return {rails,edgeLines,previewError,diagnosticOnly:!!previewError,
+      axis, sampled, wireframe:!!wireframe, auxiliaryCurves, guideAnalysis,
+      guideKinematics, secondaryCount:secondaryContours.length,
+      center:low.map((v,k)=>(v+high[k])/2),
+      size:low.map((v,k)=>high[k]-v)};
   }
 
   function pairPlacement(zsA, zsB, zc, span, stockHeight, bottomZ, kerf) {
