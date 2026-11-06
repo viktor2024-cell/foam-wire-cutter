@@ -12,7 +12,58 @@ const generatorPreview = (() => {
   const machine = Gen.CONFIG;
   // Native Three.js curve selection, independent of the old stand-alone editor.
   // The saved pairs are user annotations; they do NOT authorize machine G-code.
-  let guideMode = false, pendingGuide = [], savedGuidePairs = [], curveObjects = [];
+  let guideMode = false, startMode = false, pendingGuide = [], savedGuidePairs = [], curveObjects = [];
+  const guideStarts={}; // Keys are ordered STEP IDs: "curveA:curveB"; normalized A parameter.
+  let guideStartMarker=null;
+  const startButton=document.getElementById('gnGuideStartMode');
+  const startResetButton=document.getElementById('gnGuideStartReset');
+  const pairKey=ids=>ids.join(':');
+  const selectedGuidePair=()=>savedGuidePairs[Number(guideOp.value)];
+  const guideStartFor=ids=>guideStarts[pairKey(ids)]??0;
+  function redrawStartMarker() {
+    if(guideStartMarker) {
+      guideStartMarker.parent?.remove(guideStartMarker);
+      guideStartMarker.geometry.dispose();guideStartMarker.material.dispose();
+      guideStartMarker=null;
+    }
+    const ids=selectedGuidePair();
+    if(!geometry || !ids || !group) return;
+    const c=geometry.auxiliaryCurves.find(x=>x.id===ids[0]);
+    if(!c)return;
+    const u=guideStartFor(ids),point=guideSample(c,u);
+    const geo=new THREE.SphereGeometry(2.5,10,8);
+    guideStartMarker=new THREE.Mesh(geo,new THREE.MeshBasicMaterial({
+      color:0xffe25b,depthTest:false
+    }));
+    guideStartMarker.position.copy(guideToScene(point));
+    guideStartMarker.renderOrder=35;group.add(guideStartMarker);
+  }
+  function setGuideStart(id,u) {
+    const ids=selectedGuidePair();
+    if(!ids || id!==ids[0]) {
+      guideFeedback('Укажи начало на первой кривой активной пары (#'+(ids?.[0]??'?')+').');
+      return false;
+    }
+    const curve=geometry?.auxiliaryCurves.find(c=>c.id===id);
+    if(!curve || !Number.isFinite(u))return false;
+    let start;
+    if(curve.closed)start=((u%1)+1)%1;
+    else {
+      if(u>.1 && u<.9) {
+        guideFeedback('Открытый профиль: начало выбирается только у одного из двух концов.');
+        return false;
+      }
+      start=u>=.9?1:0;
+    }
+    guideStarts[pairKey(ids)]=start;
+    guideProgress.value='0';
+    resetStockSimulation();
+    guideEntryResult.textContent='Начало реза изменено: перепроверьте вход/выход и остаток материала.';
+    updateGuideMotion();
+    guideFeedback('Начало для #'+ids.join('/#')+' задано на '+(start*100).toFixed(1)+'% первого профиля.');
+    invalidate();
+    return true;
+  }
   const guideModeButton = document.getElementById('gnGuideMode');
   const guideStatus = document.getElementById('gnGuideStatus');
   const guideOp = document.getElementById('gnGuideOperation');
@@ -76,8 +127,8 @@ const generatorPreview = (() => {
     const a=curves.find(c=>c.id===pair[0]), b=curves.find(c=>c.id===pair[1]);
     if (!a || !b) return draw();
     const t=Number(guideProgress.value)/100;
-    const {correspondence,mapB}=Gen.matchGuideCurves(a,b);
-    const pa=guideSample(a,t),pb=guideSample(b,mapB(t));
+    const {correspondence,mapA,mapB,startU,reverseA}=Gen.resolveGuideStart(a,b,guideStartFor(pair));
+    const pa=guideSample(a,mapA(t)),pb=guideSample(b,mapB(t));
     // Same phase and traversal matching used by the diagnostic two-tower
     // computation: 3D segment agrees with exported point correspondence.
     const vertices=[guideToScene(pa),guideToScene(pb)];
@@ -91,7 +142,10 @@ const generatorPreview = (() => {
       (a.fixedAxis===1?'B0':a.fixedAxis===0?'B90':'ось Z')+
       ' · обход B '+(correspondence.reverse?'обратный':'прямой')+
       ' · сдвиг начала '+correspondence.shift+'/128 · RMS '+correspondence.shapeRms.toFixed(2)+
-      ' мм. Вход/выход и сохранность детали НЕ проверены.';
+      ' мм · начало A '+(startU*100).toFixed(1)+'%'+
+      (reverseA?' (от конечной точки)':'')+
+      '. Вход/выход и сохранность детали НЕ проверены.';
+    redrawStartMarker();
     draw();
   }
   function refreshGuideOperations() {
@@ -135,7 +189,8 @@ const generatorPreview = (() => {
       tolerance:n('gnTolerance'),stock:[n('gnL'),n('gnW'),n('gnH')],
       bottomZ:n('gnZ'),clearance:n('gnClear'),kerf:n('gnKerf'),
       trim:document.getElementById('gnTrim').checked,
-      trimAngle:n('gnTrimAngle'),cutOrder:document.getElementById('gnCutOrder').value,samples:128
+      trimAngle:n('gnTrimAngle'),cutOrder:document.getElementById('gnCutOrder').value,
+      guideStarts:{...guideStarts},samples:128
     });
   };
   guideEntryResult.style.whiteSpace='pre-wrap';
@@ -290,6 +345,7 @@ const generatorPreview = (() => {
       return false;
     }
     savedGuidePairs.push([idA, idB]); pendingGuide = [];
+    guideStarts[pairKey([idA,idB])]=0;
     resetStockSimulation();
     guideEntryResult.textContent='Пары изменены: выполните проверку входа и выхода заново.';
     invalidate(); refreshGuideOperations();
@@ -317,7 +373,7 @@ const generatorPreview = (() => {
         const dx=b[0]-a[0], dy=b[1]-a[1], len=dx*dx+dy*dy;
         const t=len<1e-10?0:Math.max(0, Math.min(1, ((x-a[0])*dx+(y-a[1])*dy)/len));
         const d=Math.hypot(x-a[0]-t*dx,y-a[1]-t*dy);
-        if (d < distance) {distance=d;winner=item.id;}
+        if (d < distance) {distance=d;winner={id:item.id,u:(i-1+t)/(positions.length-1)};}
       }
     }
     return winner;
@@ -342,7 +398,7 @@ const generatorPreview = (() => {
     }
   }, true);
   renderer.domElement.addEventListener('pointermove', e => {
-    if (!guideMode) return;
+    if (!guideMode && !startMode) return;
     const rect = renderer.domElement.getBoundingClientRect();
     guideDot.style.left = (e.clientX - rect.left) + 'px';
     guideDot.style.top = (e.clientY - rect.top) + 'px';
@@ -353,39 +409,61 @@ const generatorPreview = (() => {
     guideDot.style.display = 'none';
   });
   renderer.domElement.addEventListener('contextmenu', e => {
-    if (guideMode || e.ctrlKey || e.metaKey || e.altKey) e.preventDefault();
+    if (guideMode || startMode || e.ctrlKey || e.metaKey || e.altKey) e.preventDefault();
   });
   renderer.domElement.addEventListener('pointerdown', e => {
-    if (!guideMode) return;
+    if (!guideMode && !startMode) return;
     if (e.button === 0) pointerDown = [e.clientX,e.clientY];
     // Plain RMB is tracked by the capture-phase listener above.
   });
   renderer.domElement.addEventListener('pointerup', e => {
-    if (!guideMode) return;
+    if (!guideMode && !startMode) return;
     if (e.button === 2 && rightPointerDown) {
       const moved = Math.hypot(e.clientX-rightPointerDown[0], e.clientY-rightPointerDown[1]);
       rightPointerDown = null;
-      if (moved <= 5) confirmGuidePair(); // plain RMB click confirms
+      if (moved <= 5 && guideMode) confirmGuidePair(); // plain RMB click confirms
       return;
     }
     if (!pointerDown || e.button !== 0) return;
     const moved=Math.hypot(e.clientX-pointerDown[0],e.clientY-pointerDown[1]);
     pointerDown = null;
     if (moved > 5) return; // camera drag, not a pick
-    const id = guideHit(e.clientX,e.clientY);
-    if (id !== null) chooseGuide(id);
+    const hit = guideHit(e.clientX,e.clientY);
+    if (hit !== null) {
+      if(startMode)setGuideStart(hit.id,hit.u);
+      else chooseGuide(hit.id);
+    }
   });
   guideModeButton.addEventListener('click', () => {
     guideMode = !guideMode;
+    if(guideMode){startMode=false;startButton.setAttribute('aria-pressed','false');}
     pendingGuide = [];
     guideDot.style.display = 'none';
     guideFeedback(guideMode ? 'Выберите две кривые мышкой, затем ПКМ или ПОДТВЕРДИТЬ.' : undefined);
     updateGuideColors();
   });
+  startButton.addEventListener('click',()=>{
+    startMode=!startMode;
+    if(startMode){guideMode=false;pendingGuide=[];guideFeedback();}
+    startButton.setAttribute('aria-pressed',String(startMode));
+    startButton.textContent=startMode?'Начало реза: выбор в 3D':'Задать начало реза';
+    renderer.domElement.style.cursor=startMode?'crosshair':'';
+    guideDot.style.display='none';
+    guideFeedback(startMode?
+      'Выбери точку на первой кривой активной пары. Открытый профиль — только концы.':
+      'Режим выбора начала выключен.');
+  });
+  startResetButton.addEventListener('click',()=>{
+    const ids=selectedGuidePair();
+    if(ids)setGuideStart(ids[0],0);
+  });
   guideConfirmButton.addEventListener('click', confirmGuidePair);
   document.getElementById('gnGuideUndo').addEventListener('click', () => {
     if (pendingGuide.length) pendingGuide = [];
-    else savedGuidePairs.pop();
+    else {
+      const removed=savedGuidePairs.pop();
+      if(removed)delete guideStarts[pairKey(removed)];
+    }
     resetStockSimulation();
     guideEntryResult.textContent='Пары изменены: выполните проверку входа и выхода заново.';
     invalidate(); refreshGuideOperations(); guideFeedback(); updateGuideColors();
@@ -396,7 +474,8 @@ const generatorPreview = (() => {
       return;
     }
     const payload = {schema:'foam-wire-guide-pairs-v1',stepFile:stepFile.name,
-      pairs:savedGuidePairs.map(([a,b])=>({a,b})) ,
+      pairs:savedGuidePairs.map(([a,b])=>({a,b,startU:guideStartFor([a,b])})),
+      guideStarts:{...guideStarts},
       validatedForMachining:false};
     const blob = new Blob([JSON.stringify(payload,null,2)], {type:'application/json'});
     const url = URL.createObjectURL(blob), a=document.createElement('a');
@@ -451,7 +530,7 @@ const generatorPreview = (() => {
   }
   function rebuild() {
     document.getElementById('gnStockFromModel').disabled = !geometry;
-    guideWire = null;stockCloud=null;resetStockSimulation();
+    guideWire = null;guideStartMarker=null;stockCloud=null;resetStockSimulation();
     clear();curveObjects = []; group = new THREE.Group(); scene.add(group);
     if (guideEntryResult) guideEntryResult.textContent='Размещение или модель изменены. Повторите проверку входа и выхода.';
     const machineBox = new THREE.BoxGeometry(machine.FieldWidth, machine.HorizontalTravel, machine.VerticalTravel);
@@ -551,7 +630,9 @@ const generatorPreview = (() => {
   function load() {
     invalidate(); geometry = null; error = '';
     if (stepFile !== generatorPreviewLoadedFile) {
-      savedGuidePairs = []; pendingGuide = []; generatorPreviewLoadedFile = stepFile || null;
+      savedGuidePairs = []; pendingGuide = []; 
+      for(const key of Object.keys(guideStarts))delete guideStarts[key];
+      generatorPreviewLoadedFile = stepFile || null;
     }
     try { if (stepFile) geometry = Gen.previewGeometry(stepFile.text, modelRotation, n('gnScale')/100, n('gnTolerance')); }
     catch (e) { error = e.message; }
@@ -671,5 +752,6 @@ const generatorPreview = (() => {
   document.getElementById('gnKerf').addEventListener('input',()=>{invalidate();rebuild();});
   document.getElementById('gnTrim').addEventListener('change',()=>{invalidate();rebuild();});
   guideFeedback();
-  return {load,rebuild,chooseGuide,confirmGuidePair,getGuidePairs:()=>savedGuidePairs.map(p=>p.slice())};
+  return {load,rebuild,chooseGuide,confirmGuidePair,getGuidePairs:()=>savedGuidePairs.map(p=>p.slice()),
+    getGuideStarts:()=>({...guideStarts})};
 })();
