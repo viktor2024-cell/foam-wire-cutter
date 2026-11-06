@@ -939,7 +939,12 @@ test('operator-directed F4 outputs actual G-code with two tower coordinates and 
  assert.ok(p.points>0);
  // Stock and guide profiles are translated in the same machine frame.
  const moved=gen.buildF4Program(step,[[910005,910006]],{...base,offset:[0,7,3]});
- assert.match(moved.program,/STOCK L=100 W=200 H=70 Z0=10 OX=0 OY=7 OZ=3/);
+ assert.match(moved.program,/STOCK L=200 W=100 H=70 Z0=10 OX=0 OY=7 OZ=3/);
+ const parsedStock=sim.parseGcode(moved.program).stock;
+ assert.equal(parsedStock.W,base.stock[0]);
+ assert.equal(parsedStock.L,base.stock[1]);
+ assert.equal(parsedStock.OY,7);
+ assert.equal(parsedStock.OZ,3);
  const getCut=r=>sim.parseGcode(r.program).moves.find(m=>m.type==='G1');
  const before=getCut(p),after=getCut(moved);
  assert.ok(before && after);
