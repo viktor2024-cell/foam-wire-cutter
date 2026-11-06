@@ -222,6 +222,17 @@ const generatorPreview = (() => {
         const outline=new THREE.BufferGeometry();outline.setAttribute('position',new THREE.Float32BufferAttribute(lines,3));
         group.add(new THREE.LineSegments(outline,new THREE.LineBasicMaterial({color})));
       }
+      if (geometry.edgeLines?.length) {
+        // Preview-only recovery for BREP faces whose cutting topology is not
+        // yet resolved. Show the real model edges behind selectable guides.
+        const coords=[];
+        for(const ends of geometry.edgeLines) for(const p of ends)
+          coords.push(...p.map((v,k)=>v-geometry.center[k]+(k===2?bottom+stock[2]/2:0)+modelOffset[k]));
+        const boundary=new THREE.BufferGeometry();
+        boundary.setAttribute('position',new THREE.Float32BufferAttribute(coords,3));
+        group.add(new THREE.LineSegments(boundary,
+          new THREE.LineBasicMaterial({color:0x679aad,transparent:true,opacity:.75})));
+      }
       if(geometry.auxiliaryCurves?.length) {
         for(const curve of geometry.auxiliaryCurves) {
           const points=curve.points.map(p=>[-p[1],p[0],p[2]]);
@@ -247,7 +258,9 @@ const generatorPreview = (() => {
           '. Предварительные углы стола: '+
           (geometry.guideKinematics?.operations.map(op=>'B'+op.angle).join(', ')||'нет')+
           '. Траектории диагностические, резка запрещена до проверки объёма.':'');
-      if(!fits||unsupported||trimConflict||geometry.axis!==1||geometry.auxiliaryCurves?.length) fit.className='note crit';
+      if (geometry.previewError) fit.textContent += ' Траектория не определена: ' +
+        geometry.previewError + '. Для ручной привязки выберите две кривые и нажмите Enter.';
+      if(!fits||unsupported||trimConflict||geometry.axis!==1||geometry.auxiliaryCurves?.length||geometry.previewError) fit.className='note crit';
     } else {
       fit.textContent = error || 'Откройте STEP для проверки размещения.';
       if (error) fit.className = 'note crit';
