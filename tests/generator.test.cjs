@@ -554,6 +554,39 @@ test('surface deviation tolerance must be finite and nonnegative',()=>{
  assert.throws(()=>gen.buildProgram(fixture,'invalid.stp',options({tolerance:NaN})),/Допуск/);
 });
 
+test('automatic placement returns normally validated G-code with shared stock offset',()=>{
+ const opts=options({stock:[80,160,100],bottomZ:10,trim:false,
+   rotation:gen.identityRotation(),powerComp:false});
+ const placed=gen.autoPlace(fixture,'synthetic.stp',opts);
+ assert.equal(placed.offset.length,3);
+ assert.ok(placed.offset.every(Number.isFinite));
+ assert.ok(placed.displacement>=0);
+ const normal=gen.buildProgram(fixture,'synthetic.stp',{...opts,offset:placed.offset});
+ assert.equal(placed.program,normal.program);
+ const decoded=sim.parseGcode(placed.program);
+ assert.equal(decoded.stock.OX,placed.offset[0]);
+ assert.equal(decoded.stock.OY,placed.offset[1]);
+ assert.equal(decoded.stock.OZ,placed.offset[2]);
+ const chk=sim.analyse(decoded,{...decoded.stock,FW:370,HT:490,VT:250,
+   angle:45,invB:false,laser:false});
+ assert.equal(chk.warns.filter(w=>w.level==='crit').length,0);
+});
+
+test('F1-1 automatic positioning finds feasible shift on real STEP', {skip:!process.env.F11_STEP},()=>{
+ const step=fs.readFileSync(process.env.F11_STEP,'utf8');
+ const opts=options({stock:[100,145,135],bottomZ:40,clearance:20,
+   tolerance:.6,trim:false,powerComp:false,
+   rotation:gen.rotateModel(gen.identityRotation(),2,1)});
+ assert.throws(()=>gen.buildProgram(step,'F1-1.stp',{...opts,offset:[0,0,0]}),
+   /Перемещение выходит за ход кареток/);
+ const result=gen.autoPlace(step,'F1-1.stp',opts);
+ assert.ok(Math.hypot(...result.offset)>0);
+ const p=sim.parseGcode(result.program),check=sim.analyse(p,{
+   ...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,
+   JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+});
+
 test('stock and model translate together inside machine envelope',()=>{
  const base=build({stock:[80,160,100],bottomZ:10,trim:false}), shifted=build({stock:[80,160,100],bottomZ:10,trim:false,offset:[0,5,5]});
  assert.match(shifted.program,/STOCK\+MODEL OFFSET X=0 Y=5 Z=5 mm/);
