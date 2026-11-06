@@ -4,7 +4,7 @@ const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
 // Exercise the production generator without DOM stubs or a second implementation.
 const source=html.slice(html.indexOf('const Gen ='),html.indexOf('//  Вкладки и экран генератора'))
- .replace('return { buildProgram, manualGuideDiagnostics, inspectGuideEntryExit, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };','return { buildProgram, manualGuideDiagnostics, inspectGuideEntryExit, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel, Model, sampleFace, Program, startBlock, endBlock };');
+ .replace('return { buildProgram, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };','return { buildProgram, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel, Model, sampleFace, Program, startBlock, endBlock };');
 const gen=vm.runInNewContext(source+';Gen');
 const fixture=fs.readFileSync(path.join(__dirname,'fixtures/split-profile.stp'),'utf8');
 // Construct a genuine two-direction ruled STEP topology: the main sheet
@@ -838,4 +838,42 @@ test('manual F4 planning follows trim-first and selected B0/B90 order without ge
   assert.equal(plan.trimOperation.angle,0);
   assert.equal(plan.approvedForGcode,false);
  }
+});
+
+
+test('sequential hot-wire volume sim updates remaining foam and flags unverified protected solid',()=>{
+ const points=i=>({profileA:[i,0,20],profileB:[i,50,20],left:[i,20],right:[i,20]});
+ const path=[points(10),points(15),points(20),points(25)];
+ const empty={entry:{candidates:[]},exit:{candidates:[]}};
+ const make=(angle,shift=0)=>({angle,ids:[angle+1,angle+2],samples:path.map(p=>({
+  ...p,profileA:p.profileA.map((v,k)=>k===2?v+shift:v),
+  profileB:p.profileB.map((v,k)=>k===2?v+shift:v)
+ })),entryExit:empty});
+ const op1=make(0),op2=make(90,10);
+ const sim=gen.simulateSequentialStockRemoval([op1,op2],[20,25,25],[50,40,50],{
+  voxelSize:5,kerf:1,bottomZ:0,trimOperation:null
+ });
+ assert.equal(sim.operations.length,2);
+ assert.ok(op1.sequentialStock.removedVoxels>0);
+ assert.ok(op2.sequentialStock.removedVoxels>0);
+ assert.ok(sim.remainingVoxels<sim.initialVoxels);
+ assert.ok(op1.sequentialStock.remainingVoxels>op2.sequentialStock.remainingVoxels);
+ assert.equal(sim.approvedForGcode,false);
+ assert.equal(sim.protectedSolidIdentified,false);
+ assert.ok(op1.sequentialStock.sparseRemainingPoints.length>0);
+});
+test('F4 sequential simulation accounts for B0 or B90 trimming BEFORE profile cuts',()=>{
+ const op={angle:0,ids:[1,2],samples:[
+  {profileA:[-8,-20,10],profileB:[-8,20,10]},
+  {profileA:[8,-20,10],profileB:[8,20,10]}
+ ],entryExit:{entry:{candidates:[]},exit:{candidates:[]}}};
+ const mk=()=>JSON.parse(JSON.stringify(op));
+ const untrimmed=gen.simulateSequentialStockRemoval([mk()],[0,0,10],[40,40,20],{voxelSize:4,kerf:1});
+ const trimmed=gen.simulateSequentialStockRemoval([mk()],[0,0,10],[40,40,20],{
+  voxelSize:4,kerf:1,trimOperation:{angle:0,finishedDimension:20,trimAllowance:9}
+ });
+ assert.equal(untrimmed.trimmedVoxels,0);
+ assert.ok(trimmed.trimmedVoxels>0);
+ assert.ok(trimmed.remainingVoxels<untrimmed.remainingVoxels);
+ assert.equal(trimmed.approvedForGcode,false);
 });
