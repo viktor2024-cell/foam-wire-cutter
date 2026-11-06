@@ -7,7 +7,7 @@ function pairing() {
  const start=source.indexOf('  function chooseGuide(id) {');
  const end=source.indexOf('  // Project polyline vertices',start);
  assert.ok(start>0&&end>start);
- const ctx={guideMode:true,pendingGuide:[],savedGuidePairs:[],
+ const ctx={guideMode:true,pendingGuide:[],savedGuidePairs:[],guideStarts:{},pairKey:ids=>ids.join(':'),
   geometry:{auxiliaryCurves:[
    {id:197,fixedAxis:1,closed:false,points:[[0,0,0],[1,0,0]]},
    {id:544,fixedAxis:1,closed:false,points:[[0,99,0],[1,99,0]]},
@@ -47,7 +47,7 @@ test('3D interaction has drag guard, Enter, Escape and export',()=>{
 test('manual mouse confirmation, explicit button and 3 px centre marker',()=>{
  assert.match(source,/guideConfirmButton\.addEventListener\('click', confirmGuidePair\)/);
  assert.match(source,/e\.button === 2 && rightPointerDown/);
- assert.match(source,/moved <= 5\) confirmGuidePair\(\)/);
+ assert.match(source,/moved <= 5 && guideMode\) confirmGuidePair\(\)/);
  assert.match(source,/e\.preventDefault\(\)/);
  assert.match(source,/guideDot\.style\.left/);
  assert.match(source,/width:'3px', height:'3px'/);
