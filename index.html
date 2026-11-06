@@ -4287,6 +4287,10 @@ const Gen = (() => {
     }
     let count=0;
     for(const op of report.operations){
+      const alongWire=op.angle===0?o.stock[0]:o.stock[1];
+      if(alongWire>cfg.FieldWidth)
+        throw new StepError("B"+op.angle+": длина заготовки вдоль струны "+
+          alongWire+" мм превышает расстояние между башнями "+cfg.FieldWidth+" мм");
       if(!op.insideEnvelope)
         throw new StepError("Операция B"+op.angle+" #"+op.ids.join("/#")+
           " выходит за физические ходы кареток");
