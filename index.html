@@ -127,6 +127,8 @@ pre.code .ln { color: var(--muted); display: inline-block; min-width: 4.5ch; }
 #gnView { height: 420px; min-height: 260px; position: relative; border-radius: 8px; overflow: hidden; background: var(--view); }
 #gnView .gn-file { position: absolute; top: 8px; left: 8px; z-index: 2; max-width: calc(100% - 16px); padding: 5px; border-radius: 6px; background: var(--panel); }
 #gnView canvas { display: block; width: 100%; height: 100%; }
+#gnPlacementProgress { margin-top: 6px; }
+#gnPlacementProgress progress { width: 100%; accent-color: var(--wire); }
 .fields select { width: 100%; padding: 4px 6px; font-family: var(--font-num); font-size: 13px; }
 @media (max-width: 860px) { #panelGen { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 700px) { #gnRotate > span:first-child, #gnMove > span:first-child { flex-basis: 100%; } }
@@ -239,6 +241,10 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
   <section class="box">
     <h2>Заготовка</h2>
     <div class="row gn-auto"><button id="gnStockFromModel" disabled>По модели +10 мм с каждой стороны</button><button id="gnAutoPlace" type="button" disabled>Авторазмещение: поворот + сдвиг</button></div>
+    <div id="gnPlacementProgress" class="gn-auto" hidden role="status" aria-live="polite">
+      <div id="gnPlacementProgressText">Подготовка авторазмещения…</div>
+      <progress id="gnPlacementProgressBar" max="24" value="0" aria-label="Проверено вариантов поворота"></progress>
+    </div>
     <div class="fields">
       <label>Вдоль струны<input id="gnL" type="number" step="0.01" value="340"></label>
       <label>Поперёк струны<input id="gnW" type="number" step="0.01" value="230"></label>

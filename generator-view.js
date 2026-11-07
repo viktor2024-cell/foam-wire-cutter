@@ -712,6 +712,9 @@ const generatorPreview = (() => {
     if(!stepFile||autoPlacementBusy)return;
     const button=document.getElementById('gnAutoPlace');
     const fit=document.getElementById('gnFit');
+    const progress=document.getElementById('gnPlacementProgress');
+    const progressText=document.getElementById('gnPlacementProgressText');
+    const progressBar=document.getElementById('gnPlacementProgressBar');
     const config={
       rotation:modelRotation,scale:n('gnScale')/100,tolerance:n('gnTolerance'),
       stock:[n('gnL'),n('gnW'),n('gnH')],bottomZ:n('gnZ'),
@@ -736,6 +739,9 @@ const generatorPreview = (() => {
       return;
     }
     autoPlacementBusy=true;button.disabled=true;
+    button.textContent='Идёт авторазмещение…';
+    progress.hidden=false;progressBar.value=0;
+    progressText.textContent='Подготовка авторазмещения…';
     const rotations=[],seen=new Set(),queue=[{matrix:modelRotation,turns:0}];
     let best=null,checked=0,firstError='';
     try {
@@ -748,6 +754,8 @@ const generatorPreview = (() => {
       }
       for(const item of rotations){
         checked++;
+        progressBar.max=rotations.length;progressBar.value=checked-1;
+        progressText.textContent='Проверяется поворот '+checked+' из '+rotations.length+'…';
         fit.className='note';
         fit.textContent='Проверка поворотов '+checked+'/'+rotations.length+
           ': рассчитываю полные траектории обеих кареток…';
@@ -765,6 +773,7 @@ const generatorPreview = (() => {
           if(!best||score<best.score)best={...result,score,turns:item.turns};
         }catch(e){if(!firstError)firstError=e.message;}
       }
+      progressBar.value=rotations.length;
       if(!best){
         fit.className='note crit';
         fit.textContent='Авторазмещение не найдено для заданной заготовки и ходов станка. '+
@@ -785,6 +794,8 @@ const generatorPreview = (() => {
       fit.textContent='Ошибка авторазмещения: '+e.message;
     }finally{
       autoPlacementBusy=false;button.disabled=!geometry;
+      button.textContent='Авторазмещение: поворот + сдвиг';
+      progress.hidden=true;
     }
   });
   // Evaluate the actual model at every 90-degree orientation around the
