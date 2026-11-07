@@ -587,11 +587,14 @@ test('F1-1 automatic positioning finds feasible shift on real STEP', {skip:!proc
  assert.ok(result.offset.every(value=>value%5===0));
  const grounded=gen.groundPlacement(step,'F1-1.stp',opts,result);
  assert.equal(grounded.offset[2],0);
- assert.equal(grounded.stock[2],opts.stock[2]+2*result.offset[2]);
+ assert.equal(grounded.stock[2],opts.stock[2]+result.offset[2]);
+ assert.equal(grounded.modelZOffset,result.offset[2]/2);
+ assert.equal(grounded.stock[2]/2-grounded.modelZOffset,opts.stock[2]/2);
+ const groundedResult=gen.buildProgram(step,'F1-1.stp',{...opts,...grounded});
  const originalCut=sim.parseGcode(result.program).moves.filter(move=>move.type==='G1');
- const groundedCut=sim.parseGcode(grounded.program).moves.filter(move=>move.type==='G1');
+ const groundedCut=sim.parseGcode(groundedResult.program).moves.filter(move=>move.type==='G1');
  assert.deepEqual(JSON.parse(JSON.stringify(groundedCut.map(move=>move.to))),JSON.parse(JSON.stringify(originalCut.map(move=>move.to))));
- const groundedProgram=sim.parseGcode(grounded.program);
+ const groundedProgram=sim.parseGcode(groundedResult.program);
  assert.equal(groundedProgram.stock.Z0,opts.bottomZ);
  assert.equal(groundedProgram.stock.OZ,0);
  assert.equal(groundedProgram.stock.H,grounded.stock[2]);
@@ -626,6 +629,11 @@ test('automatic placement rejects a stock setup without the vertical travel marg
    rotation:gen.identityRotation(),powerComp:false});
  assert.throws(()=>gen.autoPlace(fixture,'synthetic.stp',opts),
    /Не найдено смещение|фиксированный ход выходит за пределы станка/);
+});
+
+test('model height offset must fit the stock and unsupported pair modes are rejected',()=>{
+ assert.throws(()=>build(options({stock:[80,160,100],modelZOffset:100})),/не помещается по высоте/i);
+ assert.throws(()=>build(options({stock:[80,160,100],modelZOffset:5,pair:true})),/только для одиночной детали/i);
 });
 
 test('stock and model translate together inside machine envelope',()=>{

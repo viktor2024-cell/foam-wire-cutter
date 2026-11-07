@@ -138,7 +138,7 @@ const generatorPreview = (() => {
   const guideToScene = p => new THREE.Vector3(
     -p[1]-geometry.center[0]+modelOffset[0],
     p[0]-geometry.center[1]+modelOffset[1],
-    p[2]-geometry.center[2]+(n('gnZ')+n('gnH')/2)+modelOffset[2]
+    p[2]-geometry.center[2]+(n('gnZ')+n('gnH')/2)+modelOffset[2]+modelZOffset
   );
   function updateGuideMotion() {
     guideProgressText.textContent = guideProgress.value + '%';
@@ -593,7 +593,7 @@ const generatorPreview = (() => {
       catch(e) { fit.className='note crit';fit.textContent=e.message;aim();return; }
       const requiredZ=paired ? placement.minimumHeight : geometry.size[2];
       const stockFits=geometry.size[0]<=stock[0]+.001 &&
-        geometry.size[1]<=stock[1]+.001 && requiredZ<=stock[2]+.001;
+        geometry.size[1]<=stock[1]+.001 && requiredZ+2*Math.abs(modelZOffset)<=stock[2]+.001;
       const stockInMachine=stock[0]/2+Math.abs(modelOffset[0])<=machine.FieldWidth/2+.001 &&
         stock[1]/2+Math.abs(modelOffset[1])<=machine.HorizontalTravel/2+.001 &&
         bottom+modelOffset[2]>=0 &&
@@ -609,7 +609,7 @@ const generatorPreview = (() => {
       ] : [{sign:[1,1,1],z:bottom+stock[2]/2,color:0xe87722}];
       for (const copy of copies) {
         const vertices=[],lines=[];
-        const point=p=>p.map((v,k)=>copy.sign[k]*(v-geometry.center[k])+(k===2?copy.z:0)+modelOffset[k]);
+        const point=p=>p.map((v,k)=>copy.sign[k]*(v-geometry.center[k])+(k===2?copy.z+modelZOffset:0)+modelOffset[k]);
         for (const rail of geometry.rails) {
           for(let i=1;i<rail.length;i++) {
             const [a,b]=rail[i-1].map(point),[c,d]=rail[i].map(point);
@@ -628,7 +628,7 @@ const generatorPreview = (() => {
         // yet resolved. Show the real model edges behind selectable guides.
         const coords=[];
         for(const ends of geometry.edgeLines) for(const p of ends)
-          coords.push(...p.map((v,k)=>v-geometry.center[k]+(k===2?bottom+stock[2]/2:0)+modelOffset[k]));
+          coords.push(...p.map((v,k)=>v-geometry.center[k]+(k===2?bottom+stock[2]/2+modelZOffset:0)+modelOffset[k]));
         const boundary=new THREE.BufferGeometry();
         boundary.setAttribute('position',new THREE.Float32BufferAttribute(coords,3));
         group.add(new THREE.LineSegments(boundary,
@@ -637,7 +637,7 @@ const generatorPreview = (() => {
       if(geometry.auxiliaryCurves?.length) {
         for(const curve of geometry.auxiliaryCurves) {
           const points=curve.points.map(p=>[-p[1],p[0],p[2]]);
-          const coords=points.flatMap(p=>p.map((v,k)=>v-geometry.center[k]+(k===2?bottom+stock[2]/2:0)+modelOffset[k]));
+          const coords=points.flatMap(p=>p.map((v,k)=>v-geometry.center[k]+(k===2?bottom+stock[2]/2+modelZOffset:0)+modelOffset[k]));
           const path=new THREE.BufferGeometry();
           path.setAttribute('position',new THREE.Float32BufferAttribute(coords,3));
           const line = new THREE.Line(path,new THREE.LineBasicMaterial({
@@ -697,12 +697,12 @@ const generatorPreview = (() => {
     modelRotation=Gen.rotateModel(modelRotation,Number(button.dataset.axis),Number(button.dataset.turn)); load();
   });
   document.getElementById('gnResetRotation').addEventListener('click',()=>{modelRotation=Gen.identityRotation();load();});
-  const showOffset=()=>{document.getElementById('gnOffset').textContent=modelOffset.map((v,k)=>'XYZ'[k]+' '+(v>0?'+':'')+v).join(' · ')+' мм';};
+  const showOffset=()=>{document.getElementById('gnOffset').textContent=modelOffset.map((v,k)=>'XYZ'[k]+' '+(v>0?'+':'')+v).join(' · ')+' мм'+(modelZOffset?' · модель относительно центра Z '+(modelZOffset>0?'+':'')+modelZOffset+' мм':'');};
   document.getElementById('gnMove').addEventListener('click',e=>{
     const button=e.target.closest('button[data-axis]');if(!button||!stepFile)return;
     modelOffset[Number(button.dataset.axis)]+=5*Number(button.dataset.step);showOffset();invalidate();rebuild();
   });
-  document.getElementById('gnResetOffset').addEventListener('click',()=>{modelOffset=[0,0,0];showOffset();invalidate();rebuild();});
+  document.getElementById('gnResetOffset').addEventListener('click',()=>{modelOffset=[0,0,0];modelZOffset=0;showOffset();invalidate();rebuild();});
 
   // Full toolpath placement: analyse possible 90-degree orientations, solve
   // machine-axis displacement analytically, then run the normal postprocessor.
@@ -717,7 +717,7 @@ const generatorPreview = (() => {
     const progressBar=document.getElementById('gnPlacementProgressBar');
     const initialSignature=generatorSignature();
     const config={
-      rotation:modelRotation,scale:n('gnScale')/100,tolerance:n('gnTolerance'),
+      rotation:modelRotation,modelZOffset,scale:n('gnScale')/100,tolerance:n('gnTolerance'),
       stock:[n('gnL'),n('gnW'),n('gnH')],bottomZ:n('gnZ'),
       kerf:n('gnKerf'),feed:n('gnFeed'),minS:n('gnMinS'),maxS:n('gnMaxS'),
       clearance:n('gnClear'),retract:n('gnRetract'),leadMargin:n('gnLead'),
@@ -790,6 +790,7 @@ const generatorPreview = (() => {
       }
       modelRotation=best.rotation;
       modelOffset=best.offset.slice();
+      modelZOffset=best.modelZOffset;
       document.getElementById('gnH').value=best.stock[2];
       showOffset();
       load();
@@ -903,6 +904,7 @@ const generatorPreview = (() => {
     }
     const best=choices[0];
     modelRotation=best.rotation;
+    modelZOffset=0;showOffset();
     geometry=best.geometry;
     document.getElementById('gnL').value=best.length;
     document.getElementById('gnW').value=best.width;

@@ -1508,7 +1508,7 @@ function requireMachinableProgram() {
   return true;
 }
 function generatorSignature() {
-  return JSON.stringify([generatorMode, stepFile?.text, modelRotation, modelOffset, generatorPreview.getGuidePairs(),generatorPreview.getGuideStarts(), [...document.querySelectorAll('#panelGen input, #panelGen select')].map(e=>[e.id,e.type==='checkbox'?e.checked:e.value])]);
+  return JSON.stringify([generatorMode, stepFile?.text, modelRotation, modelOffset, modelZOffset, generatorPreview.getGuidePairs(),generatorPreview.getGuideStarts(), [...document.querySelectorAll('#panelGen input, #panelGen select')].map(e=>[e.id,e.type==='checkbox'?e.checked:e.value])]);
 }
 function requireCurrentProgram() {
   if (generationStamp !== null && generationStamp !== generatorSignature()) {
@@ -3705,6 +3705,12 @@ const Gen = (() => {
     const xs = [], zs = [], zsA = [], zsB = [];
     for (const [face] of outer) for (const [a, b] of sampleFace(face, face.t0, face.t1, 0.05, 5)) { xs.push(a[0], b[0]); zs.push(a[2], b[2]); zsA.push(a[2]); zsB.push(b[2]); }
     const part = { x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs), span: planeB - planeA };
+    const modelZOffset=o.modelZOffset===undefined?0:o.modelZOffset;
+    if(!Number.isFinite(modelZOffset))throw new StepError("Недопустимое положение модели по высоте");
+    if(Math.abs(modelZOffset)>1e-9 && (o.pair || o.mirror || model.wireframe || secondaryContours.length || holes.length))
+      throw new StepError("Размещение модели выше центра пока доступно только для одиночной детали без отверстий и дополнительных резов");
+    if(Math.abs(modelZOffset)+(part.z1-part.z0)/2>stockHeight/2+1e-6)
+      throw new StepError("Модель не помещается по высоте внутри заготовки");
     if (part.x1 - part.x0 > stockWidth || part.z1 - part.z0 > stockHeight || part.span > stockLength) {
       throw new Error("Деталь " + part.span.toFixed(1) + " x " + (part.x1 - part.x0).toFixed(1) + " x " + (part.z1 - part.z0).toFixed(1) +
         " не помещается в заготовку (размах × хорда × высота) " + stockLength.toFixed(1) + " x " + stockWidth.toFixed(1) + " x " + stockHeight.toFixed(1));
@@ -3728,7 +3734,7 @@ const Gen = (() => {
     const half = cfg.FieldWidth / 2;
     // - spanSign и chordSign меняют стороны размаха и хорды, zSign отражает по высоте, zMid - высота середины детали
     const makeLayout = (spanSign, chordSign, zSign, zMid) => ({
-      machine: (p) => [spanSign * (p[1] - yc) + offset[0], chordSign * (p[0] - xc) + offset[1], zSign * (p[2] - zc) + zMid + offset[2]],
+      machine: (p) => [spanSign * (p[1] - yc) + offset[0], chordSign * (p[0] - xc) + offset[1], zSign * (p[2] - zc) + zMid + offset[2] + modelZOffset],
       towers(a, b) {    // - положение концов проволоки на башнях для прямой через точки a и b
         const ma = this.machine(a), mb = this.machine(b);
         const at = (x) => { const s = (x - ma[0]) / (mb[0] - ma[0]); return [ma[1] + s * (mb[1] - ma[1]), ma[2] + s * (mb[2] - ma[2])]; };
@@ -3778,6 +3784,7 @@ const Gen = (() => {
     let program = "; FM_step2gcode: " + fileName + (o.pair ? " (pair: upper reflected over gap, turned 180)" : o.mirror ? " (mirror)" : "") + EOL;
     program += "; STEP TOLERANCE=" + model.tolerance.toFixed(3) + " mm; sampled upper estimate=" + model.maxCheckedDeviation.toFixed(3) + " mm" + EOL;
     program += "; STOCK+MODEL OFFSET X="+fmtG(offset[0])+" Y="+fmtG(offset[1])+" Z="+fmtG(offset[2])+" mm"+EOL;
+    program += "; MODEL Z OFFSET FROM STOCK CENTER="+fmtG(modelZOffset)+" mm"+EOL;
     program += "; CUT MODE=" + (o.pair ? "PAIR PIECES=2" : o.mirror ? "MIRROR PIECES=1" : "SINGLE PIECES=1") + EOL;
     program += "; TRIM B="+trimAngle+" ENABLED="+(hasTrim?1:0)+"; ORDER="+cutOrder+EOL;
     if(model.wireframe)program+="; STEP GEOMETRY=CURVES_ONLY; reconstructed ruled interpolation, original surfaces unavailable"+EOL;
@@ -3955,7 +3962,7 @@ const Gen = (() => {
     add([0,0,1],CONFIG.VerticalTravel-(bottom+H+clear));
     add([0,0,-1],bottom);
     if(o.grounded){
-      add([0,0,1],(CONFIG.VerticalTravel-bottom-H-clear)/2);
+      add([0,0,1],CONFIG.VerticalTravel-bottom-H-clear);
       add([0,0,-1],0);
     }
     // When the table actually rotates to B90, X and Y stock spans exchange.
@@ -3998,7 +4005,7 @@ const Gen = (() => {
     }
     xy.sort((first,second)=>first.distance-second.distance);
     for(const candidate of xy){
-      let minZ=o.grounded?0:-bottom,maxZ=o.grounded?(CONFIG.VerticalTravel-bottom-H-clear)/2:CONFIG.VerticalTravel-(bottom+H+clear),feasible=true;
+      let minZ=o.grounded?0:-bottom,maxZ=CONFIG.VerticalTravel-(bottom+H+clear),feasible=true;
       for(const {a,b} of constraints){
         const remaining=b-a[0]*candidate.x-a[1]*candidate.y;
         if(Math.abs(a[2])<1e-12){
@@ -4027,11 +4034,13 @@ const Gen = (() => {
   function groundPlacement(text,fileName,o,placement) {
     const lift=placement.offset[2];
     if(lift < 0) throw new StepError("Для установки заготовки на стол требуется другое размещение без отрицательного подъёма");
-    const stock=[o.stock[0],o.stock[1],o.stock[2]+2*lift];
+    const stock=[o.stock[0],o.stock[1],o.stock[2]+lift];
     const offset=[placement.offset[0],placement.offset[1],0];
-    const result=buildProgram(text,fileName,{...o,stock,offset});
-    return {...placement,stock,offset,lift,program:result.program,points:result.points,
-      warnings:result.warnings,geometry:result.part};
+    const modelZOffset=(o.modelZOffset||0)+lift/2;
+    if(!Number.isFinite(modelZOffset)||!Number.isFinite(stock[2])||o.bottomZ<0||
+       o.bottomZ+stock[2]+(o.sideEntry?0:o.clearance)>CONFIG.VerticalTravel)
+      throw new StepError("Скорректированная заготовка выходит за пределы станка");
+    return {stock,offset,modelZOffset,lift,rotation:placement.rotation,displacement:placement.displacement};
   }
   // Preliminary F4 two-carriage motion from explicitly assigned guide pairs.
   // Coordinates are machine-frame candidates, NOT verified cutting moves.
@@ -4614,6 +4623,7 @@ const Gen = (() => {
 // ---------------------------------------------------------------------------------------------
 let modelRotation = Gen.identityRotation();
 let modelOffset = [0,0,0];
+let modelZOffset = 0;
 let stepFile = null;        // - открытый STEP: { name, text }
 let generatorMode = "auto";
 function showGeneratorMode(mode) {
@@ -4638,7 +4648,7 @@ function openStep(file, handle = null) {
   const rd = new FileReader();
   rd.onload = () => {
     stepFile = { name: file.name, text: String(rd.result), handle };
-    modelRotation = Gen.identityRotation(); modelOffset = [0,0,0]; $("gnOffset").textContent="X 0 · Y 0 · Z 0 мм"; $("gnScale").value = 100; $("gnTolerance").value = "0.1";
+    modelRotation = Gen.identityRotation(); modelOffset = [0,0,0]; modelZOffset = 0; $("gnOffset").textContent="X 0 · Y 0 · Z 0 мм"; $("gnScale").value = 100; $("gnTolerance").value = "0.1";
     $("gnFile").textContent = file.name;
     // Preliminary validated F2 setup. The 250 mm vertical travel allows
     // only 10 mm overhead above a 240 mm high blank with bottom at Z=0.
@@ -4669,13 +4679,14 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
   const config = {
       manualGuidePairs: generatorMode === "manual" ? generatorPreview.getGuidePairs() : [],
       guideStarts: generatorPreview.getGuideStarts(),
-      rotation: modelRotation, offset: [...modelOffset], scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
+      rotation: modelRotation, offset: [...modelOffset], modelZOffset, scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
       clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked,
       trimAngle:n("gnTrimAngle"), cutOrder:$("gnCutOrder").value, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair"
   };
   try {
     if (generatorMode === "manual") {
+      if(modelZOffset!==0)throw new Error("Для ручных направляющих сначала нажмите «По центру».");
       if (!config.manualGuidePairs.length || !generatorPreview.hasAuxiliaryCurves()) throw new Error("Выберите и подтвердите пары направляющих в 3D.");
       const result=Gen.buildF4Program(stepFile.text,config.manualGuidePairs,config);
       const outName=stepFile.name.replace(/\.(stp|step)$/i,"")+"_F4_auto.gcode";
