@@ -100,6 +100,9 @@ test('kil2 retains diagnostic STEP edges when safe generation is not established
  assert.equal(preview.diagnosticOnly,true);
  assert.ok(preview.edgeLines.length>0);
  assert.equal(preview.diagnosticFaces.length,10);
+ assert.ok(preview.diagnosticFaces[1].patch,'curved rudder uses a surface patch');
+ const patch=preview.diagnosticFaces[1].patch;
+ assert.equal(patch.length,33);assert.ok(patch.every(row=>row.length===33));
  assert.ok(preview.size[1]>280);
  const three=require('../lib/three.min.js');
  for(const boundary of preview.diagnosticFaces){

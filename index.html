@@ -2101,16 +2101,37 @@ const Gen = (() => {
       if(raw.args[1].length!==1||model.get(raw.args[1][0]).name!=='FACE_OUTER_BOUND')continue;
       const todo=face.edgeIds.map(id=>edgePoints(id));
       if(todo.some(x=>!x)||todo.length<3)continue;
-      let path=todo.shift().slice(),guard=0;
+      const segments=[todo.shift().slice()];
+      let path=segments[0].slice(),guard=0;
       while(todo.length&&guard++<face.edgeIds.length){
         const end=path.at(-1), ranked=todo.map((p,i)=>({i,d:Math.min(dist(end,p[0]),dist(end,p.at(-1)))})).sort((a,b)=>a.d-b.d);
         if(!ranked.length||ranked[0].d>.02)break;
         const i=ranked[0].i;
         let next=todo.splice(i,1)[0];if(dist(end,next.at(-1))<dist(end,next[0]))next=next.slice().reverse();
-        path.push(...next.slice(1));
+        segments.push(next);path.push(...next.slice(1));
       }
       if(todo.length||dist(path[0],path.at(-1))>.02)continue;
-      path.pop();boundaries.push(path.map(p=>[-p[1],p[0],p[2]]));
+      path.pop();
+      const boundary=path.map(p=>[-p[1],p[0],p[2]]);
+      if(segments.length===4){
+        // Coons interpolation follows all four sampled STEP boundaries and
+        // preserves their curvature, unlike a flat projected polygon.
+        const [c0,d1,c1back,d0back]=segments,c1=c1back.slice().reverse(),d0=d0back.slice().reverse();
+        const p00=c0[0],p10=c0.at(-1),p11=c1.at(-1),p01=c1[0],grid=[];
+        for(let j=0;j<=32;j++){
+          const v=j/32,row=[];
+          for(let i=0;i<=32;i++){
+            const u=i/32,k=i*2,l=j*2;
+            row.push(p00.map((_,a)=>{
+              const bilinear=(1-u)*(1-v)*p00[a]+u*(1-v)*p10[a]+u*v*p11[a]+(1-u)*v*p01[a];
+              return (1-v)*c0[k][a]+v*c1[k][a]+(1-u)*d0[l][a]+u*d1[l][a]-bilinear;
+            }).map(p=>p));
+          }
+          grid.push(row.map(p=>[-p[1],p[0],p[2]]));
+        }
+        boundary.patch=grid;
+      }
+      boundaries.push(boundary);
     }
     return boundaries;
   }

@@ -632,6 +632,15 @@ const generatorPreview = (() => {
         // faces; it must not be interpreted as a machining surface.
         for(const face of geometry.diagnosticFaces||[]){
           const boundary=face.map(point),normal=[0,0,0];
+          if(face.patch){
+            const grid=face.patch.map(row=>row.map(point));
+            for(let j=1;j<grid.length;j++)for(let i=1;i<grid[j].length;i++){
+              const a=grid[j-1][i-1],b=grid[j-1][i],c=grid[j][i-1],d=grid[j][i];
+              vertices.push(...a,...b,...c,...b,...d,...c);
+            }
+            for(let i=0;i<boundary.length;i++)lines.push(...boundary[i],...boundary[(i+1)%boundary.length]);
+            continue;
+          }
           for(let i=0;i<boundary.length;i++){
             const a=boundary[i],b=boundary[(i+1)%boundary.length];
             normal[0]+=(a[1]-b[1])*(a[2]+b[2]);
