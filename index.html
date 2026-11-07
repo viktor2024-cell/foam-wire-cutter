@@ -241,17 +241,6 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       <label>Высота<input id="gnH" type="number" step="0.01" value="50"></label>
       <label>Низ Z<input id="gnZ" type="number" step="1" value="10"></label>
     </div>
-    <label class="check gn-auto"><input type="checkbox" id="gnSideEntry"> Вход и выход справа без подъёма над заготовкой (одна деталь, без отверстий и торцевания)</label>
-    <label class="check"><input type="checkbox" id="gnTrim" checked> Торцевать заготовку</label>
-    <div class="fields">
-      <label>Угол торцевания
-        <select id="gnTrimAngle"><option value="90" selected>B90 — по длине</option><option value="0">B0 — по ширине</option></select>
-      </label>
-      <label>Порядок основных резов
-        <select id="gnCutOrder"><option value="B0_B90">Сначала B0, затем B90</option><option value="B90_B0" selected>Сначала B90, затем B0</option></select>
-      </label>
-    </div>
-    <div class="note" id="gnOrderExplanation">При двух направлениях порядок относится к главным контурам; технологические отверстия и входы проверяются отдельно.</div>
     <div class="note">Размеры заданы при столе 0°. Для листа 340×230×50 мм на ребре введите 50, 340, 230 мм соответственно. При отключении торцевания профиль режется при столе 0°.</div>
   </section>
   <section class="box">
@@ -276,6 +265,17 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
   </section>
   <section class="box gn-result">
     <h2>G-code</h2>
+    <label class="check gn-auto"><input type="checkbox" id="gnSideEntry"> Вход и выход справа без подъёма над заготовкой (одна деталь, без отверстий и торцевания)</label>
+    <label class="check"><input type="checkbox" id="gnTrim" checked> Торцевать заготовку</label>
+    <div class="fields">
+      <label>Угол торцевания
+        <select id="gnTrimAngle"><option value="90" selected>B90 — по длине</option><option value="0">B0 — по ширине</option></select>
+      </label>
+      <label>Порядок основных резов
+        <select id="gnCutOrder"><option value="B0_B90">Сначала B0, затем B90</option><option value="B90_B0" selected>Сначала B90, затем B0</option></select>
+      </label>
+    </div>
+    <div class="note" id="gnOrderExplanation">При двух направлениях порядок относится к главным контурам; технологические отверстия и входы проверяются отдельно.</div>
     <div class="row">
       <button id="gnGo" class="primary" disabled>Создать G-code</button>
       <button id="gnMirror" class="gn-auto" disabled>Зеркало</button>
