@@ -154,9 +154,9 @@ test('external W1: no false transverse operation from STEP end caps',{skip:!proc
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
  assert.doesNotMatch(r.program,/SECONDARY CUT/);
 });
-test('auto stock takes standard sheet thickness along wire, not vertical Z',()=>{
+test('auto stock takes standard sheet thickness along wire, not vertical Z',async()=>{
  const source=fs.readFileSync(path.join(__dirname,'../generator-view.js'),'utf8');
- const begin=source.indexOf('  function autoStockOptions()');
+ const begin=source.indexOf('  async function autoStockOptions(');
  const end=source.indexOf("  document.getElementById('gnStockFromModel').addEventListener",begin);
  assert.ok(begin>0&&end>begin);
  const text=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-profile.stp'),'utf8');
@@ -164,11 +164,11 @@ test('auto stock takes standard sheet thickness along wire, not vertical Z',()=>
   Gen:gen,stepFile:{text},modelRotation:gen.identityRotation(),modelOffset:[0,0,0],
   geometry:gen.previewGeometry(text),machine:gen.CONFIG,
   document:{getElementById:()=>({checked:false})},
-  n:id=>({gnScale:100,gnKerf:1,gnZ:10,gnClear:20,gnLead:5,gnTolerance:.6})[id]
+  n:id=>({gnScale:100,gnKerf:1,gnZ:10,gnClear:20,gnLead:5,gnTolerance:.6})[id],setTimeout
  };
  const seenTolerances=[];
  state.Gen={...gen,previewGeometry:(...args)=>{seenTolerances.push(args[3]);return gen.previewGeometry(...args)}};
- const options=vm.runInNewContext(source.slice(begin,end)+';autoStockOptions()',state);
+ const options=await vm.runInNewContext(source.slice(begin,end)+';autoStockOptions()',state);
  assert.ok(seenTolerances.length>0 && seenTolerances.every(v=>v===.6),'candidate orientations use selected STEP tolerance');
  assert.ok(options.length);
  const best=options[0];
@@ -582,9 +582,23 @@ test('F1-1 automatic positioning finds feasible shift on real STEP', {skip:!proc
    rotation:gen.rotateModel(gen.identityRotation(),2,1)});
  assert.throws(()=>gen.buildProgram(step,'F1-1.stp',{...opts,offset:[0,0,0]}),
    /Перемещение выходит за ход кареток/);
- const result=gen.autoPlace(step,'F1-1.stp',opts);
+ const result=gen.autoPlace(step,'F1-1.stp',{...opts,grounded:true});
  assert.ok(Math.hypot(...result.offset)>0);
  assert.ok(result.offset.every(value=>value%5===0));
+ const grounded=gen.groundPlacement(step,'F1-1.stp',opts,result);
+ assert.equal(grounded.offset[2],0);
+ assert.equal(grounded.stock[2],opts.stock[2]+2*result.offset[2]);
+ const originalCut=sim.parseGcode(result.program).moves.filter(move=>move.type==='G1');
+ const groundedCut=sim.parseGcode(grounded.program).moves.filter(move=>move.type==='G1');
+ assert.deepEqual(JSON.parse(JSON.stringify(groundedCut.map(move=>move.to))),JSON.parse(JSON.stringify(originalCut.map(move=>move.to))));
+ const groundedProgram=sim.parseGcode(grounded.program);
+ assert.equal(groundedProgram.stock.Z0,opts.bottomZ);
+ assert.equal(groundedProgram.stock.OZ,0);
+ assert.equal(groundedProgram.stock.H,grounded.stock[2]);
+ const groundedCheck=sim.analyse(groundedProgram,{...groundedProgram.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(groundedCheck.warns.filter(w=>w.level==='crit').length,0);
+ assert.throws(()=>gen.groundPlacement(step,'F1-1.stp',opts,{...result,offset:[0,0,-5]}),/отрицательного подъёма/);
+ assert.throws(()=>gen.groundPlacement(step,'F1-1.stp',opts,{...result,offset:[0,0,100]}),/пределы станка|хода каретки|высота/i);
  const smooth=gen.buildProgram(step,'F1-1.stp',{...opts,offset:result.offset}).smoothSurface;
  assert.ok(smooth && smooth.towers.length>2);
  assert.equal(smooth.x0,result.offset[0]-opts.stock[0]/2);

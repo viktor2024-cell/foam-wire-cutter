@@ -128,8 +128,8 @@ pre.code .ln { color: var(--muted); display: inline-block; min-width: 4.5ch; }
 #gnView { height: 420px; min-height: 260px; position: relative; border-radius: 8px; overflow: hidden; background: var(--view); }
 #gnView .gn-file { position: absolute; top: 8px; left: 8px; z-index: 2; max-width: calc(100% - 16px); padding: 5px; border-radius: 6px; background: var(--panel); }
 #gnView canvas { display: block; width: 100%; height: 100%; }
-#gnPlacementProgress { margin-top: 6px; }
-#gnPlacementProgress progress { width: 100%; accent-color: var(--wire); }
+#gnPlacementProgress, #gnStockProgress { margin-top: 6px; }
+#gnPlacementProgress progress, #gnStockProgress progress { width: 100%; accent-color: var(--wire); }
 .fields select { width: 100%; padding: 4px 6px; font-family: var(--font-num); font-size: 13px; }
 @media (max-width: 860px) { #panelGen { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 700px) { #gnRotate > span:first-child, #gnMove > span:first-child { flex-basis: 100%; } }
@@ -242,6 +242,10 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
   <section class="box">
     <h2>Заготовка</h2>
     <div class="row gn-auto"><button id="gnStockFromModel" disabled>По модели +10 мм с каждой стороны</button><button id="gnAutoPlace" type="button" disabled>Авторазмещение: поворот + сдвиг</button></div>
+    <div id="gnStockProgress" class="gn-auto" hidden role="status" aria-live="polite">
+      <div id="gnStockProgressText">Подготовка расчёта заготовки…</div>
+      <progress id="gnStockProgressBar" max="24" value="0" aria-label="Проверено вариантов заготовки"></progress>
+    </div>
     <div id="gnPlacementProgress" class="gn-auto" hidden role="status" aria-live="polite">
       <div id="gnPlacementProgressText">Подготовка авторазмещения…</div>
       <progress id="gnPlacementProgressBar" max="24" value="0" aria-label="Проверено вариантов поворота"></progress>
@@ -3950,6 +3954,10 @@ const Gen = (() => {
     add([0,1,0],yLimit); add([0,-1,0],yLimit);
     add([0,0,1],CONFIG.VerticalTravel-(bottom+H+clear));
     add([0,0,-1],bottom);
+    if(o.grounded){
+      add([0,0,1],(CONFIG.VerticalTravel-bottom-H-clear)/2);
+      add([0,0,-1],0);
+    }
     // When the table actually rotates to B90, X and Y stock spans exchange.
     if(o.trim!==false&&Number(o.trimAngle)===90){
       const xr=CONFIG.HorizontalTravel/2-L/2;
@@ -3990,7 +3998,7 @@ const Gen = (() => {
     }
     xy.sort((first,second)=>first.distance-second.distance);
     for(const candidate of xy){
-      let minZ=-bottom,maxZ=CONFIG.VerticalTravel-(bottom+H+clear),feasible=true;
+      let minZ=o.grounded?0:-bottom,maxZ=o.grounded?(CONFIG.VerticalTravel-bottom-H-clear)/2:CONFIG.VerticalTravel-(bottom+H+clear),feasible=true;
       for(const {a,b} of constraints){
         const remaining=b-a[0]*candidate.x-a[1]*candidate.y;
         if(Math.abs(a[2])<1e-12){
@@ -4015,6 +4023,15 @@ const Gen = (() => {
       }
     }
     throw new StepError("Не найдено допустимое смещение с шагом 5 мм и запасом хода по Z");
+  }
+  function groundPlacement(text,fileName,o,placement) {
+    const lift=placement.offset[2];
+    if(lift < 0) throw new StepError("Для установки заготовки на стол требуется другое размещение без отрицательного подъёма");
+    const stock=[o.stock[0],o.stock[1],o.stock[2]+2*lift];
+    const offset=[placement.offset[0],placement.offset[1],0];
+    const result=buildProgram(text,fileName,{...o,stock,offset});
+    return {...placement,stock,offset,lift,program:result.program,points:result.points,
+      warnings:result.warnings,geometry:result.part};
   }
   // Preliminary F4 two-carriage motion from explicitly assigned guide pairs.
   // Coordinates are machine-frame candidates, NOT verified cutting moves.
@@ -4589,7 +4606,7 @@ const Gen = (() => {
       warnings:['F4 review only: machine output, copy and export disabled',
         'Start and exit cutting leads, kerf side, safe B rotation and preserved STEP solid are NOT validated']};
   }
-  return { buildProgram, autoPlace, buildF4Program, buildF4VisualPreview, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, resolveGuideStart, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
+  return { buildProgram, autoPlace, groundPlacement, buildF4Program, buildF4VisualPreview, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, resolveGuideStart, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
 })();
 
 // ---------------------------------------------------------------------------------------------

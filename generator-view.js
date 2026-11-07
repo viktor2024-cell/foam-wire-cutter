@@ -715,6 +715,7 @@ const generatorPreview = (() => {
     const progress=document.getElementById('gnPlacementProgress');
     const progressText=document.getElementById('gnPlacementProgressText');
     const progressBar=document.getElementById('gnPlacementProgressBar');
+    const initialSignature=generatorSignature();
     const config={
       rotation:modelRotation,scale:n('gnScale')/100,tolerance:n('gnTolerance'),
       stock:[n('gnL'),n('gnW'),n('gnH')],bottomZ:n('gnZ'),
@@ -766,7 +767,9 @@ const generatorPreview = (() => {
           if(g.axis!==1||g.secondaryCount||g.wireframe||
              g.size[0]>config.stock[0]+.001||g.size[1]>config.stock[1]+.001||
              g.size[2]>config.stock[2]+.001) continue;
-          const result=Gen.autoPlace(stepFile.text,stepFile.name,{...config,rotation:item.matrix});
+          const options={...config,rotation:item.matrix,grounded:true};
+          const result=Gen.groundPlacement(stepFile.text,stepFile.name,options,
+            Gen.autoPlace(stepFile.text,stepFile.name,options));
           // Prefer a small translation; a quarter turn costs a little to
           // retain the operator's chosen orientation when both are valid.
           const score=result.displacement+Math.min(item.turns,6)*2;
@@ -774,6 +777,11 @@ const generatorPreview = (() => {
         }catch(e){if(!firstError)firstError=e.message;}
       }
       progressBar.value=rotations.length;
+      if(initialSignature!==generatorSignature()){
+        fit.className='note crit';
+        fit.textContent='Параметры изменились во время расчёта. Запустите авторазмещение заново.';
+        return;
+      }
       if(!best){
         fit.className='note crit';
         fit.textContent='Авторазмещение не найдено для заданной заготовки и ходов станка. '+
@@ -782,12 +790,13 @@ const generatorPreview = (() => {
       }
       modelRotation=best.rotation;
       modelOffset=best.offset.slice();
+      document.getElementById('gnH').value=best.stock[2];
       showOffset();
       load();
       fit.className='note';
       fit.textContent+=' Авторазмещение: X='+best.offset[0].toFixed(2)+
         ', Y='+best.offset[1].toFixed(2)+', Z='+best.offset[2].toFixed(2)+
-        ' мм; поворотов от исходного положения: '+best.turns+
+        ' мм; модель поднята на '+best.lift.toFixed(2)+' мм внутри заготовки, высота заготовки '+best.stock[2].toFixed(2)+' мм; поворотов от исходного положения: '+best.turns+
         '. Шаг смещения: 5 мм; запас хода кареток по Z: не менее 5 мм. Траектория проверена обычным генератором. Проверяйте G-code в РЕЗКЕ.';
     }catch(e){
       fit.className='note crit';
@@ -803,7 +812,7 @@ const generatorPreview = (() => {
   // thickness first (20/50/100 if possible), then the smallest footprint.
   // A model that cannot fit any standard sheet gets a custom blank, subject
   // to the machine envelope and safe clearance.
-  function autoStockOptions() {
+  async function autoStockOptions(onProgress = ()=>{}) {
     if (!stepFile) return [];
     const scale=n('gnScale')/100, paired=document.getElementById('gnStockPair').checked;
     const kerf=n('gnKerf'), bottom=n('gnZ'), clearance=n('gnClear');
@@ -824,6 +833,8 @@ const generatorPreview = (() => {
       if(rotations.length>=24)break;
     }
     for(let turn=0;turn<rotations.length;turn++){
+      onProgress(turn,rotations.length);
+      await new Promise(resolve=>setTimeout(resolve,0));
       const rotation=rotations[turn].matrix;
       try{
         const g=turn===0&&geometry ? geometry : Gen.previewGeometry(stepFile.text,rotation,scale,n('gnTolerance'));
@@ -853,10 +864,37 @@ const generatorPreview = (() => {
     results.sort((a,b)=>a.length-b.length||a.turn-b.turn||a.area-b.area||a.height-b.height);
     return results;
   }
-  document.getElementById('gnStockFromModel').addEventListener('click',()=>{
-    load(); // refresh orientation, model scale and geometry
-    if(!geometry)return;
-    const choices=autoStockOptions();
+  document.getElementById('gnStockFromModel').addEventListener('click',async()=>{
+    const button=document.getElementById('gnStockFromModel');
+    const progress=document.getElementById('gnStockProgress');
+    const progressText=document.getElementById('gnStockProgressText');
+    const progressBar=document.getElementById('gnStockProgressBar');
+    const initialSignature=generatorSignature();
+    button.disabled=true;button.textContent='Расчёт заготовки…';progress.hidden=false;
+    progressBar.removeAttribute('value');progressText.textContent='Подготовка расчёта заготовки…';
+    let choices;
+    try {
+      await new Promise(resolve=>setTimeout(resolve,0));
+      if(initialSignature!==generatorSignature())throw new Error('Параметры изменились. Запустите подбор заготовки заново.');
+      load();
+      if(!geometry)return;
+      choices=await autoStockOptions((done,total)=>{
+        progressBar.max=total;progressBar.value=done;
+        progressText.textContent='Проверяется положение '+(done+1)+' из '+total+'…';
+      });
+    } catch(error) {
+      const fit=document.getElementById('gnFit');fit.className='note crit';
+      fit.textContent='Не удалось подобрать заготовку: '+error.message;
+      return;
+    } finally {
+      progress.hidden=true;button.disabled=!geometry;
+      button.textContent='По модели +10 мм с каждой стороны';
+    }
+    if(initialSignature!==generatorSignature()){
+      const fit=document.getElementById('gnFit');fit.className='note crit';
+      fit.textContent='Параметры изменились во время расчёта. Запустите подбор заготовки заново.';
+      return;
+    }
     if(!choices.length){
       const fit=document.getElementById('gnFit');
       fit.className='note crit';
