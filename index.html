@@ -1391,7 +1391,7 @@ $("resultPreview").addEventListener("change", async () => {
     if(version!==resultVersion || !$("resultPreview").checked)return;
     resultGroup=makeResultMeshes(result);scene.add(resultGroup);machineGroup.visible=false;$("cutLegend").hidden=true;
     $("resultAll").hidden=false;
-    $("resultStatus").textContent="Приближённо, ячейка "+result.cell.map(value=>value.toFixed(1)).join(' × ')+" мм; кусков: "+result.components.length+". Щёлкните нужный кусок. Остаток может включать отходы.";
+    $("resultStatus").textContent="Приближённо, ячейка "+result.cell.map(value=>value.toFixed(1)).join(' × ')+" мм; кусков: "+result.components.length+". Щёлкните ненужный кусок, чтобы скрыть его. Остаток может включать отходы.";
   } catch(error) {
     if(version!==resultVersion)return;
     clearResultPreview();$("resultStatus").textContent="Не удалось рассчитать остаток: "+error.message;
@@ -1407,7 +1407,7 @@ renderer.domElement.addEventListener("pointerup",event=>{
   const pointer=new THREE.Vector2((event.clientX-rect.left)/rect.width*2-1,1-(event.clientY-rect.top)/rect.height*2);
   const ray=new THREE.Raycaster();ray.setFromCamera(pointer,camera);
   const hit=ray.intersectObjects(resultGroup.children.filter(mesh=>mesh.visible))[0];
-  if(hit)for(const mesh of resultGroup.children)mesh.visible=mesh===hit.object;
+  if(hit)hit.object.visible=false;
 });
 function buildScene(s) {
   if (machineGroup) scene.remove(machineGroup);
