@@ -2125,7 +2125,9 @@ const Gen = (() => {
     if (!points.length) throw new StepError("В STEP нет геометрии для предпросмотра");
     const low=[0,1,2].map(k=>Math.min(...points.map(p=>p[k])));
     const high=[0,1,2].map(k=>Math.max(...points.map(p=>p[k])));
-    return {rails,edgeLines,diagnosticShell,previewError,diagnosticOnly:!!previewError,
+    const closedShell=built&&outer.length===1&&outer[0][0].closed&&!holes.length
+      ? {rail:rails[0],capAxis:axis===0?1:axis===1?0:2} : null;
+    return {rails,edgeLines,diagnosticShell,closedShell,previewError,diagnosticOnly:!!previewError,
       axis, sampled, wireframe:!!wireframe, auxiliaryCurves, guideAnalysis,
       guideKinematics, secondaryCount:secondaryContours.length,
       center:low.map((v,k)=>(v+high[k])/2),
@@ -2567,8 +2569,59 @@ const Gen = (() => {
       const closed=dist(A(tDom[0]),A(tDom[1]))<.02&&dist(B(tDom[0]),B(tDom[1]))<.02;
       return {A,B,t0:tDom[0],t1:tDom[1],closed,dir,source:raw.fid};
     }
+    // A three-face solid can have ONE closed exterior skin. Its seam vertices
+    // alone cannot identify the span or distinguish the skin from a bore.
+    closedExterior() {
+      if(this.facesRaw.length!==3)return null;
+      const sides=this.facesRaw.filter(f=>f.edgeIds.length===4&&new Set(f.edgeIds).size===3);
+      if(sides.length!==1)return null;
+      const side=sides[0],caps=this.facesRaw.filter(f=>f!==side);
+      if(!caps.every(f=>f.edgeIds.length===1))return null;
+      const capIds=caps.map(f=>f.edgeIds[0]);
+      if(new Set(capIds).size!==2||!capIds.every(id=>side.edgeIds.filter(e=>e===id).length===1&&dist(...this.edges.get(id))<1e-6))return null;
+      const seam=side.edgeIds.filter(id=>!capIds.includes(id));
+      if(seam.length!==2||seam[0]!==seam[1])return null;
+      // Require a real solid shell and outer bounds, not two internal loops.
+      const solid=[...this.entities.values()].some(e=>isTyped(e)&&e.name==='MANIFOLD_SOLID_BREP'&&(()=>{
+        const shell=this.get(e.args[1]);
+        return shell?.name==='CLOSED_SHELL'&&shell.args[1].length===3&&shell.args[1].every(r=>this.facesRaw.some(f=>f.fid===r.id));
+      })());
+      if(!solid||!this.facesRaw.every(f=>this.entities.get(f.fid).args[1].every(r=>this.get(r).name==='FACE_OUTER_BOUND')))return null;
+      const surf=this.surface(side.surf);
+      // Two controls across the span prove straight generators. Do not accept
+      // piecewise-linear spans or rational weights that alter correspondence.
+      if(surf.pv!==1||surf.nv!==1||surf.V.length!==4||surf.w.some(row=>row.some(w=>Math.abs(w-1)>1e-12)))return null;
+      const ends=[0,1].map(k=>surf.P.map(row=>row[k]));
+      const axis=[0,1,2].find(k=>ends.every(points=>points.every(p=>Math.abs(p[k]-points[0][k])<1e-6))&&Math.abs(ends[0][0][k]-ends[1][0][k])>1);
+      const upMachine=this.rotation.map(row=>row[2]),upRaw=[upMachine[1],-upMachine[0],upMachine[2]];
+      if(axis===undefined||Math.abs(upRaw[axis])>.999)return null;
+      // Check complete spline definitions, not a sampled visual resemblance.
+      const matches=(points,id)=>{
+        const curve=this.get(this.entities.get(id).args[3]);
+        if(curve?.name!=='B_SPLINE_CURVE_WITH_KNOTS'||curve.args[1]!==surf.pu||curve.args[2].length!==points.length)return false;
+        const knots=expandKnots(curve.args[7],curve.args[6]);
+        return knots.length===surf.U.length&&knots.every((v,i)=>Math.abs(v-surf.U[i])<1e-12)&&curve.args[2].every((r,i)=>dist(this.point(r),points[i])<1e-6);
+      };
+      const order=ends.map(points=>capIds.findIndex(id=>matches(points,id)));
+      if(order.some(i=>i<0)||order[0]===order[1])return null;
+      for(let k=0;k<2;k++){
+        const cap=this.surface(caps[order[k]].surf),plane=ends[k][0][axis];
+        if(cap.P.some(row=>row.some(p=>Math.abs(p[axis]-plane)>1e-6)))return null;
+        if(dist(ends[k][0],ends[k].at(-1))>1e-6)return null;
+      }
+      const seamEnds=this.edges.get(seam[0]);
+      if(![seamEnds,seamEnds.slice().reverse()].some(pair=>pair.every((p,k)=>dist(p,ends[k][0])<1e-6)))return null;
+      const low=ends[0][0][axis]<ends[1][0][axis]?0:1;
+      const A=t=>surf.at(t,surf.vdomain[low]),B=t=>surf.at(t,surf.vdomain[1-low]);
+      // Retain every spline knot as a mandatory sampling stop.
+      const breaks=[...new Set(surf.U)].filter(t=>t>=surf.udomain[0]&&t<=surf.udomain[1]);
+      const face={A,B,t0:surf.udomain[0],t1:surf.udomain[1],closed:true,skew:0,breaks,source:side.fid};
+      return {outer:[[face,true]],holes:[],secondaryContours:[],axis,planeA:ends[low][0][axis],planeB:ends[1-low][0][axis]};
+    }
     build() {
       if(this.wireframe)return new WireframeModel(this).build();
+      const exterior=this.closedExterior();
+      if(exterior)return exterior;
       const [axis, planeA, planeB] = this.spanAxis();
       const outer = [], holes = [], handled = new Set();
       for (const raw of this.facesRaw) {
@@ -3616,7 +3669,36 @@ const Gen = (() => {
     return [g, towers];
   }
   function profileBlock(safe, prog, contour, layout, axis, kerf, notes, side, stockWidth, margin, sag, maxStep, sideEntry = false, stockCenter = 0) {
-    const segments = prepareContour(contour.map(([f, fw]) => faceSegment(f, fw)), axis, kerf, true, notes);
+    let segments = prepareContour(contour.map(([f, fw]) => faceSegment(f, fw)), axis, kerf, true, notes);
+    const smoothExterior=contour.length===1&&contour[0][0].closed;
+    if(smoothExterior){
+      // A smooth exterior has no corner: its exported seam may be anywhere.
+      // Enter at the extreme on the requested side, preserving both rails.
+      const score=(seg,u)=>side*(layout.machine(seg.A(u))[1]+layout.machine(seg.B(u))[1])/2;
+      let best={k:0,u:0,value:-Infinity};
+      segments.forEach((seg,k)=>{for(let i=0;i<=1024;i++){
+        const u=i/1024,value=score(seg,u);
+        if(value>best.value)best={k,u,value};
+      }});
+      let lo=Math.max(0,best.u-1/1024),hi=Math.min(1,best.u+1/1024);
+      for(let i=0;i<40;i++){
+        const a=lo+(hi-lo)/3,b=hi-(hi-lo)/3;
+        if(score(segments[best.k],a)<score(segments[best.k],b))lo=a;else hi=b;
+      }
+      segments=startSequence(segments,best.k,(lo+hi)/2);
+      // Reject an entry that crosses the retained profile before reaching it.
+      const ring=sampleSequence(segments,sag,maxStep),entry=ring[0];
+      for(const f of [0,.25,.5,.75,1]){
+        const section=pair=>layout.machine(pair[0].map((v,k)=>v+f*(pair[1][k]-v)));
+        const start=section(entry);
+        for(let i=1;i<ring.length;i++){
+          const a=section(ring[i-1]),b=section(ring[i]);
+          if((a[2]>start[2])===(b[2]>start[2]))continue;
+          const x=a[1]+(b[1]-a[1])*(start[2]-a[2])/(b[2]-a[2]);
+          if(side*(x-start[1])>.02)throw new StepError("Вход в замкнутую оболочку пересекает деталь; выберите другую сторону входа");
+        }
+      }
+    }
     // Enter at a contour corner on the entry side, rather than the midpoint of a face.
     // Choose traversal so the upper branch is cut before the lower branch.
     const height = p => layout.machine(p)[2];
@@ -3632,8 +3714,8 @@ const Gen = (() => {
     // after compensation; treat them as a shared side of the profile.
     const sideCorners=corners.filter(c=>bestY-c.y<=Math.max(1,2*kerf));
     sideCorners.sort((a,b)=>b.z-a.z);
-    const hasUpperCorner=sideCorners.length>1 && sideCorners[0].z-sideCorners.at(-1).z>Math.max(1,2*kerf);
-    const start=hasUpperCorner?sideCorners[0].k:corners.reduce((best,c)=>c.y>best.y?c:best).k;
+    const hasUpperCorner=!smoothExterior&&sideCorners.length>1 && sideCorners[0].z-sideCorners.at(-1).z>Math.max(1,2*kerf);
+    const start=smoothExterior?0:hasUpperCorner?sideCorners[0].k:corners.reduce((best,c)=>c.y>best.y?c:best).k;
     // Reversing the complete loop preserves kerf-compensated coordinates.
     const reverse = segments.map(seg => segment(u=>seg.A(1-u),u=>seg.B(1-u),seg.kind,(seg.breaks||[]).map(u=>1-u))).reverse();
     const reverseIndex = segments.length - 1 - ((start + segments.length - 1) % segments.length);

@@ -103,20 +103,77 @@ test('kil2 retains diagnostic STEP edges when safe generation is not established
  assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({stock:[250,250,50],tolerance:.6})),/Грань #790/);
 });
 
-test('kil3 diagnostic view samples the closed shell without enabling G-code',{skip:!process.env.KIL3_STEP},()=>{
- const step=fs.readFileSync(process.env.KIL3_STEP,'utf8');
- const preview=gen.previewGeometry(step,gen.identityRotation(),1,.1);
- assert.equal(preview.diagnosticOnly,true);
- assert.ok(preview.diagnosticShell);
- assert.ok(preview.size[1]>250);
- const three=require('../lib/three.min.js');
- const axes=[0,1,2].filter(axis=>axis!==preview.diagnosticShell.capAxis);
+// Synthetic solid with a single closed outer skin and one seam vertex per cap.
+function closedSkinFixture() {
+ let id=1,lines=[];
+ const add=(type,args)=>{const ref='#'+id++;lines.push(ref+' = '+type+"('',"+args+');');return ref;};
+ const point=p=>add('CARTESIAN_POINT','('+p.join(',')+')');
+ const profile=[[30,0],[30,5],[15,10],[0,10],[-15,10],[-30,5],[-30,0],[-30,-5],[-15,-10],[0,-10],[15,-10],[30,-5],[30,0]];
+ // Deliberately place the STEP seam at the top, away from either entry side.
+ profile.pop();profile.push(...profile.splice(0,3));profile.push(profile[0]);
+ const rows=[0,1].map(end=>profile.map(([x,z])=>point([x+end*60,end*100,z+20])));
+ const curves=rows.map(row=>add('B_SPLINE_CURVE_WITH_KNOTS','3,('+row.join(',')+'),.UNSPECIFIED.,.T.,.F.,(4,3,3,3,4),(0.,0.25,0.5,0.75,1.),.UNSPECIFIED.'));
+ const vertices=rows.map(row=>add('VERTEX_POINT',row[0]));
+ const edges=curves.map((c,k)=>add('EDGE_CURVE',vertices[k]+','+vertices[k]+','+c+',.T.'));
+ const seam=add('EDGE_CURVE',vertices.join(',')+',$,.T.');
+ const bound=ids=>add('FACE_OUTER_BOUND',add('EDGE_LOOP','('+ids.map(e=>add('ORIENTED_EDGE','*,*,'+e+',.T.')).join(',')+')')+',.T.');
+ const skin=add('B_SPLINE_SURFACE_WITH_KNOTS','3,1,('+rows[0].map((v,i)=>'('+v+','+rows[1][i]+')').join(',')+'),.UNSPECIFIED.,.T.,.F.,.F.,(4,3,3,3,4),(2,2),(0.,0.25,0.5,0.75,1.),(0.,1.),.UNSPECIFIED.');
+ const faces=[add('ADVANCED_FACE','('+bound([edges[0],seam,edges[1],seam])+'),'+skin+',.T.')];
+ for(let k=0;k<2;k++){
+   const grid=[[-40,0],[-40,40],[100,0],[100,40]].map(([x,z])=>point([x,k*100,z]));
+   const cap=add('B_SPLINE_SURFACE_WITH_KNOTS','1,1,(('+grid.slice(0,2).join(',')+'),('+grid.slice(2).join(',')+')),.UNSPECIFIED.,.F.,.F.,.F.,(2,2),(2,2),(0.,1.),(0.,1.),.UNSPECIFIED.');
+   faces.push(add('ADVANCED_FACE','('+bound([edges[k]])+'),'+cap+',.T.'));
+ }
+ add('MANIFOLD_SOLID_BREP',add('CLOSED_SHELL','('+faces.join(',')+')'));
+ return 'ISO-10303-21;\nDATA;\n'+lines.join('\n')+'\nENDSEC;\nEND-ISO-10303-21;';
+}
+test('closed exterior uses cap topology and exact boundary splines despite swept generators',()=>{
+ const text=closedSkinFixture(),m=new gen.Model(text),shape=m.build();
+ assert.equal(shape.axis,1);assert.equal(shape.outer.length,1);assert.equal(shape.holes.length,0);
+ assert.equal(gen.previewGeometry(text).diagnosticOnly,false);
+ for(const side of [-1,1]){
+   const r=gen.buildProgram(text,'closed.stp',options({stock:[110,140,60],side}));
+   assert.match(r.program,/PROFILE/);assert.doesNotMatch(r.program,/HOLE:/);
+   const block=r.program.slice(r.program.indexOf('; *** PROFILE:'));
+   const count=+block.match(/PROFILE: (\d+)/)[1];
+   const moves=block.split(/\r?\n/).filter(line=>/^G01 /.test(line)).slice(0,count);
+   const xs=moves.map(line=>+line.match(/X(-?[\d.]+)/)[1]);
+   const extreme=side>0?Math.max(...xs):Math.min(...xs);
+   assert.ok(Math.abs(xs[0]-extreme)<.02,'entry is on the selected extreme, not the STEP seam');
+ }
+ const raw=m.facesRaw[0],surface=m.surface(raw.surf),face=shape.outer[0][0];
+ for(let i=0;i<=100;i++)for(const f of [0,.25,.5,.75,1]){
+   const t=i/100,a=face.A(t),b=face.B(t),p=surface.at(t,f);
+   assert.ok(Math.hypot(...p.map((v,k)=>v-a[k]-f*(b[k]-a[k])))<1e-6);
+ }
+});
+test('closed exterior rejects internal bounds, missing solids and mismatched curve controls',()=>{
+ const text=closedSkinFixture();
+ assert.equal(new gen.Model(text.replaceAll('FACE_OUTER_BOUND','FACE_BOUND')).closedExterior(),null);
+ assert.equal(new gen.Model(text.replace('MANIFOLD_SOLID_BREP','OPEN_SOLID')).closedExterior(),null);
+ const m=new gen.Model(text),edge=m.facesRaw[1].edgeIds[0],curve=m.get(m.entities.get(edge).args[3]);
+ curve.args[2]=curve.args[2].slice().reverse();
+ assert.equal(m.closedExterior(),null);
+});
+test('external kil3 builds an exterior profile and safe G-code',{skip:!process.env.KIL3_STEP},()=>{
+ const text=fs.readFileSync(process.env.KIL3_STEP,'utf8'),m=new gen.Model(text),shape=m.build();
+ assert.equal(shape.axis,1);assert.equal(shape.holes.length,0);assert.equal(shape.secondaryContours.length,0);
+ const preview=gen.previewGeometry(text);
+ assert.equal(preview.diagnosticOnly,false);assert.ok(preview.size[1]>280);
+ assert.ok(preview.closedShell);
+ const three=require('../lib/three.min.js'),axes=[0,1,2].filter(k=>k!==preview.closedShell.capAxis);
  for(const end of [0,1]){
-   const points=preview.diagnosticShell.rail.slice(0,-1).map(pair=>new three.Vector2(pair[end][axes[0]],pair[end][axes[1]]));
+   const points=preview.closedShell.rail.slice(0,-1).map(pair=>new three.Vector2(pair[end][axes[0]],pair[end][axes[1]]));
    assert.ok(three.ShapeUtils.triangulateShape(points,[]).length>0);
  }
- assert.throws(()=>gen.buildProgram(step,'kil3.stp',options({stock:[250,320,50]})),/Грань #427/);
+ for(const side of [-1,1]){
+   const r=gen.buildProgram(text,'kil3.stp',options({stock:[250,320,60],side}));
+   assert.match(r.program,/PROFILE/);assert.doesNotMatch(r.program,/HOLE:|SECONDARY CUT/);
+   const p=sim.parseGcode(r.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+   assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
+ }
 });
+
 test('pair checkbox controls Create G-code, not only the stock preview',()=>{
  // Exercise the actual UI mode dispatch and event handlers with minimal DOM stubs.
  const clickHandlers=new Map();
@@ -569,7 +626,10 @@ test('external F1-1: resolve the closed seam before checking ruled-surface accur
  const text=fs.readFileSync(process.env.F11_STEP,'utf8');
  // The actual cross-edge parameters are on a different scale from the
  // surface; the geometry-based seam resolver must reach the accuracy check.
- assert.throws(()=>gen.previewGeometry(text),/Грань #1807: синхронная струна отклоняется от STEP-поверхности/);
+ const preview=gen.previewGeometry(text);
+ assert.equal(preview.diagnosticOnly,true);
+ assert.match(preview.previewError,/Грань #1807: синхронная струна отклоняется от STEP-поверхности/);
+ assert.throws(()=>new gen.Model(text).build(),/Грань #1807: синхронная струна отклоняется от STEP-поверхности/);
 });
 
 test('external F1-1: explicit 0.6 mm tolerance, tower travel and simulation',{skip:!process.env.F11_STEP},()=>{

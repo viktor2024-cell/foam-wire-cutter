@@ -610,7 +610,8 @@ const generatorPreview = (() => {
       for (const copy of copies) {
         const vertices=[],lines=[];
         const point=p=>p.map((v,k)=>copy.sign[k]*(v-geometry.center[k])+(k===2?copy.z+modelZOffset:0)+modelOffset[k]);
-        const displayRails=geometry.diagnosticShell?[geometry.diagnosticShell.rail]:geometry.rails;
+        const displayShell=geometry.closedShell||geometry.diagnosticShell;
+        const displayRails=displayShell?[displayShell.rail]:geometry.rails;
         for (const rail of displayRails) {
           for(let i=1;i<rail.length;i++) {
             const [a,b]=rail[i-1].map(point),[c,d]=rail[i].map(point);
@@ -618,10 +619,10 @@ const generatorPreview = (() => {
           }
           lines.push(...point(rail[0][0]),...point(rail[0][1]),...point(rail.at(-1)[0]),...point(rail.at(-1)[1]));
         }
-        if(geometry.diagnosticShell){
-          const axis=geometry.diagnosticShell.capAxis,axes=[0,1,2].filter(value=>value!==axis);
+        if(displayShell){
+          const axis=displayShell.capAxis,axes=[0,1,2].filter(value=>value!==axis);
           for(const end of [0,1]){
-            const boundary=geometry.diagnosticShell.rail.map(pair=>point(pair[end]));
+            const boundary=displayShell.rail.map(pair=>point(pair[end]));
             if(boundary.length>1 && Math.hypot(...boundary[0].map((value,k)=>value-boundary.at(-1)[k]))<.01)boundary.pop();
             const triangles=THREE.ShapeUtils.triangulateShape(boundary.map(p=>new THREE.Vector2(p[axes[0]],p[axes[1]])),[]);
             for(const triangle of triangles)for(const index of triangle)vertices.push(...boundary[index]);
