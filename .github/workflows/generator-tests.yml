@@ -7,6 +7,7 @@ on:
     paths:
       - 'index.html'
       - 'generator-view.js'
+      - 'stock-preview.js'
       - 'tests/**'
       - '.github/workflows/generator-tests.yml'
 jobs:
@@ -19,6 +20,6 @@ jobs:
         with:
           node-version: '22'
       - name: Run generator tests (no CNC hardware)
-        run: node --test tests/generator.test.cjs tests/guide-editor.test.cjs tests/generator-3d-guides.test.cjs tests/generator-modes.test.cjs
+        run: node --test tests/generator.test.cjs tests/guide-editor.test.cjs tests/generator-3d-guides.test.cjs tests/generator-modes.test.cjs tests/stock-preview.test.cjs
       - name: Validate OpenCascade checker syntax
         run: python3 -m py_compile tools/verify_f4_solid.py

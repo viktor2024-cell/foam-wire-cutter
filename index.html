@@ -71,6 +71,7 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 #drop { position: absolute; inset: 0; display: grid; place-items: center; background: color-mix(in srgb, var(--view) 80%, transparent);
   font-size: 18px; font-weight: 600; border: 2px dashed var(--wire); border-radius: 8px; }
 .legend { position: absolute; left: 10px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); pointer-events: none; }
+.legend[hidden] { display: none; }
 .legend i { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 5px; border-radius: 2px; }
 
 .transport { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
@@ -306,7 +307,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
   <div class="stage">
     <div id="view">
       <div id="drop" hidden>Отпустите файл .gcode</div>
-      <div class="legend">
+      <div class="legend" id="cutLegend">
         <span><i style="background:var(--wire)"></i>струна и след реза</span>
         <span><i style="background:var(--foam)"></i>заготовка</span>
         <span><i style="background:var(--muted)"></i>пути кареток на башнях</span>
@@ -319,6 +320,11 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       </select>
       <input type="range" id="timeline" min="0" max="10000" value="0" aria-label="Время программы">
       <span class="clock" id="clock">0:00 / 0:00</span>
+    </div>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="resultPreview"> Показать результат резки</label>
+      <button id="resultAll" type="button" hidden>Показать все куски</button>
+      <span class="note" id="resultStatus" role="status" aria-live="polite"></span>
     </div>
     <section class="box">
       <h2>Программа</h2>
@@ -1064,6 +1070,7 @@ G00 B0.00 F1800.0
 </script>
 <script src="lib/three.min.js"></script>
 <script src="lib/OrbitControls.js"></script>
+<script src="stock-preview.js"></script>
 <script>
 "use strict";
 // ---------------------------------------------------------------------------------------------
@@ -1321,6 +1328,87 @@ try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", appl
 new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
 let machineGroup = null, stockGroup = null, wireMesh = null, carriages = [], trailMesh = null, faceLines = null;
+let resultGroup = null, resultVersion = 0, resultPointer = null;
+function clearResultPreview() {
+  resultVersion++;
+  $("resultPreview").checked = false;
+  $("resultAll").hidden = true;
+  $("cutLegend").hidden = false;
+  $("resultStatus").textContent = "";
+  if (resultGroup) {
+    scene.remove(resultGroup);
+    for (const mesh of resultGroup.children) { mesh.geometry.dispose(); mesh.material.dispose(); }
+    resultGroup = null;
+  }
+  if (machineGroup) machineGroup.visible = true;
+}
+function makeResultMeshes(result) {
+  const [nx,ny,nz]=result.dims, [sx,sy,sz]=result.cell, [ox,oy,oz]=result.min;
+  const index=(x,y,z)=>(z*ny+y)*nx+x;
+  const positions=result.components.map(()=>[]);
+  const faces=[
+    {d:[-1,0,0],v:[[0,0,0],[0,0,1],[0,1,1],[0,1,0]]},
+    {d:[1,0,0],v:[[1,0,0],[1,1,0],[1,1,1],[1,0,1]]},
+    {d:[0,-1,0],v:[[0,0,0],[1,0,0],[1,0,1],[0,0,1]]},
+    {d:[0,1,0],v:[[0,1,0],[0,1,1],[1,1,1],[1,1,0]]},
+    {d:[0,0,-1],v:[[0,0,0],[0,1,0],[1,1,0],[1,0,0]]},
+    {d:[0,0,1],v:[[0,0,1],[1,0,1],[1,1,1],[0,1,1]]}
+  ];
+  for(let z=0;z<nz;z++)for(let y=0;y<ny;y++)for(let x=0;x<nx;x++){
+    const id=result.labels[index(x,y,z)]; if(id<0)continue;
+    for(const face of faces){
+      const [dx,dy,dz]=face.d, xx=x+dx,yy=y+dy,zz=z+dz;
+      if(xx>=0&&xx<nx&&yy>=0&&yy<ny&&zz>=0&&zz<nz&&result.labels[index(xx,yy,zz)]===id)continue;
+      for(const corner of [0,1,2,0,2,3]){
+        const vertex=face.v[corner];positions[id].push(ox+(x+vertex[0])*sx,oy+(y+vertex[1])*sy,oz+(z+vertex[2])*sz);
+      }
+    }
+  }
+  const group=new THREE.Group();
+  for(const component of result.components){
+    const geometry=new THREE.BufferGeometry();
+    geometry.setAttribute('position',new THREE.Float32BufferAttribute(positions[component.id],3));
+    geometry.computeVertexNormals();
+    const color=new THREE.Color().setHSL((component.id*0.61803398875+0.55)%1,0.48,0.56);
+    const mesh=new THREE.Mesh(geometry,new THREE.MeshPhongMaterial({color,side:THREE.DoubleSide}));
+    mesh.userData.component=component.id;group.add(mesh);
+  }
+  return group;
+}
+$("resultPreview").addEventListener("change", async () => {
+  if (!$("resultPreview").checked) { clearResultPreview(); return; }
+  const version=++resultVersion, settings=readSettings(), currentProgram=prog;
+  if (!currentProgram) { clearResultPreview(); return; }
+  playing=false; $("play").textContent="Пуск";
+  $("resultStatus").textContent="Расчёт остатка…";
+  try {
+    if(currentProgram.lines.some(line=>/\bG\s*(?:0*[23]|38(?:\.\d+)?)(?![\d.])/i.test(line.replace(/\([^)]*\)|;.*/g,''))))
+      throw new Error("Дуги и циклы измерения пока не поддерживаются расчётом остатка.");
+    const result=await calculateStockPreview(currentProgram.moves,settings,(done,total)=>{
+      if(version!==resultVersion)throw new Error("Расчёт отменён.");
+      $("resultStatus").textContent="Расчёт остатка: "+done+" / "+total+" движений…";
+    });
+    if(version!==resultVersion || !$("resultPreview").checked)return;
+    resultGroup=makeResultMeshes(result);scene.add(resultGroup);machineGroup.visible=false;$("cutLegend").hidden=true;
+    $("resultAll").hidden=false;
+    $("resultStatus").textContent="Приближённо, ячейка "+result.cell.map(value=>value.toFixed(1)).join(' × ')+" мм; кусков: "+result.components.length+". Щёлкните нужный кусок. Остаток может включать отходы.";
+  } catch(error) {
+    if(version!==resultVersion)return;
+    clearResultPreview();$("resultStatus").textContent="Не удалось рассчитать остаток: "+error.message;
+  }
+});
+$("resultAll").addEventListener("click",()=>{if(resultGroup)for(const mesh of resultGroup.children)mesh.visible=true;});
+renderer.domElement.addEventListener("pointerdown",event=>{if(event.button===0)resultPointer=[event.clientX,event.clientY];});
+renderer.domElement.addEventListener("pointerup",event=>{
+  if(!resultGroup||!resultPointer||event.button!==0)return;
+  const distance=Math.hypot(event.clientX-resultPointer[0],event.clientY-resultPointer[1]);resultPointer=null;
+  if(distance>4)return;
+  const rect=renderer.domElement.getBoundingClientRect();
+  const pointer=new THREE.Vector2((event.clientX-rect.left)/rect.width*2-1,1-(event.clientY-rect.top)/rect.height*2);
+  const ray=new THREE.Raycaster();ray.setFromCamera(pointer,camera);
+  const hit=ray.intersectObjects(resultGroup.children.filter(mesh=>mesh.visible))[0];
+  if(hit)for(const mesh of resultGroup.children)mesh.visible=mesh===hit.object;
+});
 function buildScene(s) {
   if (machineGroup) scene.remove(machineGroup);
   machineGroup = new THREE.Group(); scene.add(machineGroup);
@@ -1610,6 +1698,7 @@ function loadProgram(text, name, opts = {}) {
 }
 function recheck() {
   if (!prog) return;
+  clearResultPreview();
   prog.check = analyse(prog, readSettings());
   buildScene(readSettings());
   showWarnings();
