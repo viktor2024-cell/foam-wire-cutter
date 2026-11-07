@@ -113,7 +113,7 @@ pre.code .ln { color: var(--muted); display: inline-block; min-width: 4.5ch; }
 .row button { padding: 5px 10px; font-size: 13px; }
 .delta-up { color: var(--wire); font-weight: 600; } .delta-down { color: var(--info); font-weight: 600; }
 .tabs button { font-weight: 600; letter-spacing: 0.03em; }
-#panelGen { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-content: start; }
+#panelGen { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-content: start; }
 #panelGen .gn-preview { grid-column: 1 / -1; }
 #panelGen [hidden] { display: none !important; }
 #panelGen .fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -124,7 +124,6 @@ pre.code .ln { color: var(--muted); display: inline-block; min-width: 4.5ch; }
 #gnView { height: 420px; min-height: 260px; position: relative; border-radius: 8px; overflow: hidden; background: var(--view); }
 #gnView .gn-file { position: absolute; top: 8px; left: 8px; z-index: 2; max-width: calc(100% - 16px); padding: 5px; border-radius: 6px; background: var(--panel); }
 #gnView canvas { display: block; width: 100%; height: 100%; }
-#panelGen .gn-result { grid-column: 1 / -1; }
 .fields select { width: 100%; padding: 4px 6px; font-family: var(--font-num); font-size: 13px; }
 @media (max-width: 860px) { #panelGen { grid-template-columns: minmax(0, 1fr); } }
 button:disabled, input:disabled { opacity: 0.5; cursor: default; }
@@ -256,6 +255,15 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
     <div class="note">Размеры заданы при столе 0°. Для листа 340×230×50 мм на ребре введите 50, 340, 230 мм соответственно. При отключении торцевания профиль режется при столе 0°.</div>
   </section>
   <section class="box">
+    <h2>Перемещения</h2>
+    <div class="fields">
+      <label>Над заготовкой<input id="gnClear" type="number" step="1" value="20"></label>
+      <label>Отвод торца<input id="gnRetract" type="number" step="1" value="30"></label>
+      <label>Вынос входа<input id="gnLead" type="number" step="1" value="5"></label>
+      <label>Сторона входа<select id="gnSide"><option value="+">+Y</option><option value="-">−Y</option></select></label>
+    </div>
+  </section>
+  <section class="box">
     <h2>Рез</h2>
     <div class="fields">
       <label>Скорость мм/с<input id="gnFeed" type="number" step="0.5" value="7"></label>
@@ -266,16 +274,8 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
     </div>
     <label class="check"><input type="checkbox" id="gnComp" checked> Менять мощность по длине струны</label>
   </section>
-  <section class="box">
-    <h2>Перемещения</h2>
-    <div class="fields">
-      <label>Над заготовкой<input id="gnClear" type="number" step="1" value="20"></label>
-      <label>Отвод торца<input id="gnRetract" type="number" step="1" value="30"></label>
-      <label>Вынос входа<input id="gnLead" type="number" step="1" value="5"></label>
-      <label>Сторона входа<select id="gnSide"><option value="+">+Y</option><option value="-">−Y</option></select></label>
-    </div>
-  </section>
   <section class="box gn-result">
+    <h2>G-code</h2>
     <div class="row">
       <button id="gnGo" class="primary" disabled>Создать G-code</button>
       <button id="gnMirror" class="gn-auto" disabled>Зеркало</button>
