@@ -7,7 +7,7 @@ const source=html.slice(html.indexOf('const Gen ='),html.indexOf('//  Вклад
  .replace(/return \{ buildProgram,.*?CONFIG, previewGeometry, previewPair, identityRotation, rotateModel \};/,
   match=>match.replace(' };', ', Model, sampleFace, Program, startBlock, endBlock };'));
 const gen=vm.runInNewContext(source+';Gen');
-const fixture=fs.readFileSync(path.join(__dirname,'fixtures/split-profile.stp'),'utf8');
+const fixture=fs.readFileSync(path.join(__dirname,'fixtures/split-profile.stp'),'utf8').replace(/\r\n/g,'\n');
 // Construct a genuine two-direction ruled STEP topology: the main sheet
 // is spanned along Y, while a curved bore runs from X=-50 to X=+50.
 // Both bore-end edges belong to the planar end faces.
@@ -94,7 +94,7 @@ test('pair checkbox controls Create G-code, not only the stock preview',()=>{
  const get=id=>nodes[id],modes=[];
  // Use only the production dispatch wiring; do not silently substitute another implementation.
  const ui=html.slice(html.indexOf('// The pair checkbox is a real machining mode'),html.indexOf('$("gnToCut").addEventListener'));
- vm.runInNewContext(ui,{ $:get,generate:mode=>modes.push(mode),generatorPreview:{rebuild(){}},
+ vm.runInNewContext(ui,{ $:get,generatorMode:'auto',generate:mode=>modes.push(mode),generatorPreview:{rebuild(){}},
    showTab(){},saveProgram(){},});
  get('gnStockPair').checked=true;
  clickHandlers.get('gnStockPair:change')();

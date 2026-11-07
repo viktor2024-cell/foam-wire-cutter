@@ -12,7 +12,7 @@ const generatorPreview = (() => {
   const machine = Gen.CONFIG;
   // Native Three.js curve selection, independent of the old stand-alone editor.
   // The saved pairs are user annotations; they do NOT authorize machine G-code.
-  let guideMode = false, startMode = false, pendingGuide = [], savedGuidePairs = [], curveObjects = [];
+  let guideMode = false, startMode = false, manualActive = false, pendingGuide = [], savedGuidePairs = [], curveObjects = [];
   const guideStarts={}; // Keys are ordered STEP IDs: "curveA:curveB"; normalized A parameter.
   let guideStartMarker=null;
   const startButton=document.getElementById('gnGuideStartMode');
@@ -409,6 +409,7 @@ const generatorPreview = (() => {
   // Accordingly Ctrl+RMB => PAN action (inverted to ROTATE), Alt+RMB =>
   // PAN action, and unmodified RMB is reserved for pair confirmation.
   renderer.domElement.addEventListener('pointerdown', e => {
+    if (!manualActive) return;
     if (e.button !== 2) return;
     if (e.ctrlKey || e.metaKey) {
       controls.mouseButtons.RIGHT = THREE.MOUSE.PAN; // Ctrl swaps pan -> rotate
@@ -423,7 +424,7 @@ const generatorPreview = (() => {
     }
   }, true);
   renderer.domElement.addEventListener('pointermove', e => {
-    if (!guideMode && !startMode) return;
+    if (!manualActive || (!guideMode && !startMode)) return;
     const rect = renderer.domElement.getBoundingClientRect();
     guideDot.style.left = (e.clientX - rect.left) + 'px';
     guideDot.style.top = (e.clientY - rect.top) + 'px';
@@ -434,15 +435,15 @@ const generatorPreview = (() => {
     guideDot.style.display = 'none';
   });
   renderer.domElement.addEventListener('contextmenu', e => {
-    if (guideMode || startMode || e.ctrlKey || e.metaKey || e.altKey) e.preventDefault();
+    if ((manualActive && (guideMode || startMode)) || e.ctrlKey || e.metaKey || e.altKey) e.preventDefault();
   });
   renderer.domElement.addEventListener('pointerdown', e => {
-    if (!guideMode && !startMode) return;
+    if (!manualActive || (!guideMode && !startMode)) return;
     if (e.button === 0) pointerDown = [e.clientX,e.clientY];
     // Plain RMB is tracked by the capture-phase listener above.
   });
   renderer.domElement.addEventListener('pointerup', e => {
-    if (!guideMode && !startMode) return;
+    if (!manualActive || (!guideMode && !startMode)) return;
     if (e.button === 2 && rightPointerDown) {
       const moved = Math.hypot(e.clientX-rightPointerDown[0], e.clientY-rightPointerDown[1]);
       rightPointerDown = null;
@@ -510,7 +511,7 @@ const generatorPreview = (() => {
     guideFeedback('Пары сохранены в JSON. Это не разрешение на резку.');
   });
   document.addEventListener('keydown', e => {
-    if (!guideMode || document.getElementById('panelGen').hidden ||
+    if (!manualActive || !guideMode || document.getElementById('panelGen').hidden ||
         /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')) return;
     if (e.key === 'Enter') { e.preventDefault(); confirmGuidePair(); }
     else if (e.key === 'Escape') {
@@ -554,12 +555,14 @@ const generatorPreview = (() => {
     });
     scene.remove(group);
   }
-  function rebuild() {
+  function rebuild(preserveDiagnostics = false) {
     document.getElementById('gnStockFromModel').disabled = !geometry;
     document.getElementById('gnAutoPlace').disabled = !geometry;
-    guideWire = null;guideStartMarker=null;stockCloud=null;resetStockSimulation();
+    guideWire = null;guideStartMarker=null;
+    if (preserveDiagnostics === true) clearStockCloud();
+    else { stockCloud=null;resetStockSimulation(); }
     clear();curveObjects = []; group = new THREE.Group(); scene.add(group);
-    if (guideEntryResult) guideEntryResult.textContent='Размещение или модель изменены. Повторите проверку входа и выхода.';
+    if (guideEntryResult && preserveDiagnostics !== true) guideEntryResult.textContent='Размещение или модель изменены. Повторите проверку входа и выхода.';
     const machineBox = new THREE.BoxGeometry(machine.FieldWidth, machine.HorizontalTravel, machine.VerticalTravel);
     envelope = new THREE.LineSegments(new THREE.EdgesGeometry(machineBox), new THREE.LineDashedMaterial({color:0x667788, dashSize:7, gapSize:5}));
     machineBox.dispose();
@@ -583,7 +586,7 @@ const generatorPreview = (() => {
     axes.position.set(modelOffset[0]-stock[0]/2,modelOffset[1]-stock[1]/2,bottom+modelOffset[2]);
     group.add(axes);
     if (geometry) {
-      const paired = document.getElementById('gnStockPair').checked;
+      const paired = !manualActive && document.getElementById('gnStockPair').checked;
       const kerf = n('gnKerf');
       let placement;
       try { if (paired) placement=Gen.previewPair(geometry,stock[2],bottom,kerf); }
@@ -664,6 +667,7 @@ const generatorPreview = (() => {
       if (error) fit.className = 'note crit';
     }
     aim(); updateGuideMotion();
+    if (preserveDiagnostics === true && manualActive) showStockStage();
   }
   let generatorPreviewLoadedFile = null;
   function load() {
@@ -877,7 +881,12 @@ const generatorPreview = (() => {
   document.getElementById('gnKerf').addEventListener('input',()=>{invalidate();rebuild();});
   document.getElementById('gnTrim').addEventListener('change',()=>{invalidate();rebuild();});
   guideFeedback();
-  return {load,rebuild,chooseGuide,confirmGuidePair,hasAuxiliaryCurves:()=>!!geometry?.auxiliaryCurves?.length,
+  return {load,rebuild,chooseGuide,confirmGuidePair,setManualActive(active){
+    manualActive=active; pointerDown=rightPointerDown=null; guideDot.style.display='none';
+    renderer.domElement.style.cursor=active && (guideMode || startMode) ? 'crosshair' : '';
+    if (document.getElementById('gnStockPair').checked) rebuild(true);
+    else if (stockCloud) { stockCloud.visible=active; draw(); }
+  },hasAuxiliaryCurves:()=>!!geometry?.auxiliaryCurves?.length,
     getGuidePairs:()=>savedGuidePairs.map(p=>p.slice()),
     getGuideStarts:()=>({...guideStarts})};
 })();

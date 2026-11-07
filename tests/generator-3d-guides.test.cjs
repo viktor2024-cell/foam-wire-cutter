@@ -59,7 +59,7 @@ test('right-button gestures have explicit navigation roles',()=>{
  assert.ok(start>=0 && end>start);
  const handlers={};
  const ctx={THREE:{MOUSE:{PAN:2,ROTATE:0}},
-   controls:{mouseButtons:{RIGHT:2}},guideMode:true,rightPointerDown:null,
+   controls:{mouseButtons:{RIGHT:2}},guideMode:true,manualActive:true,rightPointerDown:null,
    renderer:{domElement:{addEventListener(event,fn,capture){handlers[event]=fn;assert.equal(capture,true)}}}};
  vm.createContext(ctx);
  vm.runInContext(source.slice(start,end),ctx);
@@ -78,6 +78,9 @@ test('right-button gestures have explicit navigation roles',()=>{
  const alt=click({altKey:true});
  assert.equal(alt.down,null);assert.equal(alt.stopped,false);
  assert.equal(alt.action,ctx.THREE.MOUSE.PAN);
+ ctx.manualActive=false;
+ const inactive=click({});
+ assert.equal(inactive.stopped,false);assert.equal(inactive.down,null);
  // The bundled OrbitControls swaps PAN to ROTATE for ctrlKey,
  // and leaves PAN as PAN for altKey.
 });

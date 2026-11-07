@@ -115,6 +115,8 @@ pre.code .ln { color: var(--muted); display: inline-block; min-width: 4.5ch; }
 .tabs button { font-weight: 600; letter-spacing: 0.03em; }
 #panelGen { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-content: start; }
 #panelGen .gn-preview { grid-column: 1 / -1; }
+#panelGen [hidden] { display: none !important; }
+#panelGen .gn-modes { grid-column: 1 / -1; }
 #gnRotate [data-axis="0"] .axis-letter { color: #ff0000; }
 #gnRotate [data-axis="1"] .axis-letter { color: #00ff00; }
 #gnRotate [data-axis="2"] .axis-letter { color: #0000ff; }
@@ -160,6 +162,10 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
 </header>
 
 <div id="panelGen">
+  <div class="seg gn-modes" role="group" aria-label="Режим генератора">
+    <button id="gnModeAuto" type="button" aria-pressed="true">Автогенератор</button>
+    <button id="gnModeManual" type="button" aria-pressed="false">Полуавтомат</button>
+  </div>
   <section class="box gn-preview">
     <div class="row">
       <h2>Размещение модели</h2>
@@ -169,7 +175,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
         <button id="gnViewSide" aria-pressed="false">Сбоку · вдоль струны</button>
       </div>
     </div>
-    <div class="row" aria-label="Выбор пар направляющих">
+    <div class="row gn-manual" aria-label="Выбор пар направляющих" hidden>
       <button id="gnGuideMode" type="button" aria-pressed="false">Выбрать кривые в 3D</button>
       <button id="gnGuideConfirm" type="button" disabled title="Подтвердить две выбранные кривые (или правая кнопка мыши / Enter)">ПОДТВЕРДИТЬ</button>
       <button id="gnGuideStartMode" type="button" aria-pressed="false">Задать начало реза</button>
@@ -182,22 +188,22 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       <span class="note">Alt + ПКМ — перемещение · Ctrl + ПКМ — поворот · ПКМ — подтвердить пару</span>
     </div>
     <div id="gnView" aria-label="Модель, заготовка и рабочая область станка"></div>
-    <div class="row" aria-label="Диагностическая траектория струны">
+    <div class="row gn-manual" aria-label="Диагностическая траектория струны" hidden>
       <label for="gnGuideOperation">Пара для просмотра</label>
       <select id="gnGuideOperation" disabled aria-label="Выбранная пара кривых"></select>
       <label for="gnGuideProgress">Проход, %</label>
       <input id="gnGuideProgress" type="range" min="0" max="100" value="0" step="1" disabled style="flex:1; min-width:110px">
       <span id="gnGuideProgressText">0%</span>
     </div>
-    <div class="note" id="gnGuideMotion" role="status">Назначьте пару кривых, чтобы увидеть перемещение струны; это диагностический просмотр, не G-code.</div>
-    <div class="note" id="gnGuideEntryExitResult" role="status" aria-live="polite">Проверка входа/выхода не выполнялась. Не отправляйте движения на станок до подтверждения.</div>
-    <div class="row" aria-label="Проверка остатка материала">
+    <div class="note gn-manual" id="gnGuideMotion" role="status" hidden>Назначьте пару кривых, чтобы увидеть перемещение струны; это диагностический просмотр, не G-code.</div>
+    <div class="note gn-manual" id="gnGuideEntryExitResult" role="status" aria-live="polite" hidden>Проверка входа/выхода не выполнялась. Не отправляйте движения на станок до подтверждения.</div>
+    <div class="row gn-manual" aria-label="Проверка остатка материала" hidden>
       <button id="gnStockSimulate" type="button">Смоделировать удаление материала</button>
       <label for="gnStockStage">Показать остаток после</label>
       <select id="gnStockStage" disabled></select>
       <label class="check"><input id="gnStockCloud" type="checkbox" checked> Остаток в 3D</label>
     </div>
-    <div class="note" id="gnStockSimResult" role="status" aria-live="polite">Объёмная симуляция ещё не выполнялась. Результат носит диагностический характер.</div>
+    <div class="note gn-manual" id="gnStockSimResult" role="status" aria-live="polite" hidden>Объёмная симуляция ещё не выполнялась. Результат носит диагностический характер.</div>
     <div class="note" id="gnEnvelopeLegend"></div>
     <div class="row" id="gnRotate" aria-label="Поворот модели">
       <span>Модель, шаг 90°:</span>
@@ -235,14 +241,14 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
   </section>
   <section class="box">
     <h2>Заготовка</h2>
-    <div class="row"><button id="gnStockFromModel" disabled>По модели +10 мм с каждой стороны</button><button id="gnAutoPlace" type="button" disabled>Авторазмещение: поворот + сдвиг</button></div>
+    <div class="row gn-auto"><button id="gnStockFromModel" disabled>По модели +10 мм с каждой стороны</button><button id="gnAutoPlace" type="button" disabled>Авторазмещение: поворот + сдвиг</button></div>
     <div class="fields">
       <label>Вдоль струны<input id="gnL" type="number" step="0.01" value="340"></label>
       <label>Поперёк струны<input id="gnW" type="number" step="0.01" value="230"></label>
       <label>Высота<input id="gnH" type="number" step="0.01" value="50"></label>
       <label>Низ Z<input id="gnZ" type="number" step="1" value="10"></label>
     </div>
-    <label class="check"><input type="checkbox" id="gnSideEntry"> Вход и выход справа без подъёма над заготовкой (одна деталь, без отверстий и торцевания)</label>
+    <label class="check gn-auto"><input type="checkbox" id="gnSideEntry"> Вход и выход справа без подъёма над заготовкой (одна деталь, без отверстий и торцевания)</label>
     <label class="check"><input type="checkbox" id="gnTrim" checked> Торцевать заготовку</label>
     <div class="fields">
       <label>Угол торцевания
@@ -252,7 +258,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
         <select id="gnCutOrder"><option value="B0_B90">Сначала B0, затем B90</option><option value="B90_B0" selected>Сначала B90, затем B0</option></select>
       </label>
     </div>
-    <div class="note" id="gnOrderExplanation">При двух направлениях порядок относится к главным контурам; технологические отверстия и входы проверяются отдельно. Для F4 G-code разрешается только после проверки безопасной траектории.</div>
+    <div class="note" id="gnOrderExplanation">При двух направлениях порядок относится к главным контурам; технологические отверстия и входы проверяются отдельно.</div>
     <div class="note">Размеры заданы при столе 0°. Для листа 340×230×50 мм на ребре введите 50, 340, 230 мм соответственно. При отключении торцевания профиль режется при столе 0°.</div>
   </section>
   <section class="box">
@@ -278,9 +284,9 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
   <section class="box gn-result">
     <div class="row">
       <button id="gnGo" class="primary" disabled>Создать G-code</button>
-      <button id="gnMirror" disabled>Зеркало</button>
-      <button id="gnPair" disabled>Пара: зеркало над обычной</button>
-      <label><input id="gnStockPair" type="checkbox"> Режим ПАРА — предпросмотр и G-code для двух деталей</label>
+      <button id="gnMirror" class="gn-auto" disabled>Зеркало</button>
+      <button id="gnPair" class="gn-auto" disabled>Пара: зеркало над обычной</button>
+      <label class="gn-auto"><input id="gnStockPair" type="checkbox"> Режим ПАРА — предпросмотр и G-code для двух деталей</label>
     </div>
     <div class="file-name" id="gnOut"></div>
     <div class="note" id="gnStatus"></div>
@@ -1459,7 +1465,7 @@ function requireMachinableProgram() {
   return true;
 }
 function generatorSignature() {
-  return JSON.stringify([stepFile?.text, modelRotation, modelOffset, generatorPreview.getGuidePairs(),generatorPreview.getGuideStarts(), [...document.querySelectorAll('#panelGen input, #panelGen select')].map(e=>[e.id,e.type==='checkbox'?e.checked:e.value])]);
+  return JSON.stringify([generatorMode, stepFile?.text, modelRotation, modelOffset, generatorPreview.getGuidePairs(),generatorPreview.getGuideStarts(), [...document.querySelectorAll('#panelGen input, #panelGen select')].map(e=>[e.id,e.type==='checkbox'?e.checked:e.value])]);
 }
 function requireCurrentProgram() {
   if (generationStamp !== null && generationStamp !== generatorSignature()) {
@@ -4515,6 +4521,17 @@ const Gen = (() => {
 let modelRotation = Gen.identityRotation();
 let modelOffset = [0,0,0];
 let stepFile = null;        // - открытый STEP: { name, text }
+let generatorMode = "auto";
+function showGeneratorMode(mode) {
+  generatorMode = mode;
+  const manual = mode === "manual";
+  for (const el of document.querySelectorAll(".gn-manual")) el.hidden = !manual;
+  for (const el of document.querySelectorAll(".gn-auto")) el.hidden = manual;
+  $("gnModeAuto").setAttribute("aria-pressed", String(!manual));
+  $("gnModeManual").setAttribute("aria-pressed", String(manual));
+  generatorPreview.setManualActive(manual);
+  updateGenerateLabel();
+}
 function showTab(tab) {
   const gen = tab === "gen";
   $("panelGen").hidden = !gen; $("panelCut").hidden = gen;
@@ -4554,7 +4571,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
   const ul = $("gnWarn"); ul.innerHTML = "";
   $("gnDone").hidden = true;
   const config = {
-      manualGuidePairs: generatorPreview.getGuidePairs(),
+      manualGuidePairs: generatorMode === "manual" ? generatorPreview.getGuidePairs() : [],
       guideStarts: generatorPreview.getGuideStarts(),
       rotation: modelRotation, offset: [...modelOffset], scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
@@ -4562,7 +4579,8 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
       trimAngle:n("gnTrimAngle"), cutOrder:$("gnCutOrder").value, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair"
   };
   try {
-    if (generatorPreview.getGuidePairs().length && generatorPreview.hasAuxiliaryCurves()) {
+    if (generatorMode === "manual") {
+      if (!config.manualGuidePairs.length || !generatorPreview.hasAuxiliaryCurves()) throw new Error("Выберите и подтвердите пары направляющих в 3D.");
       const result=Gen.buildF4Program(stepFile.text,config.manualGuidePairs,config);
       const outName=stepFile.name.replace(/\.(stp|step)$/i,"")+"_F4_auto.gcode";
       $("gnOut").textContent=outName;
@@ -4607,6 +4625,8 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
 }
 $("tabGen").addEventListener("click", () => showTab("gen"));
 $("tabCut").addEventListener("click", () => showTab("cut"));
+$("gnModeAuto").addEventListener("click", () => showGeneratorMode("auto"));
+$("gnModeManual").addEventListener("click", () => showGeneratorMode("manual"));
 $("gnInput").addEventListener("change", (e) => { if (e.target.files[0]) openStep(e.target.files[0]); });
 // - Окно выбора с доступом к файлу нужно, чтобы потом сохранить G-code в ту же папку
 $("gnInput").addEventListener("click", async (e) => {
@@ -4627,9 +4647,12 @@ $("panelGen").addEventListener("drop", async (e) => {
   if (f) openStep(f, await Promise.resolve(pending).catch(() => null));
 });
 // The pair checkbox is a real machining mode, not just a stock preview.
-function selectedGenerateMode() { return $("gnStockPair").checked ? "pair" : "normal"; }
+function selectedGenerateMode() { return generatorMode === "auto" && $("gnStockPair").checked ? "pair" : "normal"; }
+function updateGenerateLabel() {
+  $("gnGo").textContent = generatorMode === "manual" ? "Создать G-code по парам" : $("gnStockPair").checked ? "Создать G-code: ПАРА (2 детали)" : "Создать G-code: 1 деталь";
+}
 function refreshGenerateMode() {
-  $("gnGo").textContent = $("gnStockPair").checked ? "Создать G-code: ПАРА (2 детали)" : "Создать G-code: 1 деталь";
+  updateGenerateLabel();
   // A previous file must not be presented as the output of a newly selected mode.
   $("gnDone").hidden = true;
   $("gnOut").textContent = "";
