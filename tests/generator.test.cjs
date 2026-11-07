@@ -86,6 +86,22 @@ test('swept wing keeps the real end-cap span even with oblique generators',()=>{
  assert.equal(r.secondary,0);
  assert.doesNotMatch(r.program,/SECONDARY CUT/);
 });
+test('strongly swept ruled faces retain their end-cap axis',()=>{
+ const swept=fixture.replace(/(CARTESIAN_POINT\('',\()\s*(-?[\d.]+),\s*(-?[\d.]+),\s*(-?[\d.]+)(\)\))/g,
+  (_,prefix,x,y,z,suffix)=>prefix+(+x*2.3+(+y)*1.8)+','+(+y*6)+','+(+z)+suffix);
+ const shape=new gen.Model(swept).build();
+ assert.equal(shape.axis,1);
+ assert.equal(shape.outer.length,4);
+});
+
+test('kil2 retains diagnostic STEP edges when safe generation is not established',{skip:!process.env.KIL_STEP},()=>{
+ const step=fs.readFileSync(process.env.KIL_STEP,'utf8');
+ const preview=gen.previewGeometry(step,gen.identityRotation(),1,.6);
+ assert.equal(preview.diagnosticOnly,true);
+ assert.ok(preview.edgeLines.length>0);
+ assert.match(preview.previewError,/Грань #790/);
+ assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({stock:[250,250,50],tolerance:.6})),/Грань #790/);
+});
 test('pair checkbox controls Create G-code, not only the stock preview',()=>{
  // Exercise the actual UI mode dispatch and event handlers with minimal DOM stubs.
  const clickHandlers=new Map();
@@ -177,6 +193,10 @@ test('auto stock takes standard sheet thickness along wire, not vertical Z',asyn
  assert.equal(best.standard,true);
  assert.ok(best.height+1e-7>=state.geometry.size[2]+20); // geometrically required allowance
  assert.ok(best.width>best.length);
+ state.geometry={...state.geometry,diagnosticOnly:true};
+ state.Gen={...state.Gen,previewGeometry:(...args)=>({...gen.previewGeometry(...args),diagnosticOnly:true})};
+ const unavailable=await vm.runInNewContext(source.slice(begin,end)+';autoStockOptions()',state);
+ assert.equal(unavailable.length,0);
 });
 test('wireframe U-arch uses one safe waste corridor to both openings',()=>{
  const step=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-two-holes.stp'),'utf8');

@@ -2046,7 +2046,7 @@ const Gen = (() => {
     catch(e) {
       // The toolpath topology may be ambiguous; editing its guide selection
       // must still be possible. This is a preview-only wireframe fallback.
-      if (!auxiliaryCurves.length) throw e;
+      if (!model.edges.size && !auxiliaryCurves.length) throw e;
       previewError = e.message;
     }
     const {outer=[], holes=[], secondaryContours=[], axis=1, wireframe=false} = built || {};
@@ -2439,7 +2439,7 @@ const Gen = (() => {
           const surf=this.surface(raw.surf),um=sum2(surf.udomain)/2,vm=sum2(surf.vdomain)/2;
           return [[surf.pu,surf.at(surf.udomain[0],vm),surf.at(surf.udomain[1],vm)],
                   [surf.pv,surf.at(um,surf.vdomain[0]),surf.at(um,surf.vdomain[1])]]
-            .some(([degree,a,b])=>degree===1&&dist(a,b)>1&&Math.abs((b[axis]-a[axis])/dist(a,b))>.99);
+            .some(([degree,a,b])=>degree===1&&dist(a,b)>1&&Math.abs((b[axis]-a[axis])/dist(a,b))>.9);
         }).length;
         return {axis,lo,hi,caps,score};
       });
@@ -2594,17 +2594,19 @@ const Gen = (() => {
       const sDom = spanIsU ? surf.udomain : surf.vdomain, tDom = spanIsU ? surf.vdomain : surf.udomain;
       const at = (s, t) => (spanIsU ? surf.at(s, t) : surf.at(t, s));
 
-      // - Значения параметра размаха в плоскостях профилей (координата линейна по параметру размаха)
-      const c0 = at(sDom[0], sum2(tDom) / 2)[axis], c1 = at(sDom[1], sum2(tDom) / 2)[axis];
-      const sA = sDom[0] + (planeA - c0) / (c1 - c0) * (sDom[1] - sDom[0]);
-      const sB = sDom[0] + (planeB - c0) / (c1 - c0) * (sDom[1] - sDom[0]);
-      for (const t of tDom) {
-        if (Math.abs(at(sA, t)[axis] - planeA) > 1e-4 || Math.abs(at(sB, t)[axis] - planeB) > 1e-4) {
-          throw new StepError("Поверхность не линейчатая вдоль размаха: вырезать её проволокой между профилями нельзя");
-        }
-      }
-      const railA = (t) => at(sA, t);
-      let railB = (t) => at(sB, t);
+      const railAtPlane = (plane,t) => {
+        const a=at(sDom[0],t),b=at(sDom[1],t),den=b[axis]-a[axis];
+        if(Math.abs(den)<1e-9)throw new StepError("Образующая грани параллельна плоскости торца");
+        const fraction=(plane-a[axis])/den;
+        if(fraction < -1e-5 || fraction > 1+1e-5)
+          throw new StepError("Плоскость торца находится за пределами поверхности грани");
+        const point=at(sDom[0]+fraction*(sDom[1]-sDom[0]),t);
+        if(Math.abs(point[axis]-plane)>1e-4)
+          throw new StepError("Не удалось точно пересечь образующую с плоскостью торца");
+        return point;
+      };
+      const railA = (t) => railAtPlane(planeA,t);
+      let railB = (t) => railAtPlane(planeB,t);
 
       // - Границы по t по рёбрам в плоскостях профилей
       let endsA = [], endsB = [], closed = false;
@@ -2681,14 +2683,14 @@ const Gen = (() => {
         const sideEdges = [];
         for (const eid of edgeIds) {
           const [v1, v2] = this.edges.get(eid);
-          if (Math.abs(v1[axis] - planeA) < 1e-3 && Math.abs(v2[axis] - planeB) < 1e-3) sideEdges.push([v1, v2]);
-          else if (Math.abs(v2[axis] - planeA) < 1e-3 && Math.abs(v1[axis] - planeB) < 1e-3) sideEdges.push([v2, v1]);
+          if (Math.abs(v1[axis] - planeA) < .01 && Math.abs(v2[axis] - planeB) < .01) sideEdges.push([v1, v2]);
+          else if (Math.abs(v2[axis] - planeA) < .01 && Math.abs(v1[axis] - planeB) < .01) sideEdges.push([v2, v1]);
         }
         const cornersA = t0 <= t1 ? [endsA[0], endsA[1]] : [endsA[1], endsA[0]];
         const cornersB = u0 <= u1 ? [endsB[0], endsB[1]] : [endsB[1], endsB[0]];
         for (const k of [0, 1]) {
           if (!sideEdges.some(([sa, sb]) => dist(cornersA[k], sa) < 0.01 && dist(cornersB[k], sb) < 0.01)) {
-            throw new StepError("Углы грани в плоскостях профилей не соединены боковым ребром: соответствие направляющих неоднозначно");
+            throw new StepError("Грань #"+faceId+": углы в плоскостях профилей не соединены боковым ребром: соответствие направляющих неоднозначно");
           }
         }
         if (skew > 1e-6) {
@@ -2715,7 +2717,7 @@ const Gen = (() => {
             for (const t of checks) {
             const a=railA(t),b=railB(t);
             for (const f of [.25,.5,.75]) {
-              const point=a.map((v,k)=>v+f*(b[k]-v)), s=sA+f*(sB-sA), curve=u=>at(s,u);
+              const point=a.map((v,k)=>v+f*(b[k]-v)), plane=planeA+f*(planeB-planeA), curve=u=>railAtPlane(plane,u);
               // Check the actual synchronized surface parameter first: a
               // narrow trailing edge can fall between the coarse search grid.
               const direct=dist(curve(t),point);

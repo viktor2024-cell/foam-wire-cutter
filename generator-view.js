@@ -556,8 +556,8 @@ const generatorPreview = (() => {
     scene.remove(group);
   }
   function rebuild(preserveDiagnostics = false) {
-    document.getElementById('gnStockFromModel').disabled = !geometry;
-    document.getElementById('gnAutoPlace').disabled = !geometry;
+    document.getElementById('gnStockFromModel').disabled = !geometry || geometry.diagnosticOnly;
+    document.getElementById('gnAutoPlace').disabled = !geometry || geometry.diagnosticOnly;
     guideWire = null;guideStartMarker=null;
     if (preserveDiagnostics === true) clearStockCloud();
     else { stockCloud=null;resetStockSimulation(); }
@@ -652,7 +652,7 @@ const generatorPreview = (() => {
       }
       fit.textContent=(paired?'Пара: ':'Модель: ')+geometry.size.map(v=>v.toFixed(2)).join(' × ')+
         ' мм. '+(unsupported?'Смещение этой комбинации операций пока не поддерживается. ':fits?'Помещается. ':!stockFits?'Модель не помещается в заготовку. ':'Смещённая заготовка выходит за ход станка. ')+(paired?'Минимальная высота: '+requiredZ.toFixed(1)+' мм. ':'')+
-        (geometry.axis===1?'Размах вдоль струны.':'Для генерации поверните размах вдоль струны.')+
+        (geometry.diagnosticOnly?'Направление реза не подтверждено.':geometry.axis===1?'Размах вдоль струны.':'Для генерации поверните размах вдоль струны.')+
         (geometry.auxiliaryCurves?.length?' Найдены '+geometry.auxiliaryCurves.length+
           ' вспомогательные кривые (розовые), пар направляющих: '+
           (geometry.guideAnalysis?.pairs.length||0)+
@@ -660,7 +660,9 @@ const generatorPreview = (() => {
           (geometry.guideKinematics?.operations.map(op=>'B'+op.angle).join(', ')||'нет')+
           '. Траектории диагностические, резка запрещена до проверки объёма.':'');
       if (geometry.previewError) fit.textContent += ' Траектория не определена: ' +
-        geometry.previewError + '. Для ручной привязки выберите две кривые и нажмите Enter.';
+        geometry.previewError + (geometry.auxiliaryCurves?.length
+          ? '. Для ручной привязки выберите две кривые и нажмите Enter.'
+          : '. Показаны упрощённые рёбра STEP; автоматический подбор заготовки и размещения недоступен.');
       if(!fits||unsupported||trimConflict||geometry.axis!==1||geometry.auxiliaryCurves?.length||geometry.previewError) fit.className='note crit';
     } else {
       fit.textContent = error || 'Откройте STEP для проверки размещения.';
@@ -811,7 +813,7 @@ const generatorPreview = (() => {
       fit.className='note crit';
       fit.textContent='Ошибка авторазмещения: '+e.message;
     }finally{
-      autoPlacementBusy=false;button.disabled=!geometry;
+      autoPlacementBusy=false;button.disabled=!geometry || geometry.diagnosticOnly;
       button.textContent='Авторазмещение: поворот + сдвиг';
       progress.hidden=true;
     }
@@ -848,7 +850,7 @@ const generatorPreview = (() => {
       try{
         const g=turn===0&&geometry ? geometry : Gen.previewGeometry(stepFile.text,rotation,scale,n('gnTolerance'));
         // Both machine and generator require the span to lie along the wire.
-        if(g.axis!==1)continue;
+        if(g.axis!==1||g.diagnosticOnly)continue;
         const required=paired ? Gen.previewPair(g,0,0,kerf).minimumHeight : g.size[2];
         const minimumHeight=required+20; // Stock and model move together; preserve 10 mm margins.
         // Standard 20/50/100 mm is the foam SHEET THICKNESS ALONG
@@ -896,7 +898,7 @@ const generatorPreview = (() => {
       fit.textContent='Не удалось подобрать заготовку: '+error.message;
       return;
     } finally {
-      progress.hidden=true;button.disabled=!geometry;
+      progress.hidden=true;button.disabled=!geometry || geometry.diagnosticOnly;
       button.textContent='По модели +10 мм с каждой стороны';
     }
     if(initialSignature!==generatorSignature()){
