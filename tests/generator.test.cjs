@@ -102,6 +102,21 @@ test('kil2 retains diagnostic STEP edges when safe generation is not established
  assert.match(preview.previewError,/Грань #790/);
  assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({stock:[250,250,50],tolerance:.6})),/Грань #790/);
 });
+
+test('kil3 diagnostic view samples the closed shell without enabling G-code',{skip:!process.env.KIL3_STEP},()=>{
+ const step=fs.readFileSync(process.env.KIL3_STEP,'utf8');
+ const preview=gen.previewGeometry(step,gen.identityRotation(),1,.1);
+ assert.equal(preview.diagnosticOnly,true);
+ assert.ok(preview.diagnosticShell);
+ assert.ok(preview.size[1]>250);
+ const three=require('../lib/three.min.js');
+ const axes=[0,1,2].filter(axis=>axis!==preview.diagnosticShell.capAxis);
+ for(const end of [0,1]){
+   const points=preview.diagnosticShell.rail.slice(0,-1).map(pair=>new three.Vector2(pair[end][axes[0]],pair[end][axes[1]]));
+   assert.ok(three.ShapeUtils.triangulateShape(points,[]).length>0);
+ }
+ assert.throws(()=>gen.buildProgram(step,'kil3.stp',options({stock:[250,320,50]})),/Грань #427/);
+});
 test('pair checkbox controls Create G-code, not only the stock preview',()=>{
  // Exercise the actual UI mode dispatch and event handlers with minimal DOM stubs.
  const clickHandlers=new Map();

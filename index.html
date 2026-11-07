@@ -2037,6 +2037,50 @@ const Gen = (() => {
     return {correspondence:matched.correspondence,startU:u0,
       reverseA:!a.closed&&u0===1,mapA,mapB};
   }
+  function diagnosticClosedShell(model) {
+    if(model.facesRaw.length!==3)return null;
+    const sides=model.facesRaw.filter(face=>face.edgeIds.length===4 && new Set(face.edgeIds).size===3);
+    if(sides.length!==1)return null;
+    const side=sides[0],counts=new Map();
+    for(const id of side.edgeIds)counts.set(id,(counts.get(id)||0)+1);
+    const closed=[...counts].filter(([id,count])=>count===1 && model.edges.has(id) && dist(...model.edges.get(id))<1e-5).map(([id])=>id);
+    if(closed.length!==2 || ![...counts.values()].includes(2))return null;
+    const caps=model.facesRaw.filter(face=>face!==side);
+    if(!closed.every(id=>caps.some(face=>face.edgeIds.length===1 && face.edgeIds[0]===id)))return null;
+    const surf=model.surface(side.surf);
+    if(surf.pv!==1)return null;
+    const count=256,sidePoints=[];
+    for(let i=0;i<=count;i++){
+      const u=surf.udomain[0]+(surf.udomain[1]-surf.udomain[0])*i/count;
+      sidePoints.push([surf.at(u,surf.vdomain[0]),surf.at(u,surf.vdomain[1])]);
+    }
+    if([0,1].some(end=>dist(sidePoints[0][end],sidePoints[count][end])>.01))return null;
+    const fixedAxis=[0,1,2].find(axis=>[0,1].every(end=>{
+      const values=sidePoints.map(pair=>pair[end][axis]);
+      return Math.max(...values)-Math.min(...values)<.01;
+    }));
+    if(fixedAxis===undefined)return null;
+    const curves=closed.map(id=>{
+      const edge=model.entities.get(id), curve=model.get(edge.args[3]);
+      return isTyped(curve)&&curve.name==='B_SPLINE_CURVE_WITH_KNOTS' ? new WireframeModel(model).curve(edge.args[3].id) : null;
+    });
+    if(curves.some(curve=>!curve))return null;
+    const matches=(end,curve)=>{
+      const points=Array.from({length:count+1},(_,i)=>curve.at(i/count));
+      return sidePoints.every(pair=>{
+        const point=pair[end];let nearest=Infinity;
+        for(let i=1;i<points.length;i++){
+          const start=points[i-1],delta=points[i].map((value,k)=>value-start[k]);
+          const length=delta.reduce((sum,value)=>sum+value*value,0);
+          const fraction=length?Math.max(0,Math.min(1,delta.reduce((sum,value,k)=>sum+value*(point[k]-start[k]),0)/length)):0;
+          nearest=Math.min(nearest,dist(point,start.map((value,k)=>value+fraction*delta[k])));
+        }
+        return nearest<.15;
+      });
+    };
+    if(!((matches(0,curves[0])&&matches(1,curves[1]))||(matches(0,curves[1])&&matches(1,curves[0]))))return null;
+    return {rail:sidePoints.map(pair=>pair.map(p=>[-p[1],p[0],p[2]])),capAxis:fixedAxis===0?1:fixedAxis===1?0:2};
+  }
   function previewGeometry(text, rotation = identityRotation(), scale = 1, tolerance = 0.1) {
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
     const model = new Model(text, rotation, scale, tolerance);
@@ -2064,6 +2108,8 @@ const Gen = (() => {
     const rails = [...outer, ...holes.flat(), ...secondaryContours.flatMap(g=>g.contour)].map(([face]) =>
       sampleFace(face, face.t0, face.t1, 0.01, 2)
         .map(pair => pair.map(p => [-p[1],p[0],p[2]])));
+    let diagnosticShell=null;
+    if(!built)try{diagnosticShell=diagnosticClosedShell(model);}catch(e){diagnosticShell=null;}
     const edgeLines = [];
     if (!built) for (const ends of model.edges.values()) {
       if (ends.length===2 && ends.every(p=>p.every(Number.isFinite)))
@@ -2072,13 +2118,14 @@ const Gen = (() => {
     // Stock placement uses the BREP boundary where available; for the manual
     // recovery preview use STEP edge endpoints, not unbounded surface poles.
     let points = sampled.flat(2).map(p => [-p[1],p[0],p[2]]);
+    if (!points.length && diagnosticShell) points = diagnosticShell.rail.flat();
     if (!points.length) points = edgeLines.flat();
     if (!points.length) points = auxiliaryCurves.flatMap(c =>
       c.points.map(p=>[-p[1],p[0],p[2]]));
     if (!points.length) throw new StepError("В STEP нет геометрии для предпросмотра");
     const low=[0,1,2].map(k=>Math.min(...points.map(p=>p[k])));
     const high=[0,1,2].map(k=>Math.max(...points.map(p=>p[k])));
-    return {rails,edgeLines,previewError,diagnosticOnly:!!previewError,
+    return {rails,edgeLines,diagnosticShell,previewError,diagnosticOnly:!!previewError,
       axis, sampled, wireframe:!!wireframe, auxiliaryCurves, guideAnalysis,
       guideKinematics, secondaryCount:secondaryContours.length,
       center:low.map((v,k)=>(v+high[k])/2),

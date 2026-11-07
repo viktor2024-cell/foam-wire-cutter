@@ -610,12 +610,22 @@ const generatorPreview = (() => {
       for (const copy of copies) {
         const vertices=[],lines=[];
         const point=p=>p.map((v,k)=>copy.sign[k]*(v-geometry.center[k])+(k===2?copy.z+modelZOffset:0)+modelOffset[k]);
-        for (const rail of geometry.rails) {
+        const displayRails=geometry.diagnosticShell?[geometry.diagnosticShell.rail]:geometry.rails;
+        for (const rail of displayRails) {
           for(let i=1;i<rail.length;i++) {
             const [a,b]=rail[i-1].map(point),[c,d]=rail[i].map(point);
             vertices.push(...a,...b,...c,...b,...d,...c);lines.push(...a,...c,...b,...d);
           }
           lines.push(...point(rail[0][0]),...point(rail[0][1]),...point(rail.at(-1)[0]),...point(rail.at(-1)[1]));
+        }
+        if(geometry.diagnosticShell){
+          const axis=geometry.diagnosticShell.capAxis,axes=[0,1,2].filter(value=>value!==axis);
+          for(const end of [0,1]){
+            const boundary=geometry.diagnosticShell.rail.map(pair=>point(pair[end]));
+            if(boundary.length>1 && Math.hypot(...boundary[0].map((value,k)=>value-boundary.at(-1)[k]))<.01)boundary.pop();
+            const triangles=THREE.ShapeUtils.triangulateShape(boundary.map(p=>new THREE.Vector2(p[axes[0]],p[axes[1]])),[]);
+            for(const triangle of triangles)for(const index of triangle)vertices.push(...boundary[index]);
+          }
         }
         const color=fits&&!unsupported&&!trimConflict?copy.color:0xd73333;
         const mesh=new THREE.BufferGeometry();mesh.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));
@@ -623,7 +633,7 @@ const generatorPreview = (() => {
         const outline=new THREE.BufferGeometry();outline.setAttribute('position',new THREE.Float32BufferAttribute(lines,3));
         group.add(new THREE.LineSegments(outline,new THREE.LineBasicMaterial({color})));
       }
-      if (geometry.edgeLines?.length) {
+      if (geometry.edgeLines?.length && !geometry.diagnosticShell) {
         // Preview-only recovery for BREP faces whose cutting topology is not
         // yet resolved. Show the real model edges behind selectable guides.
         const coords=[];
@@ -662,7 +672,9 @@ const generatorPreview = (() => {
       if (geometry.previewError) fit.textContent += ' Траектория не определена: ' +
         geometry.previewError + (geometry.auxiliaryCurves?.length
           ? '. Для ручной привязки выберите две кривые и нажмите Enter.'
-          : '. Показаны упрощённые рёбра STEP; автоматический подбор заготовки и размещения недоступен.');
+          : geometry.diagnosticShell
+            ? '. Показана приближённая оболочка STEP; автоматический подбор заготовки и размещения недоступен.'
+            : '. Показаны упрощённые рёбра STEP; автоматический подбор заготовки и размещения недоступен.');
       if(!fits||unsupported||trimConflict||geometry.axis!==1||geometry.auxiliaryCurves?.length||geometry.previewError) fit.className='note crit';
     } else {
       fit.textContent = error || 'Откройте STEP для проверки размещения.';
