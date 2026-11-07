@@ -71,6 +71,7 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 #drop { position: absolute; inset: 0; display: grid; place-items: center; background: color-mix(in srgb, var(--view) 80%, transparent);
   font-size: 18px; font-weight: 600; border: 2px dashed var(--wire); border-radius: 8px; }
 .legend { position: absolute; left: 10px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); pointer-events: none; }
+.legend[hidden] { display: none; }
 .legend i { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 5px; border-radius: 2px; }
 
 .transport { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
@@ -113,17 +114,25 @@ pre.code .ln { color: var(--muted); display: inline-block; min-width: 4.5ch; }
 .row button { padding: 5px 10px; font-size: 13px; }
 .delta-up { color: var(--wire); font-weight: 600; } .delta-down { color: var(--info); font-weight: 600; }
 .tabs button { font-weight: 600; letter-spacing: 0.03em; }
-#panelGen { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-content: start; }
+#panelGen { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-content: start; }
 #panelGen .gn-preview { grid-column: 1 / -1; }
+#panelGen [hidden] { display: none !important; }
+#panelGen .fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 #gnRotate [data-axis="0"] .axis-letter { color: #ff0000; }
 #gnRotate [data-axis="1"] .axis-letter { color: #00ff00; }
 #gnRotate [data-axis="2"] .axis-letter { color: #0000ff; }
 #gnRotate .axis-letter { font-weight: 800; }
+#gnRotate, #gnMove { align-items: center; }
+#gnRotate > span:first-child, #gnMove > span:first-child { flex: 0 0 280px; }
+#gnRotate > button[data-axis], #gnMove > button[data-axis] { flex: 0 0 48px; }
 #gnView { height: 420px; min-height: 260px; position: relative; border-radius: 8px; overflow: hidden; background: var(--view); }
+#gnView .gn-file { position: absolute; top: 8px; left: 8px; z-index: 2; max-width: calc(100% - 16px); padding: 5px; border-radius: 6px; background: var(--panel); }
 #gnView canvas { display: block; width: 100%; height: 100%; }
-#panelGen .gn-result { grid-column: 1 / -1; }
+#gnPlacementProgress, #gnStockProgress { margin-top: 6px; }
+#gnPlacementProgress progress, #gnStockProgress progress { width: 100%; accent-color: var(--wire); }
 .fields select { width: 100%; padding: 4px 6px; font-family: var(--font-num); font-size: 13px; }
 @media (max-width: 860px) { #panelGen { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 700px) { #gnRotate > span:first-child, #gnMove > span:first-child { flex-basis: 100%; } }
 button:disabled, input:disabled { opacity: 0.5; cursor: default; }
 button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
 .state.crit { background: color-mix(in srgb, var(--crit) 20%, transparent); color: var(--crit); }
@@ -146,7 +155,8 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
 <header>
   <h1>Струнная резка</h1>
   <div class="seg tabs" role="group" aria-label="Вкладки">
-    <button id="tabGen" aria-pressed="true">ГЕНЕРАТОР GCODE</button>
+    <button id="gnModeAuto" type="button" aria-pressed="true">АВТО</button>
+    <button id="gnModeManual" type="button" aria-pressed="false">ПОЛУАВТО</button>
     <button id="tabCut" aria-pressed="false">РЕЗКА</button>
   </div>
   <span class="file-name cut-only" id="fileName">пример: W2_auto.gcode</span>
@@ -169,10 +179,43 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
         <button id="gnViewSide" aria-pressed="false">Сбоку · вдоль струны</button>
       </div>
     </div>
-    <div id="gnView" aria-label="Модель, заготовка и рабочая область станка"></div>
+    <div class="row gn-manual" aria-label="Выбор пар направляющих" hidden>
+      <button id="gnGuideMode" type="button" aria-pressed="false">Выбрать кривые в 3D</button>
+      <button id="gnGuideConfirm" type="button" disabled title="Подтвердить две выбранные кривые (или правая кнопка мыши / Enter)">ПОДТВЕРДИТЬ</button>
+      <button id="gnGuideStartMode" type="button" aria-pressed="false">Задать начало реза</button>
+      <button id="gnGuideStartReset" type="button">Сбросить начало</button>
+      <button id="gnGuideUndo" type="button">Отменить пару</button>
+      <button id="gnGuideExport" type="button">Сохранить пары JSON</button>
+      <button id="gnGuideEntryExit" type="button">Проверить вход и выход</button>
+      <button id="gnGuideDiagnostic" type="button">Экспорт траектории (диагностика)</button>
+      <span class="note" id="gnGuideStatus" role="status" aria-live="polite">Откройте STEP с вспомогательными кривыми.</span>
+      <span class="note">Alt + ПКМ — перемещение · Ctrl + ПКМ — поворот · ПКМ — подтвердить пару</span>
+    </div>
+    <div id="gnView" aria-label="Модель, заготовка и рабочая область станка">
+      <div class="mline gn-file">
+        <label class="btn" for="gnInput">Открыть STEP<input type="file" id="gnInput" accept=".stp,.step"></label>
+        <span class="file-name" id="gnFile">файл не выбран</span>
+      </div>
+    </div>
+    <div class="row gn-manual" aria-label="Диагностическая траектория струны" hidden>
+      <label for="gnGuideOperation">Пара для просмотра</label>
+      <select id="gnGuideOperation" disabled aria-label="Выбранная пара кривых"></select>
+      <label for="gnGuideProgress">Проход, %</label>
+      <input id="gnGuideProgress" type="range" min="0" max="100" value="0" step="1" disabled style="flex:1; min-width:110px">
+      <span id="gnGuideProgressText">0%</span>
+    </div>
+    <div class="note gn-manual" id="gnGuideMotion" role="status" hidden>Назначьте пару кривых, чтобы увидеть перемещение струны; это диагностический просмотр, не G-code.</div>
+    <div class="note gn-manual" id="gnGuideEntryExitResult" role="status" aria-live="polite" hidden>Проверка входа/выхода не выполнялась. Не отправляйте движения на станок до подтверждения.</div>
+    <div class="row gn-manual" aria-label="Проверка остатка материала" hidden>
+      <button id="gnStockSimulate" type="button">Смоделировать удаление материала</button>
+      <label for="gnStockStage">Показать остаток после</label>
+      <select id="gnStockStage" disabled></select>
+      <label class="check"><input id="gnStockCloud" type="checkbox" checked> Остаток в 3D</label>
+    </div>
+    <div class="note gn-manual" id="gnStockSimResult" role="status" aria-live="polite" hidden>Объёмная симуляция ещё не выполнялась. Результат носит диагностический характер.</div>
     <div class="note" id="gnEnvelopeLegend"></div>
     <div class="row" id="gnRotate" aria-label="Поворот модели">
-      <span>Модель, шаг 90°:</span>
+      <span>Поворот модели с шагом 90°:</span>
       <button data-axis="0" data-turn="-1" aria-label="Повернуть модель вокруг X на минус 90 градусов"><span class="axis-letter">X</span> ↶</button>
       <button data-axis="0" data-turn="1" aria-label="Повернуть модель вокруг X на 90 градусов"><span class="axis-letter">X</span> ↷</button>
       <button data-axis="1" data-turn="-1" aria-label="Повернуть модель вокруг Y на минус 90 градусов"><span class="axis-letter">Y</span> ↶</button>
@@ -183,7 +226,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       <label>Масштаб, % <input id="gnScale" type="number" min="0.01" step="1" value="100" style="width:85px"></label>
     </div>
     <div class="row" id="gnMove" aria-label="Перемещение модели">
-      <span>Переместить модель, шаг 5 мм:</span>
+      <span>Переместить заготовку и модель, шаг 5 мм:</span>
       <button data-axis="0" data-step="-1" aria-label="Переместить модель по X на минус 5 мм"><span style="color:#ff0000">X</span> −</button>
       <button data-axis="0" data-step="1" aria-label="Переместить модель по X на плюс 5 мм"><span style="color:#ff0000">X</span> +</button>
       <button data-axis="1" data-step="-1" aria-label="Переместить модель по Y на минус 5 мм"><span style="color:#00ff00">Y</span> −</button>
@@ -193,29 +236,36 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       <button id="gnResetOffset">По центру</button>
       <span id="gnOffset">X 0 · Y 0 · Z 0 мм</span>
     </div>
-    <div class="note">X — вдоль струны (красная ось), Y — поперёк (зелёная), Z — вверх (синяя). Смещение задано относительно центра заготовки; заготовка и стол остаются на месте.</div>
+    <div class="note">X — вдоль струны (красная ось), Y — поперёк (зелёная), Z — вверх (синяя). Смещение перемещает модель вместе с заготовкой относительно станка и оси поворотного стола. Авторазмещение рассчитывает допустимые ходы кареток и проверяет результат обычным генератором.</div>
     <div class="note" id="gnFit" role="status">Откройте STEP для проверки размещения.</div>
   </section>
   <section class="box">
-    <h2>Модель</h2>
-    <div class="mline">
-      <label class="btn" for="gnInput">Открыть STEP<input type="file" id="gnInput" accept=".stp,.step"></label>
-      <span class="file-name" id="gnFile">файл не выбран</span>
-    </div>
-    <div class="note">Твёрдое тело с профилями в двух плоскостях, размах вдоль оси Y модели. Файл можно перетащить в это окно.</div>
-  </section>
-  <section class="box">
     <h2>Заготовка</h2>
-    <div class="row"><button id="gnStockFromModel" disabled>По модели +10 мм с каждой стороны</button></div>
+    <div class="row gn-auto"><button id="gnStockFromModel" disabled>По модели +10 мм с каждой стороны</button><button id="gnAutoPlace" type="button" disabled>Авторазмещение: поворот + сдвиг</button></div>
+    <div id="gnStockProgress" class="gn-auto" hidden role="status" aria-live="polite">
+      <div id="gnStockProgressText">Подготовка расчёта заготовки…</div>
+      <progress id="gnStockProgressBar" max="24" value="0" aria-label="Проверено вариантов заготовки"></progress>
+    </div>
+    <div id="gnPlacementProgress" class="gn-auto" hidden role="status" aria-live="polite">
+      <div id="gnPlacementProgressText">Подготовка авторазмещения…</div>
+      <progress id="gnPlacementProgressBar" max="24" value="0" aria-label="Проверено вариантов поворота"></progress>
+    </div>
     <div class="fields">
       <label>Вдоль струны<input id="gnL" type="number" step="0.01" value="340"></label>
       <label>Поперёк струны<input id="gnW" type="number" step="0.01" value="230"></label>
       <label>Высота<input id="gnH" type="number" step="0.01" value="50"></label>
       <label>Низ Z<input id="gnZ" type="number" step="1" value="10"></label>
     </div>
-    <label class="check"><input type="checkbox" id="gnSideEntry"> Вход и выход справа без подъёма над заготовкой (одна деталь, без отверстий и торцевания)</label>
-    <label class="check"><input type="checkbox" id="gnTrim" checked> Торцевать заготовку (стол 90°)</label>
     <div class="note">Размеры заданы при столе 0°. Для листа 340×230×50 мм на ребре введите 50, 340, 230 мм соответственно. При отключении торцевания профиль режется при столе 0°.</div>
+  </section>
+  <section class="box">
+    <h2>Перемещения</h2>
+    <div class="fields">
+      <label>Над заготовкой<input id="gnClear" type="number" step="1" value="20"></label>
+      <label>Отвод торца<input id="gnRetract" type="number" step="1" value="30"></label>
+      <label>Вынос входа<input id="gnLead" type="number" step="1" value="5"></label>
+      <label>Сторона входа<select id="gnSide"><option value="+">+Y</option><option value="-">−Y</option></select></label>
+    </div>
   </section>
   <section class="box">
     <h2>Рез</h2>
@@ -228,21 +278,24 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
     </div>
     <label class="check"><input type="checkbox" id="gnComp" checked> Менять мощность по длине струны</label>
   </section>
-  <section class="box">
-    <h2>Перемещения</h2>
-    <div class="fields">
-      <label>Над заготовкой<input id="gnClear" type="number" step="1" value="20"></label>
-      <label>Отвод торца<input id="gnRetract" type="number" step="1" value="30"></label>
-      <label>Вынос входа<input id="gnLead" type="number" step="1" value="5"></label>
-      <label>Сторона входа<select id="gnSide"><option value="+">+Y</option><option value="-">−Y</option></select></label>
-    </div>
-  </section>
   <section class="box gn-result">
+    <h2>G-code</h2>
+    <label class="check gn-auto"><input type="checkbox" id="gnSideEntry"> Вход и выход справа без подъёма над заготовкой (одна деталь, без отверстий и торцевания)</label>
+    <label class="check"><input type="checkbox" id="gnTrim" checked> Торцевать заготовку</label>
+    <div class="fields">
+      <label>Угол торцевания
+        <select id="gnTrimAngle"><option value="90" selected>B90 — по длине</option><option value="0">B0 — по ширине</option></select>
+      </label>
+      <label>Порядок основных резов
+        <select id="gnCutOrder"><option value="B0_B90">Сначала B0, затем B90</option><option value="B90_B0" selected>Сначала B90, затем B0</option></select>
+      </label>
+    </div>
+    <div class="note" id="gnOrderExplanation">При двух направлениях порядок относится к главным контурам; технологические отверстия и входы проверяются отдельно.</div>
     <div class="row">
       <button id="gnGo" class="primary" disabled>Создать G-code</button>
-      <button id="gnMirror" disabled>Зеркало</button>
-      <button id="gnPair" disabled>Пара: зеркало над обычной</button>
-      <label><input id="gnStockPair" type="checkbox"> Режим ПАРА — предпросмотр и G-code для двух деталей</label>
+      <button id="gnMirror" class="gn-auto" disabled>Зеркало</button>
+      <button id="gnPair" class="gn-auto" disabled>Пара: зеркало над обычной</button>
+      <label class="gn-auto"><input id="gnStockPair" type="checkbox"> Режим ПАРА — предпросмотр и G-code для двух деталей</label>
     </div>
     <div class="file-name" id="gnOut"></div>
     <div class="note" id="gnStatus"></div>
@@ -258,7 +311,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
   <div class="stage">
     <div id="view">
       <div id="drop" hidden>Отпустите файл .gcode</div>
-      <div class="legend">
+      <div class="legend" id="cutLegend">
         <span><i style="background:var(--wire)"></i>струна и след реза</span>
         <span><i style="background:var(--foam)"></i>заготовка</span>
         <span><i style="background:var(--muted)"></i>пути кареток на башнях</span>
@@ -271,6 +324,10 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       </select>
       <input type="range" id="timeline" min="0" max="10000" value="0" aria-label="Время программы">
       <span class="clock" id="clock">0:00 / 0:00</span>
+    </div>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="smoothPreview"> Гладкий профиль по траектории</label>
+      <span class="note" id="resultStatus" role="status" aria-live="polite"></span>
     </div>
     <section class="box">
       <h2>Программа</h2>
@@ -1027,7 +1084,9 @@ let simTime = 0, playing = false, lastFrame = 0;
 
 function readSettings() {
   const n = (id) => parseFloat($(id).value) || 0;
-  return { L: n("sL"), W: n("sW"), H: n("sH"), Z0: n("sZ"), FW: n("mFW"), HT: n("mHT"), VT: n("mVT"),
+  return { L: n("sL"), W: n("sW"), H: n("sH"), Z0: n("sZ"),
+           OX: prog?.stock?.OX||0, OY: prog?.stock?.OY||0, OZ: prog?.stock?.OZ||0,
+           FW: n("mFW"), HT: n("mHT"), VT: n("mVT"),
            angle: n("mAng"), invB: $("invB").checked, laser: $("laser").checked };
 }
 
@@ -1040,7 +1099,11 @@ function parseGcode(text) {
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
     const sm = raw.match(/;\s*STOCK\s+L=([\d.]+)\s+W=([\d.]+)\s+H=([\d.]+)\s+Z0=(-?[\d.]+)/);
-    if (sm) stock = { L: +sm[1], W: +sm[2], H: +sm[3], Z0: +sm[4] };
+    if (sm) {
+      const om=raw.match(/\bOX=(-?[\d.]+)\s+OY=(-?[\d.]+)\s+OZ=(-?[\d.]+)/);
+      stock = { L: +sm[1], W: +sm[2], H: +sm[3], Z0: +sm[4],
+        OX: om?+om[1]:0, OY: om?+om[2]:0, OZ: om?+om[3]:0 };
+    }
     const tm = raw.match(/TRIM BLOCK:\s*L=([\d.]+)\s+W=([\d.]+)\s+H=([\d.]+)/);
     if (tm && !stock) stock = { L: +tm[1], W: +tm[2], H: +tm[3] };
     const cm = raw.match(/;\s*(\*\*\*.*?\*\*\*|\*\*\*.*|- .*)/);
@@ -1095,7 +1158,8 @@ function toLocal(pt, ang) {     // - точка станка -> координа
   return [pt[0] * c - pt[1] * sn, pt[0] * sn + pt[1] * c, pt[2]];
 }
 function clipToBox(p, q, s) {   // - Лян-Барски: часть отрезка p-q внутри заготовки; [s0, s1] либо null
-  const lo = [-s.W / 2, -s.L / 2, s.Z0], hi = [s.W / 2, s.L / 2, s.Z0 + s.H];
+  const lo = [(s.OX||0)-s.W/2,(s.OY||0)-s.L/2,s.Z0+(s.OZ||0)];
+  const hi = [(s.OX||0)+s.W/2,(s.OY||0)+s.L/2,s.Z0+(s.OZ||0)+s.H];
   let t0 = 0, t1 = 1;
   for (let k = 0; k < 3; k++) {
     const d = q[k] - p[k];
@@ -1266,6 +1330,36 @@ try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", appl
 new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
 let machineGroup = null, stockGroup = null, wireMesh = null, carriages = [], trailMesh = null, faceLines = null;
+let smoothGroup = null;
+function clearSmoothPreview() {
+  $("smoothPreview").checked=false;
+  if(smoothGroup){scene.remove(smoothGroup);smoothGroup.geometry.dispose();smoothGroup.material.dispose();smoothGroup=null;}
+  $("cutLegend").hidden=false;
+  if(machineGroup)machineGroup.visible=true;
+}
+$("smoothPreview").addEventListener("change",()=>{
+  if(!$("smoothPreview").checked){clearSmoothPreview();$("resultStatus").textContent="";return;}
+  const surface=prog?.smoothSurface;
+  if(!surface || prog.smoothSettings!==JSON.stringify(readSettings())){clearSmoothPreview();$("resultStatus").textContent="Гладкий профиль доступен после генерации одной детали без отверстий и дополнительных резов с текущими настройками станка.";return;}
+  $("smoothPreview").checked=true;
+  const vertices=[],left=[],right=[],half=surface.fieldWidth/2;
+  for(const pair of surface.towers){
+    const at=x=>{const fraction=(x+half)/surface.fieldWidth;return [x,pair[0][0]+fraction*(pair[1][0]-pair[0][0]),pair[0][1]+fraction*(pair[1][1]-pair[0][1])];};
+    left.push(at(surface.x0));right.push(at(surface.x1));
+  }
+  for(let i=1;i<left.length;i++)vertices.push(...left[i-1],...right[i-1],...left[i],...left[i],...right[i-1],...right[i]);
+  for(const end of [left,right]){
+    const boundary=end.slice();
+    if(boundary.length>1 && Math.hypot(boundary[0][1]-boundary.at(-1)[1],boundary[0][2]-boundary.at(-1)[2])<0.01)boundary.pop();
+    const triangles=THREE.ShapeUtils.triangulateShape(boundary.map(point=>new THREE.Vector2(point[1],point[2])),[]);
+    for(const triangle of triangles)for(const index of triangle)vertices.push(...boundary[index]);
+  }
+  const geometry=new THREE.BufferGeometry();geometry.setAttribute("position",new THREE.Float32BufferAttribute(vertices,3));geometry.computeVertexNormals();
+  smoothGroup=new THREE.Mesh(geometry,new THREE.MeshPhongMaterial({color:0x56a4c8,side:THREE.DoubleSide}));
+  scene.add(smoothGroup);machineGroup.visible=false;$("cutLegend").hidden=true;
+  playing=false;$("play").textContent="Пуск";
+  $("resultStatus").textContent="Приближённый профиль основного прохода по G-code. Торцы построены условно; отходы и другие резы не показаны.";
+});
 function buildScene(s) {
   if (machineGroup) scene.remove(machineGroup);
   machineGroup = new THREE.Group(); scene.add(machineGroup);
@@ -1286,7 +1380,9 @@ function buildScene(s) {
   // - Заготовка (вращается вместе со столом) и след реза в её координатах
   stockGroup = new THREE.Group(); machineGroup.add(stockGroup);
   const foamGeo = new THREE.BoxGeometry(s.W, s.L, s.H);
-  const foam = new THREE.Mesh(foamGeo, mats.foam); foam.position.z = s.Z0 + s.H / 2; stockGroup.add(foam);
+  const foam = new THREE.Mesh(foamGeo, mats.foam);
+  foam.position.set(s.OX||0,s.OY||0,s.Z0+s.H/2+(s.OZ||0));
+  stockGroup.add(foam);
   const edges = new THREE.LineSegments(new THREE.EdgesGeometry(foamGeo), mats.foamEdge); edges.position.copy(foam.position); stockGroup.add(edges);
   if (prog && prog.check) {
     const g1 = new THREE.BufferGeometry(); g1.setAttribute("position", new THREE.BufferAttribute(prog.check.trail, 3));
@@ -1309,7 +1405,7 @@ function countUpTo(times, t) {   // - сколько вершин следа у�
 function setCamera(mode) {
   for (const [id, m] of [["v3d", "3d"], ["vside", "side"], ["vtop", "top"]]) $(id).setAttribute("aria-pressed", String(m === mode));
   const s = readSettings();
-  controls.target.set(0, 0, s.Z0 + s.H / 2);
+  controls.target.set(s.OX||0,s.OY||0,s.Z0+s.H/2+(s.OZ||0));
   // - Камера со стороны оператора: станок стоит развёрнутым на 180° вокруг Z
   if (mode === "3d") camera.position.set(520, 640, 420);
   if (mode === "side") camera.position.set(900, 0, s.Z0 + s.H / 2 + 0.01);
@@ -1402,8 +1498,17 @@ function showWarnings() {
 // ---------------------------------------------------------------------------------------------
 let original = null;        // - исходная программа: { text, name, base }
 let currentText = "", currentName = "", generationStamp = null;
+let previewOnlyProgram=false; // old virtual-preview jobs remain unexportable
+let operatorDirectedProgram=false; // F4 program from operator-confirmed profiles
+function requireMachinableProgram() {
+  if(previewOnlyProgram){
+    showMsg("Это только визуальная траектория F4. Отправка, экспорт и копирование для станка отключены.",true);
+    return false;
+  }
+  return true;
+}
 function generatorSignature() {
-  return JSON.stringify([stepFile?.text, modelRotation, modelOffset, [...document.querySelectorAll('#panelGen input, #panelGen select')].map(e=>[e.id,e.type==='checkbox'?e.checked:e.value])]);
+  return JSON.stringify([generatorMode, stepFile?.text, modelRotation, modelOffset, modelZOffset, generatorPreview.getGuidePairs(),generatorPreview.getGuideStarts(), [...document.querySelectorAll('#panelGen input, #panelGen select')].map(e=>[e.id,e.type==='checkbox'?e.checked:e.value])]);
 }
 function requireCurrentProgram() {
   if (generationStamp !== null && generationStamp !== generatorSignature()) {
@@ -1443,7 +1548,7 @@ function updateTempInfo() {
     (r.hi * f > maxS ? " · часть значений упрётся в максимум" : "");
 }
 function applyTemperature() {
-  if (!original || original.base === null) return;
+  if (!requireMachinableProgram() || !original || original.base === null) return;
   const target = parseFloat($("tVal").value);
   if (!(target > 0)) { $("tNote").textContent = "Введите мощность больше нуля."; return; }
   const maxS = parseFloat($("tMax").value) || Infinity;
@@ -1464,8 +1569,8 @@ if (!isLocalFile) {
   } catch (e) {}
 }
 async function saveProgram() {
-  if (!requireCurrentProgram()) return;
-  if (prog && prog.check.warns.some((w) => w.level === "crit")) { showMsg("Экспорт заблокирован: устраните критические ошибки проверки траектории.", true); return; }
+  if (!requireMachinableProgram() || !requireCurrentProgram()) return;
+  if (!operatorDirectedProgram && prog && prog.check.warns.some((w) => w.level === "crit")) { showMsg("Экспорт заблокирован: устраните критические ошибки проверки траектории.", true); return; }
   const data = currentText.replace(/\r*\n/g, "\r\n");
   const name = currentName.replace(/^пример:\s*/, "");
   // - Страница не знает путь к файлу: окно сохранения открывается в папке STEP, пользователь только подтверждает
@@ -1503,8 +1608,8 @@ async function saveProgram() {
   }
 }
 async function copyProgram() {
-  if (!requireCurrentProgram()) return;
-  if (prog && prog.check.warns.some((w) => w.level === "crit")) { showMsg("Экспорт заблокирован: устраните критические ошибки проверки траектории.", true); return; }
+  if (!requireMachinableProgram() || !requireCurrentProgram()) return;
+  if (!operatorDirectedProgram && prog && prog.check.warns.some((w) => w.level === "crit")) { showMsg("Экспорт заблокирован: устраните критические ошибки проверки траектории.", true); return; }
   try { await navigator.clipboard.writeText(currentText.replace(/\r*\n/g, "\r\n")); $("tNote").textContent = "G-code скопирован. Вставьте его в новый файл .gcode."; }
   catch (e) { $("tNote").textContent = "Копирование не разрешено в этом окне. Откройте локальную копию D:\\1800mm\\wire_sim.html, там есть сохранение файла."; }
 }
@@ -1518,11 +1623,15 @@ $("tCopy").addEventListener("click", copyProgram);
 
 function loadProgram(text, name, opts = {}) {
   if (job) { showMsg("Во время реза программу менять нельзя.", true); return; }
+  previewOnlyProgram=opts.keepOriginal?previewOnlyProgram:!!opts.previewOnly;
+  if(!opts.keepOriginal)operatorDirectedProgram=!!opts.operatorDirected;
   const parsed = parseGcode(text);
+  parsed.smoothSurface=opts.smoothSurface || (opts.keepOriginal ? prog?.smoothSurface : null);
   if (parsed.stock) {
     for (const [id, k] of [["sL", "L"], ["sW", "W"], ["sH", "H"], ["sZ", "Z0"]]) if (parsed.stock[k] !== undefined) $(id).value = parsed.stock[k];
   }
   prog = parsed;
+  parsed.smoothSettings=JSON.stringify(readSettings());
   currentText = text; currentName = name;
   if (!opts.keepOriginal) generationStamp = opts.generationStamp || null;
   if (!opts.keepOriginal) {
@@ -1531,7 +1640,9 @@ function loadProgram(text, name, opts = {}) {
     $("tNote").textContent = "";
   }
   updateTempInfo();
-  $("fileName").textContent = name;
+  $("fileName").textContent = (previewOnlyProgram?"ТОЛЬКО ПРОСМОТР · ":"")+name;
+  $("gStart").disabled=previewOnlyProgram;
+  $("tSave").disabled=$("tCopy").disabled=previewOnlyProgram;
   const t = simTime;
   recheck();
   simTime = opts.keepTime ? Math.min(t, prog.total) : 0;
@@ -1540,6 +1651,7 @@ function loadProgram(text, name, opts = {}) {
 }
 function recheck() {
   if (!prog) return;
+  clearSmoothPreview();
   prog.check = analyse(prog, readSettings());
   buildScene(readSettings());
   showWarnings();
@@ -1801,7 +1913,7 @@ function startPolling() {
   }, POLL_MS);
 }
 function startJob() {
-  if (!requireCurrentProgram()) return;
+  if (!requireMachinableProgram() || !requireCurrentProgram()) return;
   if (!mach.connected || job || !prog) return;
   const dry = $("gDry").checked, lines = buildStream(currentText, dry);
   const hasHome = lines.some((l) => /^\$H/i.test(l.text));
@@ -1835,7 +1947,7 @@ function refreshMachine() {
   chip.textContent = !on ? "нет связи" : mach.state ? (STATES[base] || mach.state) : "жду ответ";
   chip.className = "state " + (!on ? "off" : base === "Alarm" ? "crit" : base === "Idle" ? "ready" : "on");
   $("gHome").disabled = $("gUnlock").disabled = $("gCmd").disabled = !on || !!job;
-  $("gStart").disabled = !on || !!job;
+  $("gStart").disabled = !on || !!job || previewOnlyProgram;
   $("gPause").disabled = !job;
   $("gStop").disabled = !on;
   $("gProg").textContent = job ? "Выполнено строк: " + job.acked + " из " + job.lines.length + (job.dry ? " · холостой прогон" : "") : "";
@@ -1866,16 +1978,218 @@ const Gen = (() => {
     r[i][i] = r[j][j] = 0; r[i][j] = -turn; r[j][i] = turn;
     return r.map((row) => [0,1,2].map((col) => row.reduce((sum, v, k) => sum + v * rotation[k][col], 0)));
   }
+  // Shared STEP-guide correspondence resolver: same centroid/shape matching
+  // already used by guideAnalysis, now applied to explicitly chosen pairs too.
+  // Closed profiles include a duplicated endpoint; phase is searched over 128
+  // unique slots and wraps without a discontinuity at the seam.
+  function matchGuideCurves(a,b) {
+    if(a.closed!==b.closed||a.fixedAxis!==b.fixedAxis||a.fixedAxis<0)
+      throw new StepError("Несовместимая топология профилей");
+    const count=128,axis=a.fixedAxis,coords=[0,1,2].filter(k=>k!==axis);
+    const at=(curve,u)=>{
+      const last=curve.points.length-1;
+      const index=Math.max(0,Math.min(last,u*last)),i=Math.min(last-1,Math.floor(index)),t=index-i;
+      return curve.points[i].map((v,k)=>v+(curve.points[i+1][k]-v)*t);
+    };
+    // Use uniformly sampled centroids, not raw control/sample sums:
+    // closed STEP curves duplicate their seam point and otherwise bias
+    // the matching according to where STEP happened to start the loop.
+    const center=curve=>coords.map(k=>{
+      let sum=0;for(let i=0;i<count;i++)sum+=at(curve,(i+.5)/count)[k];
+      return sum/count;
+    });
+    const ca=center(a),cb=center(b);
+    let best=null;
+    for(const reverse of [false,true])for(let shift=0;shift<(a.closed?count:1);shift++) {
+      let loss=0;
+      for(let i=0;i<count;i+=4){
+        const u=i/count;
+        const v=a.closed
+          ? ((reverse?shift/count-u:shift/count+u)%1+1)%1
+          : reverse?1-u:u;
+        const pa=at(a,u),pb=at(b,v);
+        for(let j=0;j<coords.length;j++) {
+          const d=(pa[coords[j]]-ca[j])-(pb[coords[j]]-cb[j]);
+          loss+=d*d;
+        }
+      }
+      if(!best||loss<best.loss)best={loss,reverse,shift};
+    }
+    const correspondence={reverse:best.reverse,shift:best.shift,
+      shapeRms:Math.sqrt(best.loss/(count/4))};
+    const mapB=u=>a.closed
+      ? ((correspondence.reverse?correspondence.shift/count-u:
+        correspondence.shift/count+u)%1+1)%1
+      : correspondence.reverse?1-u:u;
+    return {correspondence,mapB,at};
+  }
+  // User-selected beginning of a manually paired guide operation.
+  // A closed profile may start at any normalized point on curve A.
+  // An open profile must start at an end (otherwise one continuous pass
+  // cannot cover the entire curve without a second unvalidated move).
+  function resolveGuideStart(a,b,startU=0) {
+    const matched=matchGuideCurves(a,b);
+    if(!Number.isFinite(startU)||startU<0||startU>1)
+      throw new StepError("Начало реза должно лежать на выбранной направляющей");
+    const u0=a.closed?(startU===1?0:startU):(startU>=.5?1:0);
+    const mapA=t=>a.closed?((u0+t)%1+1)%1:(u0===1?1-t:t);
+    const mapB=t=>matched.mapB(mapA(t));
+    return {correspondence:matched.correspondence,startU:u0,
+      reverseA:!a.closed&&u0===1,mapA,mapB};
+  }
+  function diagnosticClosedShell(model) {
+    if(model.facesRaw.length!==3)return null;
+    const sides=model.facesRaw.filter(face=>face.edgeIds.length===4 && new Set(face.edgeIds).size===3);
+    if(sides.length!==1)return null;
+    const side=sides[0],counts=new Map();
+    for(const id of side.edgeIds)counts.set(id,(counts.get(id)||0)+1);
+    const closed=[...counts].filter(([id,count])=>count===1 && model.edges.has(id) && dist(...model.edges.get(id))<1e-5).map(([id])=>id);
+    if(closed.length!==2 || ![...counts.values()].includes(2))return null;
+    const caps=model.facesRaw.filter(face=>face!==side);
+    if(!closed.every(id=>caps.some(face=>face.edgeIds.length===1 && face.edgeIds[0]===id)))return null;
+    const surf=model.surface(side.surf);
+    if(surf.pv!==1)return null;
+    const count=256,sidePoints=[];
+    for(let i=0;i<=count;i++){
+      const u=surf.udomain[0]+(surf.udomain[1]-surf.udomain[0])*i/count;
+      sidePoints.push([surf.at(u,surf.vdomain[0]),surf.at(u,surf.vdomain[1])]);
+    }
+    if([0,1].some(end=>dist(sidePoints[0][end],sidePoints[count][end])>.01))return null;
+    const fixedAxis=[0,1,2].find(axis=>[0,1].every(end=>{
+      const values=sidePoints.map(pair=>pair[end][axis]);
+      return Math.max(...values)-Math.min(...values)<.01;
+    }));
+    if(fixedAxis===undefined)return null;
+    const curves=closed.map(id=>{
+      const edge=model.entities.get(id), curve=model.get(edge.args[3]);
+      return isTyped(curve)&&curve.name==='B_SPLINE_CURVE_WITH_KNOTS' ? new WireframeModel(model).curve(edge.args[3].id) : null;
+    });
+    if(curves.some(curve=>!curve))return null;
+    const matches=(end,curve)=>{
+      const points=Array.from({length:count+1},(_,i)=>curve.at(i/count));
+      return sidePoints.every(pair=>{
+        const point=pair[end];let nearest=Infinity;
+        for(let i=1;i<points.length;i++){
+          const start=points[i-1],delta=points[i].map((value,k)=>value-start[k]);
+          const length=delta.reduce((sum,value)=>sum+value*value,0);
+          const fraction=length?Math.max(0,Math.min(1,delta.reduce((sum,value,k)=>sum+value*(point[k]-start[k]),0)/length)):0;
+          nearest=Math.min(nearest,dist(point,start.map((value,k)=>value+fraction*delta[k])));
+        }
+        return nearest<.15;
+      });
+    };
+    if(!((matches(0,curves[0])&&matches(1,curves[1]))||(matches(0,curves[1])&&matches(1,curves[0]))))return null;
+    return {rail:sidePoints.map(pair=>pair.map(p=>[-p[1],p[0],p[2]])),capAxis:fixedAxis===0?1:fixedAxis===1?0:2};
+  }
+  // Approximate trimmed STEP faces for display only; never used for toolpaths.
+  function diagnosticFaceBoundaries(model) {
+    const boundaries=[], curves=new WireframeModel(model), cache=new Map();
+    const edgePoints=id=>{
+      if(cache.has(id))return cache.get(id);
+      const edge=model.entities.get(id),ends=model.edges.get(id);
+      if(!edge||!ends)return null;
+      try {
+        const c=curves.curve(edge.args[3].id),forward=dist(c.start,ends[0])+dist(c.end,ends[1]),reverse=dist(c.end,ends[0])+dist(c.start,ends[1]);
+        if(Math.min(forward,reverse)>.04)return null;
+        let points=Array.from({length:65},(_,i)=>c.at(i/64));
+        if(reverse<forward)points.reverse();
+        cache.set(id,points);return points;
+      } catch(e){return null;}
+    };
+    for(const face of model.facesRaw){
+      const raw=model.entities.get(face.fid);
+      if(raw.args[1].length!==1||model.get(raw.args[1][0]).name!=='FACE_OUTER_BOUND')continue;
+      const todo=face.edgeIds.map(id=>edgePoints(id));
+      if(todo.some(x=>!x)||todo.length<3)continue;
+      const segments=[todo.shift().slice()];
+      let path=segments[0].slice(),guard=0;
+      while(todo.length&&guard++<face.edgeIds.length){
+        const end=path.at(-1), ranked=todo.map((p,i)=>({i,d:Math.min(dist(end,p[0]),dist(end,p.at(-1)))})).sort((a,b)=>a.d-b.d);
+        if(!ranked.length||ranked[0].d>.02)break;
+        const i=ranked[0].i;
+        let next=todo.splice(i,1)[0];if(dist(end,next.at(-1))<dist(end,next[0]))next=next.slice().reverse();
+        segments.push(next);path.push(...next.slice(1));
+      }
+      if(todo.length||dist(path[0],path.at(-1))>.02)continue;
+      path.pop();
+      const boundary=path.map(p=>[-p[1],p[0],p[2]]);
+      if(segments.length===4){
+        // Coons interpolation follows all four sampled STEP boundaries and
+        // preserves their curvature, unlike a flat projected polygon.
+        const [c0,d1,c1back,d0back]=segments,c1=c1back.slice().reverse(),d0=d0back.slice().reverse();
+        const p00=c0[0],p10=c0.at(-1),p11=c1.at(-1),p01=c1[0],grid=[];
+        for(let j=0;j<=32;j++){
+          const v=j/32,row=[];
+          for(let i=0;i<=32;i++){
+            const u=i/32,k=i*2,l=j*2;
+            row.push(p00.map((_,a)=>{
+              const bilinear=(1-u)*(1-v)*p00[a]+u*(1-v)*p10[a]+u*v*p11[a]+(1-u)*v*p01[a];
+              return (1-v)*c0[k][a]+v*c1[k][a]+(1-u)*d0[l][a]+u*d1[l][a]-bilinear;
+            }).map(p=>p));
+          }
+          grid.push(row.map(p=>[-p[1],p[0],p[2]]));
+        }
+        boundary.patch=grid;
+      }
+      boundaries.push(boundary);
+    }
+    return boundaries;
+  }
   function previewGeometry(text, rotation = identityRotation(), scale = 1, tolerance = 0.1) {
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
-    const { outer, holes, secondaryContours, axis, wireframe } = new Model(text, rotation, scale, tolerance).build();
+    const model = new Model(text, rotation, scale, tolerance);
+    const auxiliaryCurves = model.wireframe ? [] : model.auxiliaryCurves();
+    let built, previewError = null;
+    try { built = model.build(); }
+    catch(e) {
+      // The toolpath topology may be ambiguous; editing its guide selection
+      // must still be possible. This is a preview-only wireframe fallback.
+      if (!model.edges.size && !auxiliaryCurves.length) throw e;
+      previewError = e.message;
+    }
+    const {outer=[], holes=[], secondaryContours=[], axis=1, wireframe=false} = built || {};
+    let guideAnalysis = null, guideKinematics = null;
+    try {
+      if (!model.wireframe && auxiliaryCurves.length) {
+        guideAnalysis = model.guideAnalysis();
+        guideKinematics = model.guideKinematics(CONFIG.FieldWidth);
+      }
+    } catch(e) {
+      // Analysis is advisory and must not prevent manual curve selection.
+      if (!previewError) previewError = e.message;
+    }
     const sampled = outer.map(([face]) => sampleFace(face, face.t0, face.t1, 0.05, 5));
-    const rails = [...outer, ...holes.flat(), ...secondaryContours.flatMap(g=>g.contour)].map(([face]) => sampleFace(face, face.t0, face.t1, 0.01, 2)
-      .map((pair) => pair.map((p) => [-p[1], p[0], p[2]])));
-    const points = sampled.flat(2).map(p => [-p[1],p[0],p[2]]);
-    const low = [0,1,2].map((k) => Math.min(...points.map((p) => p[k])));
-    const high = [0,1,2].map((k) => Math.max(...points.map((p) => p[k])));
-    return { rails, axis, sampled, wireframe: !!wireframe, secondaryCount: secondaryContours.length, center: low.map((v,k) => (v+high[k])/2), size: low.map((v,k) => high[k]-v) };
+    const rails = [...outer, ...holes.flat(), ...secondaryContours.flatMap(g=>g.contour)].map(([face]) =>
+      sampleFace(face, face.t0, face.t1, 0.01, 2)
+        .map(pair => pair.map(p => [-p[1],p[0],p[2]])));
+    let diagnosticShell=null;
+    if(!built)try{diagnosticShell=diagnosticClosedShell(model);}catch(e){diagnosticShell=null;}
+    const diagnosticFaces=!built&&!diagnosticShell ? diagnosticFaceBoundaries(model) : [];
+    let bevelCandidates=[];
+    if(!built&&!model.wireframe)try{bevelCandidates=model.verticalBevels();}catch(e){/* advisory only */}
+    const edgeLines = [];
+    if (!built) for (const ends of model.edges.values()) {
+      if (ends.length===2 && ends.every(p=>p.every(Number.isFinite)))
+        edgeLines.push(ends.map(p=>[-p[1],p[0],p[2]]));
+    }
+    // Stock placement uses the BREP boundary where available; for the manual
+    // recovery preview use STEP edge endpoints, not unbounded surface poles.
+    let points = sampled.flat(2).map(p => [-p[1],p[0],p[2]]);
+    if (!points.length && diagnosticShell) points = diagnosticShell.rail.flat();
+    if (!points.length && diagnosticFaces.length) points = diagnosticFaces.flat();
+    if (!points.length) points = edgeLines.flat();
+    if (!points.length) points = auxiliaryCurves.flatMap(c =>
+      c.points.map(p=>[-p[1],p[0],p[2]]));
+    if (!points.length) throw new StepError("В STEP нет геометрии для предпросмотра");
+    const low=[0,1,2].map(k=>Math.min(...points.map(p=>p[k])));
+    const high=[0,1,2].map(k=>Math.max(...points.map(p=>p[k])));
+    const closedShell=built&&outer.length===1&&outer[0][0].closed&&!holes.length
+      ? {rail:rails[0],capAxis:axis===0?1:axis===1?0:2} : null;
+    return {rails,edgeLines,diagnosticShell,diagnosticFaces,closedShell,bevelCandidates,previewError,diagnosticOnly:!!previewError,
+      axis, sampled, wireframe:!!wireframe, auxiliaryCurves, guideAnalysis,
+      guideKinematics, secondaryCount:secondaryContours.length,
+      center:low.map((v,k)=>(v+high[k])/2),
+      size:low.map((v,k)=>high[k]-v)};
   }
 
   function pairPlacement(zsA, zsB, zc, span, stockHeight, bottomZ, kerf) {
@@ -2039,9 +2353,124 @@ const Gen = (() => {
         }
         this.facesRaw.push({ fid, surf: f.args[2], edgeIds });
       }
+      this.auxiliaryCurveRefs = [...new Set([...this.entities.values()]
+        .filter(e=>isTyped(e)&&e.name==="GEOMETRIC_CURVE_SET")
+        .flatMap(e=>e.args[1].map(ref=>ref.id)))];
       this.wireframe = this.facesRaw.length === 0;
       if(this.wireframe && ![...this.entities.values()].some(e=>isTyped(e)&&e.name==="GEOMETRIC_CURVE_SET"))
         throw new StepError("В STEP нет ни граней, ни GEOMETRIC_CURVE_SET для построения траекторий");
+    }
+    // Standalone presentation/design curves are not part of the BREP edge topology.
+    // Preserve them explicitly even when a solid body is present (F4-1 STEP).
+    auxiliaryCurves() {
+      return this.auxiliaryCurveRefs.map(id=>{
+        const e=this.entities.get(id);
+        if(!isTyped(e)||e.name!=="B_SPLINE_CURVE_WITH_KNOTS")
+          throw new StepError("Вспомогательная кривая #"+id+": пока поддерживаются только B-spline");
+        const degree=e.args[1], refs=e.args[2], mult=e.args[6], knots=e.args[7];
+        if(!Number.isInteger(degree)||degree<1||!Array.isArray(refs)||!Array.isArray(mult)||!Array.isArray(knots))
+          throw new StepError("Вспомогательная кривая #"+id+": некорректная B-spline");
+        const U=expandKnots(knots,mult), count=refs.length, lo=U[degree],hi=U[count];
+        if(U.length!==count+degree+1||!Number.isFinite(lo)||!Number.isFinite(hi)||hi<=lo)
+          throw new StepError("Вспомогательная кривая #"+id+": некорректные узлы");
+        const controls=refs.map(ref=>this.point(ref)), samples=[];
+        const sampleCount=Math.max(64,Math.min(512,count*3));
+        for(let i=0;i<=sampleCount;i++){
+          const t=i===sampleCount?hi:lo+(hi-lo)*i/sampleCount;
+          const span=findSpan(count-1,degree,t,U), N=basis(span,t,degree,U), p=[0,0,0];
+          for(let j=0;j<=degree;j++)for(let k=0;k<3;k++)
+            p[k]+=N[j]*controls[span-degree+j][k];
+          if(p.some(v=>!Number.isFinite(v)))throw new StepError("Вспомогательная кривая #"+id+": ошибка вычисления");
+          samples.push(p);
+        }
+        const ranges=[0,1,2].map(k=>Math.max(...samples.map(p=>p[k]))-Math.min(...samples.map(p=>p[k])));
+        const fixedAxis=ranges.findIndex(v=>v<.05);
+        return {id,points:samples,closed:dist(samples[0],samples.at(-1))<.05,
+          fixedAxis,range:ranges};
+      });
+    }
+    // STEP guide curves describe toolpath end sections, not extra solids.
+    // Pair only sections on parallel planes. A pairing is diagnostic until
+    // a volumetric stock-removal and collision check has certified it.
+    guideAnalysis() {
+      const curves=this.auxiliaryCurves();
+      const pairs=[],unpaired=[],ambiguous=[];
+      for(const axis of [0,1,2]) {
+        const group=curves.filter(c=>c.fixedAxis===axis);
+        if(!group.length)continue;
+        if(group.length!==2) {ambiguous.push({axis,ids:group.map(c=>c.id),reason:"Ожидаются ровно две направляющие в параллельных плоскостях"});continue;}
+        const [a,b]=group,va=a.points[0][axis],vb=b.points[0][axis],span=Math.abs(va-vb);
+        if(span<.1){ambiguous.push({axis,ids:[a.id,b.id],reason:"Плоскости направляющих совпадают"});continue;}
+        if(a.closed!==b.closed){ambiguous.push({axis,ids:[a.id,b.id],reason:"Одна кривая замкнута, другая разомкнута"});continue;}
+        const {correspondence}=matchGuideCurves(a,b);
+        pairs.push({axis,ids:[a.id,b.id],planes:[va,vb],span,closed:a.closed,
+          correspondence,
+          status:"candidate"});
+      }
+      for(const c of curves)if(c.fixedAxis<0)unpaired.push({id:c.id,reason:"Кривая не лежит в координатной плоскости"});
+      return {pairs,unpaired,ambiguous,count:curves.length};
+    }
+    // Candidate hot-wire kinematics for paired planar guides. All motions are
+    // diagnostic only: stock removal, entry paths and swept-volume safety have
+    // NOT been certified. Do not feed these samples into Program.travel.
+    guideKinematics(fieldWidth = 370, sampleCount = 128) {
+      if(!Number.isFinite(fieldWidth)||fieldWidth<=0||!Number.isInteger(sampleCount)||sampleCount<8||sampleCount>4096)
+        throw new StepError("Некорректные параметры расчёта направляющих");
+      const analysis=this.guideAnalysis(),curves=new Map(this.auxiliaryCurves().map(c=>[c.id,c]));
+      const allPoints=[...this.edges.values()].flat().concat([...curves.values()].flatMap(c=>c.points));
+      const origin=[0,1,2].map(k=>{const v=allPoints.map(p=>p[k]);return (Math.min(...v)+Math.max(...v))/2;});
+      const result=[];
+      const at=(curve,u)=>{
+        const index=Math.min(curve.points.length-1,Math.max(0,u*(curve.points.length-1)));
+        const i=Math.floor(index),f=index-i;
+        const a=curve.points[i],b=curve.points[Math.min(i+1,curve.points.length-1)];
+        return a.map((x,k)=>x+(b[k]-x)*f);
+      };
+      for(const pair of analysis.pairs){
+        // The two machine towers are at -FW/2 and +FW/2 along the wire.
+        // Rotation B90 makes model X the wire direction; B0 uses model Y.
+        const [a,b]=pair.ids.map(id=>curves.get(id));
+        const along=pair.axis,cross=along===1?0:1;
+        if(along===2)continue; // horizontal hot wire cannot span vertical Z
+        const aPlane=pair.planes[0]-origin[along],bPlane=pair.planes[1]-origin[along];
+        const den=bPlane-aPlane;
+        const transverseCenter=origin[cross],zCenter=origin[2];
+        const samples=[],sequenceLength=pair.closed?sampleCount:sampleCount+1;
+        const mapB=u=>{
+          const {reverse,shift}=pair.correspondence;
+          if(pair.closed) {
+            const offset=shift/128;
+            return ((reverse?offset-u:offset+u)%1+1)%1;
+          }
+          return reverse?1-u:u;
+        };
+        let maxDifferential=0,maxCross=0,maxHeight=0,minRelativeZ=Infinity,maxRelativeZ=-Infinity;
+        for(let i=0;i<sequenceLength;i++) {
+          const u=i/sampleCount,pa=at(a,u),pb=at(b,mapB(u));
+          const crossA=pa[cross]-transverseCenter,crossB=pb[cross]-transverseCenter;
+          const za=pa[2]-zCenter,zb=pb[2]-zCenter;
+          const interp=(v0,v1,alongPosition)=>v0+(v1-v0)*(alongPosition-aPlane)/den;
+          const left=[interp(crossA,crossB,-fieldWidth/2),interp(za,zb,-fieldWidth/2)];
+          const right=[interp(crossA,crossB,fieldWidth/2),interp(za,zb,fieldWidth/2)];
+          if(![...left,...right].every(Number.isFinite))
+            throw new StepError("Направляющие #"+pair.ids.join("/")+": некорректная экстраполяция струны");
+          maxDifferential=Math.max(maxDifferential,Math.hypot(left[0]-right[0],left[1]-right[1]));
+          maxCross=Math.max(maxCross,Math.abs(left[0]),Math.abs(right[0]));
+          maxHeight=Math.max(maxHeight,Math.abs(left[1]),Math.abs(right[1]));
+          minRelativeZ=Math.min(minRelativeZ,left[1],right[1]);
+          maxRelativeZ=Math.max(maxRelativeZ,left[1],right[1]);
+          samples.push({u,left,right,profileA:pa,profileB:pb});
+        }
+        result.push({ids:pair.ids,axis:along,angle:along===1?0:90,closed:pair.closed,
+          span:pair.span,wireFieldWidth:fieldWidth,transverseCenter,zCenter,
+          samples,maxDifferential,maxCross,maxHeight,minRelativeZ,maxRelativeZ,
+          requiredVerticalTravel:maxRelativeZ-minRelativeZ,
+          fitsHorizontalTravel:maxCross<=CONFIG.HorizontalTravel/2+1e-7,
+          fitsVerticalTravel:maxRelativeZ-minRelativeZ<=CONFIG.VerticalTravel+1e-7,
+          status:"diagnostic_only"});
+      }
+      return {operations:result,origin,ambiguous:analysis.ambiguous,unpaired:analysis.unpaired,
+        safeForGcode:false};
     }
     // Identify distinct cutting directions from the STEP ruled surfaces.  This
     // is diagnostic only: a direction is not yet an executable cutting operation.
@@ -2094,6 +2523,30 @@ const Gen = (() => {
       }
       return groups;
     }
+    // Identify oblique vertical planar faces without assuming STEP entity IDs.
+    // A candidate is geometry for a future final trim, not permission to cut.
+    verticalBevels() {
+      const result=[];
+      for(const raw of this.facesRaw){
+        const surf=this.surface(raw.surf);
+        if(surf.pu!==1||surf.pv!==1||surf.nu!==1||surf.nv!==1)continue;
+        const p=surf.P[0][0],u=surf.P[1][0].map((v,i)=>v-p[i]),v=surf.P[0][1].map((x,i)=>x-p[i]);
+        const n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]],length=Math.hypot(...n);
+        if(length<1e-8)continue;
+        const normal=n.map(x=>x/length);
+        if(Math.abs(normal[2])>1e-6||Math.abs(normal[0])<.01||Math.abs(normal[1])<.01)continue;
+        if(surf.P.flat().some(q=>Math.abs(q.reduce((sum,x,i)=>sum+(x-p[i])*normal[i],0))>.001))continue;
+        const vertices=raw.edgeIds.flatMap(id=>this.edges.get(id)||[]);
+        if(vertices.length<6||vertices.some(q=>Math.abs(q.reduce((sum,x,i)=>sum+(x-p[i])*normal[i],0))>.02))continue;
+        const z=vertices.map(q=>q[2]);
+        if(Math.max(...z)-Math.min(...z)<1)continue;
+        const direction=[normal[1],-normal[0]];
+        let angle=Math.atan2(direction[0],-direction[1])*180/Math.PI;
+        angle=((angle%180)+180)%180;
+        result.push({face:raw.fid,angle,normal,point:p,edges:raw.edgeIds.slice()});
+      }
+      return result;
+    }
     // --- Ось размаха: единственная ось, по которой вершины лежат ровно в двух плоскостях
     spanAxis() {
       const points=[...this.edges.values()].flat();
@@ -2117,7 +2570,7 @@ const Gen = (() => {
           const surf=this.surface(raw.surf),um=sum2(surf.udomain)/2,vm=sum2(surf.vdomain)/2;
           return [[surf.pu,surf.at(surf.udomain[0],vm),surf.at(surf.udomain[1],vm)],
                   [surf.pv,surf.at(um,surf.vdomain[0]),surf.at(um,surf.vdomain[1])]]
-            .some(([degree,a,b])=>degree===1&&dist(a,b)>1&&Math.abs((b[axis]-a[axis])/dist(a,b))>.99);
+            .some(([degree,a,b])=>degree===1&&dist(a,b)>1&&Math.abs((b[axis]-a[axis])/dist(a,b))>.9);
         }).length;
         return {axis,lo,hi,caps,score};
       });
@@ -2198,8 +2651,59 @@ const Gen = (() => {
       const closed=dist(A(tDom[0]),A(tDom[1]))<.02&&dist(B(tDom[0]),B(tDom[1]))<.02;
       return {A,B,t0:tDom[0],t1:tDom[1],closed,dir,source:raw.fid};
     }
+    // A three-face solid can have ONE closed exterior skin. Its seam vertices
+    // alone cannot identify the span or distinguish the skin from a bore.
+    closedExterior() {
+      if(this.facesRaw.length!==3)return null;
+      const sides=this.facesRaw.filter(f=>f.edgeIds.length===4&&new Set(f.edgeIds).size===3);
+      if(sides.length!==1)return null;
+      const side=sides[0],caps=this.facesRaw.filter(f=>f!==side);
+      if(!caps.every(f=>f.edgeIds.length===1))return null;
+      const capIds=caps.map(f=>f.edgeIds[0]);
+      if(new Set(capIds).size!==2||!capIds.every(id=>side.edgeIds.filter(e=>e===id).length===1&&dist(...this.edges.get(id))<1e-6))return null;
+      const seam=side.edgeIds.filter(id=>!capIds.includes(id));
+      if(seam.length!==2||seam[0]!==seam[1])return null;
+      // Require a real solid shell and outer bounds, not two internal loops.
+      const solid=[...this.entities.values()].some(e=>isTyped(e)&&e.name==='MANIFOLD_SOLID_BREP'&&(()=>{
+        const shell=this.get(e.args[1]);
+        return shell?.name==='CLOSED_SHELL'&&shell.args[1].length===3&&shell.args[1].every(r=>this.facesRaw.some(f=>f.fid===r.id));
+      })());
+      if(!solid||!this.facesRaw.every(f=>this.entities.get(f.fid).args[1].every(r=>this.get(r).name==='FACE_OUTER_BOUND')))return null;
+      const surf=this.surface(side.surf);
+      // Two controls across the span prove straight generators. Do not accept
+      // piecewise-linear spans or rational weights that alter correspondence.
+      if(surf.pv!==1||surf.nv!==1||surf.V.length!==4||surf.w.some(row=>row.some(w=>Math.abs(w-1)>1e-12)))return null;
+      const ends=[0,1].map(k=>surf.P.map(row=>row[k]));
+      const axis=[0,1,2].find(k=>ends.every(points=>points.every(p=>Math.abs(p[k]-points[0][k])<1e-6))&&Math.abs(ends[0][0][k]-ends[1][0][k])>1);
+      const upMachine=this.rotation.map(row=>row[2]),upRaw=[upMachine[1],-upMachine[0],upMachine[2]];
+      if(axis===undefined||Math.abs(upRaw[axis])>.999)return null;
+      // Check complete spline definitions, not a sampled visual resemblance.
+      const matches=(points,id)=>{
+        const curve=this.get(this.entities.get(id).args[3]);
+        if(curve?.name!=='B_SPLINE_CURVE_WITH_KNOTS'||curve.args[1]!==surf.pu||curve.args[2].length!==points.length)return false;
+        const knots=expandKnots(curve.args[7],curve.args[6]);
+        return knots.length===surf.U.length&&knots.every((v,i)=>Math.abs(v-surf.U[i])<1e-12)&&curve.args[2].every((r,i)=>dist(this.point(r),points[i])<1e-6);
+      };
+      const order=ends.map(points=>capIds.findIndex(id=>matches(points,id)));
+      if(order.some(i=>i<0)||order[0]===order[1])return null;
+      for(let k=0;k<2;k++){
+        const cap=this.surface(caps[order[k]].surf),plane=ends[k][0][axis];
+        if(cap.P.some(row=>row.some(p=>Math.abs(p[axis]-plane)>1e-6)))return null;
+        if(dist(ends[k][0],ends[k].at(-1))>1e-6)return null;
+      }
+      const seamEnds=this.edges.get(seam[0]);
+      if(![seamEnds,seamEnds.slice().reverse()].some(pair=>pair.every((p,k)=>dist(p,ends[k][0])<1e-6)))return null;
+      const low=ends[0][0][axis]<ends[1][0][axis]?0:1;
+      const A=t=>surf.at(t,surf.vdomain[low]),B=t=>surf.at(t,surf.vdomain[1-low]);
+      // Retain every spline knot as a mandatory sampling stop.
+      const breaks=[...new Set(surf.U)].filter(t=>t>=surf.udomain[0]&&t<=surf.udomain[1]);
+      const face={A,B,t0:surf.udomain[0],t1:surf.udomain[1],closed:true,skew:0,breaks,source:side.fid};
+      return {outer:[[face,true]],holes:[],secondaryContours:[],axis,planeA:ends[low][0][axis],planeB:ends[1-low][0][axis]};
+    }
     build() {
       if(this.wireframe)return new WireframeModel(this).build();
+      const exterior=this.closedExterior();
+      if(exterior)return exterior;
       const [axis, planeA, planeB] = this.spanAxis();
       const outer = [], holes = [], handled = new Set();
       for (const raw of this.facesRaw) {
@@ -2272,17 +2776,19 @@ const Gen = (() => {
       const sDom = spanIsU ? surf.udomain : surf.vdomain, tDom = spanIsU ? surf.vdomain : surf.udomain;
       const at = (s, t) => (spanIsU ? surf.at(s, t) : surf.at(t, s));
 
-      // - Значения параметра размаха в плоскостях профилей (координата линейна по параметру размаха)
-      const c0 = at(sDom[0], sum2(tDom) / 2)[axis], c1 = at(sDom[1], sum2(tDom) / 2)[axis];
-      const sA = sDom[0] + (planeA - c0) / (c1 - c0) * (sDom[1] - sDom[0]);
-      const sB = sDom[0] + (planeB - c0) / (c1 - c0) * (sDom[1] - sDom[0]);
-      for (const t of tDom) {
-        if (Math.abs(at(sA, t)[axis] - planeA) > 1e-4 || Math.abs(at(sB, t)[axis] - planeB) > 1e-4) {
-          throw new StepError("Поверхность не линейчатая вдоль размаха: вырезать её проволокой между профилями нельзя");
-        }
-      }
-      const railA = (t) => at(sA, t);
-      let railB = (t) => at(sB, t);
+      const railAtPlane = (plane,t) => {
+        const a=at(sDom[0],t),b=at(sDom[1],t),den=b[axis]-a[axis];
+        if(Math.abs(den)<1e-9)throw new StepError("Образующая грани параллельна плоскости торца");
+        const fraction=(plane-a[axis])/den;
+        if(fraction < -1e-5 || fraction > 1+1e-5)
+          throw new StepError("Плоскость торца находится за пределами поверхности грани");
+        const point=at(sDom[0]+fraction*(sDom[1]-sDom[0]),t);
+        if(Math.abs(point[axis]-plane)>1e-4)
+          throw new StepError("Не удалось точно пересечь образующую с плоскостью торца");
+        return point;
+      };
+      const railA = (t) => railAtPlane(planeA,t);
+      let railB = (t) => railAtPlane(planeB,t);
 
       // - Границы по t по рёбрам в плоскостях профилей
       let endsA = [], endsB = [], closed = false;
@@ -2359,14 +2865,14 @@ const Gen = (() => {
         const sideEdges = [];
         for (const eid of edgeIds) {
           const [v1, v2] = this.edges.get(eid);
-          if (Math.abs(v1[axis] - planeA) < 1e-3 && Math.abs(v2[axis] - planeB) < 1e-3) sideEdges.push([v1, v2]);
-          else if (Math.abs(v2[axis] - planeA) < 1e-3 && Math.abs(v1[axis] - planeB) < 1e-3) sideEdges.push([v2, v1]);
+          if (Math.abs(v1[axis] - planeA) < .01 && Math.abs(v2[axis] - planeB) < .01) sideEdges.push([v1, v2]);
+          else if (Math.abs(v2[axis] - planeA) < .01 && Math.abs(v1[axis] - planeB) < .01) sideEdges.push([v2, v1]);
         }
         const cornersA = t0 <= t1 ? [endsA[0], endsA[1]] : [endsA[1], endsA[0]];
         const cornersB = u0 <= u1 ? [endsB[0], endsB[1]] : [endsB[1], endsB[0]];
         for (const k of [0, 1]) {
           if (!sideEdges.some(([sa, sb]) => dist(cornersA[k], sa) < 0.01 && dist(cornersB[k], sb) < 0.01)) {
-            throw new StepError("Углы грани в плоскостях профилей не соединены боковым ребром: соответствие направляющих неоднозначно");
+            throw new StepError("Грань #"+faceId+": углы в плоскостях профилей не соединены боковым ребром: соответствие направляющих неоднозначно");
           }
         }
         if (skew > 1e-6) {
@@ -2393,7 +2899,7 @@ const Gen = (() => {
             for (const t of checks) {
             const a=railA(t),b=railB(t);
             for (const f of [.25,.5,.75]) {
-              const point=a.map((v,k)=>v+f*(b[k]-v)), s=sA+f*(sB-sA), curve=u=>at(s,u);
+              const point=a.map((v,k)=>v+f*(b[k]-v)), plane=planeA+f*(planeB-planeA), curve=u=>railAtPlane(plane,u);
               // Check the actual synchronized surface parameter first: a
               // narrow trailing edge can fall between the coarse search grid.
               const direct=dist(curve(t),point);
@@ -2829,10 +3335,12 @@ const Gen = (() => {
   const rotate = (cfg, angle) => command("G00", "B" + fix2(angle), cfg.FeedRateRotate);
   const travel = (cfg, kind, yl, zl, yr, zr) => (kind === "cut" ? command("G01", travelPosition(yl, zl, yr, zr), cfg.FeedRateCut) : command("G00", travelPosition(yl, zl, yr, zr), cfg.FeedRateMove));
 
+  let placementProbeDepth=0; // private: never export unvalidated probe moves
   class Program {   // - Подстраивает мощность под длину проволоки: S = WireMinPower * длина / FieldWidth, не больше WireMaxPower
     constructor(cfg, compensate, powerStep) {
       this.cfg = cfg; this.compensate = compensate; this.powerStep = powerStep;
       this.pos = null; this.power = cfg.WireMinPower; this.minPower = this.maxPower = this.power; this.changes = 0; this.clipped = false;
+      this.probeTargets = cfg.PlacementProbe ? [] : null;
     }
     wireLength(pos) { const a = pos[0] - pos[2], b = pos[1] - pos[3]; return Math.sqrt(this.cfg.FieldWidth ** 2 + a * a + b * b); }
     powerFor(length) {
@@ -2843,7 +3351,9 @@ const Gen = (() => {
     travel(kind, yl, zl, yr, zr) {
       const target = [yl, zl, yr, zr];
       const halfY = this.cfg.HorizontalTravel / 2;
-      if (!target.every(Number.isFinite) || Math.abs(yl) > halfY || Math.abs(yr) > halfY || Math.min(zl, zr) < 0 || Math.max(zl, zr) > this.cfg.VerticalTravel) {
+      if (!target.every(Number.isFinite) ||
+          (!this.cfg.PlacementProbe && (Math.abs(yl) > halfY || Math.abs(yr) > halfY ||
+           Math.min(zl, zr) < 0 || Math.max(zl, zr) > this.cfg.VerticalTravel))) {
         throw new Error("Перемещение выходит за ход кареток: Y=" + yl + "/" + yr + ", Z=" + zl + "/" + zr);
       }
       let g = "";
@@ -2858,6 +3368,7 @@ const Gen = (() => {
         }
       }
       this.pos = target;
+      if(this.probeTargets)this.probeTargets.push(target.slice());
       return g + travel(this.cfg, kind, yl, zl, yr, zr);
     }
   }
@@ -2873,10 +3384,13 @@ const Gen = (() => {
   }
   function trimBlock(cfg, trim, prog) {
     const safe = trim.BottomZ + trim.Height + cfg.TravelClearance, y0 = trim.Length / 2 - trim.TrimEnds;
-    let g = ";" + EOL + "; *** TRIM BLOCK: L=" + fmtG(trim.Length) + " W=" + fmtG(trim.Width) + " H=" + fmtG(trim.Height) + ", LongAxis=X ***" + EOL;
-    for (const y of [-y0, y0]) {
-      const yOut = y + (y < 0 || Object.is(y, -0) ? -trim.RetractOffset : trim.RetractOffset);
-      g += "; - Trim Y=" + fix2(y) + " at angle 90" + EOL;
+    const center=trim.CenterOffset||0;
+    let g = ";" + EOL + "; *** TRIM BLOCK B"+trim.Angle+": transverse="+fmtG(trim.Length)+
+      " wireSpan="+fmtG(trim.Width)+" H="+fmtG(trim.Height)+" ***"+EOL;
+    for (const localY of [-y0, y0]) {
+      const y=localY+center;
+      const yOut = y + (localY < 0 || Object.is(localY, -0) ? -trim.RetractOffset : trim.RetractOffset);
+      g += "; - Trim Y=" + fix2(y) + " at B"+trim.Angle+EOL;
       g += prog.travel("move", y, safe, y, safe);                 // - к точке входа на высоте холостых ходов
       g += prog.travel("cut", y, trim.BottomZ, y, trim.BottomZ);  // - рез вниз
       g += prog.travel("cut", yOut, trim.BottomZ, yOut, trim.BottomZ);   // - отвод от центра, в отход
@@ -2888,9 +3402,10 @@ const Gen = (() => {
     const errors = [], halfY = cfg.HorizontalTravel / 2, top = trim.BottomZ + trim.Height;
     if (Math.min(trim.Length, trim.Width, trim.Height) <= 0) return ["Размеры заготовки должны быть положительными"];
     if (trim.TrimEnds > 0) {
-      const y = trim.Length / 2 - trim.TrimEnds, yOut = y + trim.RetractOffset;
-      if (Math.abs(y) > halfY) errors.push("Рез Y=" + y.toFixed(2) + " выходит за ход каретки +-" + halfY.toFixed(1));
-      if (Math.abs(yOut) > halfY) errors.push("Отвод Y=" + yOut.toFixed(2) + " выходит за ход каретки +-" + halfY.toFixed(1));
+      const y = trim.Length / 2 - trim.TrimEnds, center=trim.CenterOffset||0;
+      const yOut = y + trim.RetractOffset;
+      if (y+Math.abs(center) > halfY) errors.push("Рез Y=" + (y+Math.abs(center)).toFixed(2) + " выходит за ход каретки +-" + halfY.toFixed(1));
+      if (yOut+Math.abs(center) > halfY) errors.push("Отвод Y=" + (yOut+Math.abs(center)).toFixed(2) + " выходит за ход каретки +-" + halfY.toFixed(1));
     }
     if (trim.TrimEnds >= trim.Length / 2) errors.push("Припуск на подрезку больше половины размера заготовки");
     if (!overhead && top > cfg.VerticalTravel) errors.push("Верх заготовки Z=" + top + " больше хода каретки " + cfg.VerticalTravel);
@@ -3235,8 +3750,37 @@ const Gen = (() => {
     g += prog.travel("cut", yl, levelL, yr, levelR);       // - обратно по той же щели
     return [g, towers];
   }
-  function profileBlock(safe, prog, contour, layout, axis, kerf, notes, side, stockWidth, margin, sag, maxStep, sideEntry = false) {
-    const segments = prepareContour(contour.map(([f, fw]) => faceSegment(f, fw)), axis, kerf, true, notes);
+  function profileBlock(safe, prog, contour, layout, axis, kerf, notes, side, stockWidth, margin, sag, maxStep, sideEntry = false, stockCenter = 0) {
+    let segments = prepareContour(contour.map(([f, fw]) => faceSegment(f, fw)), axis, kerf, true, notes);
+    const smoothExterior=contour.length===1&&contour[0][0].closed;
+    if(smoothExterior){
+      // A smooth exterior has no corner: its exported seam may be anywhere.
+      // Enter at the extreme on the requested side, preserving both rails.
+      const score=(seg,u)=>side*(layout.machine(seg.A(u))[1]+layout.machine(seg.B(u))[1])/2;
+      let best={k:0,u:0,value:-Infinity};
+      segments.forEach((seg,k)=>{for(let i=0;i<=1024;i++){
+        const u=i/1024,value=score(seg,u);
+        if(value>best.value)best={k,u,value};
+      }});
+      let lo=Math.max(0,best.u-1/1024),hi=Math.min(1,best.u+1/1024);
+      for(let i=0;i<40;i++){
+        const a=lo+(hi-lo)/3,b=hi-(hi-lo)/3;
+        if(score(segments[best.k],a)<score(segments[best.k],b))lo=a;else hi=b;
+      }
+      segments=startSequence(segments,best.k,(lo+hi)/2);
+      // Reject an entry that crosses the retained profile before reaching it.
+      const ring=sampleSequence(segments,sag,maxStep),entry=ring[0];
+      for(const f of [0,.25,.5,.75,1]){
+        const section=pair=>layout.machine(pair[0].map((v,k)=>v+f*(pair[1][k]-v)));
+        const start=section(entry);
+        for(let i=1;i<ring.length;i++){
+          const a=section(ring[i-1]),b=section(ring[i]);
+          if((a[2]>start[2])===(b[2]>start[2]))continue;
+          const x=a[1]+(b[1]-a[1])*(start[2]-a[2])/(b[2]-a[2]);
+          if(side*(x-start[1])>.02)throw new StepError("Вход в замкнутую оболочку пересекает деталь; выберите другую сторону входа");
+        }
+      }
+    }
     // Enter at a contour corner on the entry side, rather than the midpoint of a face.
     // Choose traversal so the upper branch is cut before the lower branch.
     const height = p => layout.machine(p)[2];
@@ -3252,8 +3796,8 @@ const Gen = (() => {
     // after compensation; treat them as a shared side of the profile.
     const sideCorners=corners.filter(c=>bestY-c.y<=Math.max(1,2*kerf));
     sideCorners.sort((a,b)=>b.z-a.z);
-    const hasUpperCorner=sideCorners.length>1 && sideCorners[0].z-sideCorners.at(-1).z>Math.max(1,2*kerf);
-    const start=hasUpperCorner?sideCorners[0].k:corners.reduce((best,c)=>c.y>best.y?c:best).k;
+    const hasUpperCorner=!smoothExterior&&sideCorners.length>1 && sideCorners[0].z-sideCorners.at(-1).z>Math.max(1,2*kerf);
+    const start=smoothExterior?0:hasUpperCorner?sideCorners[0].k:corners.reduce((best,c)=>c.y>best.y?c:best).k;
     // Reversing the complete loop preserves kerf-compensated coordinates.
     const reverse = segments.map(seg => segment(u=>seg.A(1-u),u=>seg.B(1-u),seg.kind,(seg.breaks||[]).map(u=>1-u))).reverse();
     const reverseIndex = segments.length - 1 - ((start + segments.length - 1) % segments.length);
@@ -3285,7 +3829,7 @@ const Gen = (() => {
     }
     if(!orderedPath) throw new StepError("Не удалось однозначно выбрать верхний обход наружного контура");
     const towers=orderedPath;
-    const yOut = side * (stockWidth / 2 + margin);
+    const yOut = stockCenter + side * (stockWidth / 2 + margin);
     const [[yl, zl], [yr, zr]] = towers[0];
     let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", corner entry, upper first, " + (hasUpperCorner ? "exit Z+5 mm" : "exit via entry slit") + " ***" + EOL;
     // Move to the entry height outside the block, then enter horizontally.
@@ -3312,21 +3856,74 @@ const Gen = (() => {
     TravelClearance: 20, FeedRateCut: 7, FeedRateMove: 14, FeedRateRotate: 30, WireMinPower: 500, WireMaxPower: 1000,
   };
   function buildProgram(text, fileName, o) {
-    const cfg = { ...CONFIG, TravelClearance: o.clearance, FeedRateCut: o.feed, WireMinPower: o.minS, WireMaxPower: o.maxS };
+    const cfg = { ...CONFIG, TravelClearance: o.clearance, FeedRateCut: o.feed, WireMinPower: o.minS, WireMaxPower: o.maxS,
+      PlacementProbe: placementProbeDepth>0 };
     const warnings = [], [stockLength, stockWidth, stockHeight] = o.stock, kerf = o.kerf, sag = 0.01, maxStep = 1, RadialMargin = 2;
+    const trimAngle=o.trimAngle===undefined?90:Number(o.trimAngle);
+    const cutOrder=o.cutOrder||'B90_B0';
+    if(![0,90].includes(trimAngle))throw new StepError("Угол торцевания должен быть B0 или B90");
+    if(!['B0_B90','B90_B0'].includes(cutOrder))throw new StepError("Порядок должен быть B0 → B90 или B90 → B0");
     if (![...o.stock, o.bottomZ, o.kerf, o.clearance, o.leadMargin, o.feed, o.minS, o.maxS, o.retract].every(Number.isFinite) ||
         Math.min(...o.stock, o.feed) <= 0 || Math.min(o.bottomZ, o.kerf, o.clearance, o.leadMargin, o.retract, o.minS) < 0 || o.maxS < o.minS) {
       throw new Error("Недопустимые параметры заготовки или реза");
     }
     const scale = o.scale === undefined ? 1 : o.scale;
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
-    const model = new Model(text, o.rotation, scale, o.tolerance === undefined ? .1 : o.tolerance), { outer, holes, secondaryContours, axis, planeA, planeB } = model.build();
+    const model = new Model(text, o.rotation, scale, o.tolerance === undefined ? .1 : o.tolerance);
+    // A solid plus separate guide curves defines additional toolpaths.
+    // Never silently discard them and emit a plausible but incomplete G-code.
+    if(!model.wireframe && model.auxiliaryCurveRefs.length) {
+      const curves=model.auxiliaryCurves();
+      const axes=curves.map(c=>c.fixedAxis<0?"3D":"XYZ"[c.fixedAxis]).join(", ");
+      const assignments=Array.isArray(o.manualGuidePairs)?o.manualGuidePairs:[];
+      const index=new Map(curves.map(c=>[c.id,c]));
+      const taken=new Set();
+      for(const entry of assignments) {
+        if(!Array.isArray(entry)||entry.length!==2||entry[0]===entry[1])
+          throw new StepError("Неверная ручная пара направляющих.");
+        const [a,b]=entry.map(id=>index.get(id));
+        if(!a||!b||taken.has(entry[0])||taken.has(entry[1]))
+          throw new StepError("Ручная пара отсутствует в текущем STEP или используется повторно.");
+        if(a.fixedAxis<0||a.fixedAxis!==b.fixedAxis||a.closed!==b.closed||
+            Math.abs(a.points[0][a.fixedAxis]-b.points[0][b.fixedAxis])<0.1)
+          throw new StepError("Ручная пара #"+entry.join("/")+" геометрически несовместима.");
+        entry.forEach(id=>taken.add(id));
+      }
+      const starts=o.guideStarts||{};
+      if(starts===null||typeof starts!=='object'||Array.isArray(starts))
+        throw new StepError("Неверный набор начальных точек реза.");
+      const usedPairs=new Set(assignments.map(p=>p.join(':')));
+      for(const [key,u] of Object.entries(starts)){
+        if(!usedPairs.has(key))throw new StepError("Начало реза задано для неизвестной пары "+key);
+        const ids=key.split(':').map(Number),a=index.get(ids[0]),b=index.get(ids[1]);
+        resolveGuideStart(a,b,u); // checks finite normalized start and matching.
+      }
+      const details=assignments.length
+        ? "Принято ручных пар: "+assignments.length+" ("+
+          assignments.map(p=>"#"+p.join("/#")).join(", ")+"). "
+        : "Ручных подтверждённых пар не передано. ";
+      throw new StepError(details+"STEP содержит тело и "+curves.length+
+        " вспомогательных кривых (плоскости: "+axes+"). "+
+        "Выбрано: торцевание "+(o.trim===false?"выключено":"B"+trimAngle)+
+        "; порядок "+cutOrder.replace('_',' → ')+". "+
+        "План операций доступен в «Экспорт траектории (диагностика)». "+
+        "Проверка входа/выхода выявляет прорези через исходную заготовку; "+
+        "без проверки стороны отхода и удаления материала невозможно безопасно "+
+        "сформировать режущие перемещения. Станочный G-code для F4 пока запрещён.");
+    }
+    const { outer, holes, secondaryContours, axis, planeA, planeB } = model.build();
     if (axis !== 1) throw new StepError("Поверните модель: размах должен идти вдоль струны (сейчас ось модели " + "XYZ"[axis] + ")");
 
     // - Габарит детали по направляющим
     const xs = [], zs = [], zsA = [], zsB = [];
     for (const [face] of outer) for (const [a, b] of sampleFace(face, face.t0, face.t1, 0.05, 5)) { xs.push(a[0], b[0]); zs.push(a[2], b[2]); zsA.push(a[2]); zsB.push(b[2]); }
     const part = { x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs), span: planeB - planeA };
+    const modelZOffset=o.modelZOffset===undefined?0:o.modelZOffset;
+    if(!Number.isFinite(modelZOffset))throw new StepError("Недопустимое положение модели по высоте");
+    if(Math.abs(modelZOffset)>1e-9 && (o.pair || o.mirror || model.wireframe || secondaryContours.length || holes.length))
+      throw new StepError("Размещение модели выше центра пока доступно только для одиночной детали без отверстий и дополнительных резов");
+    if(Math.abs(modelZOffset)+(part.z1-part.z0)/2>stockHeight/2+1e-6)
+      throw new StepError("Модель не помещается по высоте внутри заготовки");
     if (part.x1 - part.x0 > stockWidth || part.z1 - part.z0 > stockHeight || part.span > stockLength) {
       throw new Error("Деталь " + part.span.toFixed(1) + " x " + (part.x1 - part.x0).toFixed(1) + " x " + (part.z1 - part.z0).toFixed(1) +
         " не помещается в заготовку (размах × хорда × высота) " + stockLength.toFixed(1) + " x " + stockWidth.toFixed(1) + " x " + stockHeight.toFixed(1));
@@ -3336,13 +3933,21 @@ const Gen = (() => {
     const shifted=offset.some(v=>Math.abs(v)>1e-9);
     if(shifted && (o.pair || model.wireframe || secondaryContours.length))
       throw new StepError("Смещение пока доступно для одиночной детали без дополнительных направлений и STEP только с кривыми");
-    if (Math.abs(offset[0])+part.span/2>stockLength/2+1e-6 || Math.abs(offset[1])+(part.x1-part.x0)/2>stockWidth/2+1e-6 || Math.abs(offset[2])+(part.z1-part.z0)/2>stockHeight/2+1e-6)
-      throw new Error("Смещённая модель не помещается в заготовку; увеличьте её размер или сдвиньте модель к центру");
+    // Model and stock now translate together: fit is independent of offset.
+    // Check the translated stock against the physical machine separately.
+    const stockBottom=o.bottomZ+offset[2];
+    const requiredStockTop=stockBottom+stockHeight+(o.sideEntry?0:o.clearance);
+    if(!cfg.PlacementProbe && (stockBottom<0||requiredStockTop>cfg.VerticalTravel||
+       stockLength/2+Math.abs(offset[0])>cfg.FieldWidth/2||
+       stockWidth/2+Math.abs(offset[1])>cfg.HorizontalTravel/2))
+      throw new StepError("Смещённая заготовка выходит за физические пределы станка: "+
+        "Верх заготовки с запасом Z="+requiredStockTop.toFixed(1)+
+        " мм, предел Z="+cfg.VerticalTravel.toFixed(1)+" мм");
     const xc = (part.x0 + part.x1) / 2, yc = (planeA + planeB) / 2, zc = (part.z0 + part.z1) / 2;
     const half = cfg.FieldWidth / 2;
     // - spanSign и chordSign меняют стороны размаха и хорды, zSign отражает по высоте, zMid - высота середины детали
     const makeLayout = (spanSign, chordSign, zSign, zMid) => ({
-      machine: (p) => [spanSign * (p[1] - yc) + offset[0], chordSign * (p[0] - xc) + offset[1], zSign * (p[2] - zc) + zMid + offset[2]],
+      machine: (p) => [spanSign * (p[1] - yc) + offset[0], chordSign * (p[0] - xc) + offset[1], zSign * (p[2] - zc) + zMid + offset[2] + modelZOffset],
       towers(a, b) {    // - положение концов проволоки на башнях для прямой через точки a и b
         const ma = this.machine(a), mb = this.machine(b);
         const at = (x) => { const s = (x - ma[0]) / (mb[0] - ma[0]); return [ma[1] + s * (mb[1] - ma[1]), ma[2] + s * (mb[2] - ma[2])]; };
@@ -3351,42 +3956,71 @@ const Gen = (() => {
     });
 
     // --- Торцевание до размера детали по размаху (стол 0: размах вдоль струны)
-    const trim = { Length: stockLength, Width: stockWidth, Height: stockHeight, TrimEnds: (stockLength - part.span) / 2 - kerf / 2, BottomZ: o.bottomZ, RetractOffset: o.retract };
+    // B90 cuts the two ends along stockLength; B0 trims the lateral
+    // stockWidth sides. These are distinct geometric operations.
+    const trimDimension=trimAngle===90?stockLength:stockWidth;
+    const finishedDimension=trimAngle===90?part.span:part.x1-part.x0;
+    const trim = { Length: trimDimension, Width: trimAngle===90?stockWidth:stockLength,
+      Height: stockHeight, TrimEnds: (trimDimension-finishedDimension)/2-kerf/2,
+      BottomZ:o.bottomZ+offset[2], RetractOffset:o.retract, Angle:trimAngle,
+      CenterOffset:trimAngle===90?offset[0]:offset[1] };
     const hasTrim = o.trim !== false && trim.TrimEnds > 0;
+    // The selected angle swaps which stock dimension lies along the wire.
+    // Reject stock too long for the tower spacing even if transverse/Z travel fits.
+    const stockAlongWire=trimAngle===90?stockWidth:stockLength;
+    if(hasTrim && stockAlongWire>cfg.FieldWidth+1e-6)
+      throw new StepError("Торцевание B"+trimAngle+": размер заготовки вдоль струны "+
+        stockAlongWire.toFixed(1)+" мм превышает расстояние между башнями "+
+        cfg.FieldWidth.toFixed(1)+" мм");
+    if(o.trim!==false && trim.TrimEnds<=0)
+      warnings.push("Торцевание B"+trimAngle+" пропущено: по выбранной оси нет положительного припуска");
     const sideEntry = o.sideEntry === true;
-    if(hasTrim && Math.abs(offset[0])>1e-9) throw new StepError("Торцевание со смещением по X пока не поддерживается; отключите торцевание или верните X в центр");
+    if(hasTrim && (trimAngle===90?stockWidth/2+Math.abs(offset[1]):stockLength/2+Math.abs(offset[0]))>cfg.FieldWidth/2)
+      throw new StepError("Смещённая заготовка не помещается между башнями при торцевании B"+trimAngle);
     if(model.wireframe && (o.pair||o.mirror||sideEntry))
       throw new StepError("Для STEP только с кривыми пока поддержана одна обычная деталь; пара, зеркало и боковой вход заблокированы до проверки соответствия щелей");
     if (secondaryContours.length && (o.pair || o.mirror || sideEntry)) throw new StepError("Дополнительные направления: режим пары, зеркала и бокового входа ещё не поддержан; G-code заблокирован");
+    if (sideEntry && shifted) throw new StepError("Боковой вход со смещённой заготовкой пока не поддерживается");
     if (sideEntry && (o.trim !== false || o.pair || holes.length || o.side !== 1)) throw new Error("Боковой вход справа требует одну деталь без отверстий, торцевания и входа слева");
     if (sideEntry && (stockWidth / 2 + o.leadMargin > cfg.ParkX || o.leadMargin <= 0)) throw new Error("Нет внешнего коридора между правым краем заготовки и парковкой");
-    const errors = checkTrim(cfg, hasTrim ? trim : { ...trim, TrimEnds: 0 }, !sideEntry);
+    const errors = cfg.PlacementProbe ? [] : checkTrim(cfg, hasTrim ? trim : { ...trim, TrimEnds: 0 }, !sideEntry);
     if (errors.length) throw new Error(errors.join("; "));
     if (hasTrim && Math.abs(trim.Length / 2 - trim.TrimEnds) < 0.01) warnings.push("Рез идёт через ось стола: припуск больше половины размера");
     // - При торцевании заготовка поворачивается на 90°, затем возвращается в 0° для резки профиля
-    const radius = Math.hypot(part.span, stockWidth) / 2;
-    if (hasTrim && cfg.ParkX - radius < RadialMargin) warnings.push("При повороте на 90 радиус заготовки " + radius.toFixed(1) + " мм, каретки отведены только на " + cfg.ParkX.toFixed(1) + " мм: проверьте зазор");
+    const radius = Math.hypot(stockLength,stockWidth)/2;
+    if (hasTrim && trimAngle===90 && cfg.ParkX-radius<RadialMargin)
+      throw new StepError("Торцевание B90: радиус исходной заготовки "+radius.toFixed(1)+
+        " мм превышает безопасный парковочный коридор; уменьшите заготовку или проверьте кинематику");
 
     // - Шапка: сведения для симулятора и для человека
     if(model.tolerance>.1) warnings.push("Допуск поверхности "+model.tolerance.toFixed(2)+" мм; выборочная оценка до "+model.maxCheckedDeviation.toFixed(2)+" мм до компенсации реза");
     let program = "; FM_step2gcode: " + fileName + (o.pair ? " (pair: upper reflected over gap, turned 180)" : o.mirror ? " (mirror)" : "") + EOL;
     program += "; STEP TOLERANCE=" + model.tolerance.toFixed(3) + " mm; sampled upper estimate=" + model.maxCheckedDeviation.toFixed(3) + " mm" + EOL;
-    program += "; MODEL OFFSET X="+fmtG(offset[0])+" Y="+fmtG(offset[1])+" Z="+fmtG(offset[2])+" mm"+EOL;
+    program += "; STOCK+MODEL OFFSET X="+fmtG(offset[0])+" Y="+fmtG(offset[1])+" Z="+fmtG(offset[2])+" mm"+EOL;
+    program += "; MODEL Z OFFSET FROM STOCK CENTER="+fmtG(modelZOffset)+" mm"+EOL;
     program += "; CUT MODE=" + (o.pair ? "PAIR PIECES=2" : o.mirror ? "MIRROR PIECES=1" : "SINGLE PIECES=1") + EOL;
+    program += "; TRIM B="+trimAngle+" ENABLED="+(hasTrim?1:0)+"; ORDER="+cutOrder+EOL;
     if(model.wireframe)program+="; STEP GEOMETRY=CURVES_ONLY; reconstructed ruled interpolation, original surfaces unavailable"+EOL;
-    program += "; STOCK L=" + fmtG(stockWidth) + " W=" + fmtG(stockLength) + " H=" + fmtG(stockHeight) + " Z0=" + fmtG(o.bottomZ) + EOL;
+    program += "; STOCK L=" + fmtG(stockWidth) + " W=" + fmtG(stockLength) + " H=" + fmtG(stockHeight) + " Z0=" + fmtG(o.bottomZ) +
+      " OX="+fmtG(offset[0])+" OY="+fmtG(offset[1])+" OZ="+fmtG(offset[2])+EOL;
     program += "; CUT F=" + fmtG(cfg.FeedRateCut) + " mm/s S=" + fmtG(cfg.WireMinPower) + ".." + fmtG(cfg.WireMaxPower) + " kerf=" + fmtG(kerf) + EOL;
     const prog = new Program(cfg, o.powerComp, 5);
     program += startBlock(cfg, prog);
-    const allTowers = [], safe = sideEntry ? cfg.ParkZ : o.bottomZ + stockHeight + cfg.TravelClearance;
+    const allTowers = [], safe = sideEntry ? cfg.ParkZ : o.bottomZ + offset[2] + stockHeight + cfg.TravelClearance;
+    let profileTowers = null;
     // - Сначала отводим каретки в безопасную позицию; торцевание выполняется при столе 90°
     program += ";" + EOL + "; - Safe position before cutting" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe);
     if (hasTrim) {
-      program += ";" + EOL + "; - Rotation 90 for end trimming" + EOL + rotate(cfg, 90);
+      program += ";" + EOL + "; - Rotation B"+trimAngle+" for trimming" + EOL + rotate(cfg, trimAngle);
       program += trimBlock(cfg, trim, prog);
       // - После торцевания возвращаем стол в 0°: основной профиль всегда режется в этой позиции
-      program += ";" + EOL + "; - Return table to 0 for profile cutting" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe) + rotate(cfg, 0);
+      program += ";" + EOL + "; - Return table to B0 after trimming" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe) + rotate(cfg, 0);
     }
+    // The existing solid-only secondary CAM can safely cut cross-sections
+    // before releasing the outer profile. Cutting the outer first may drop
+    // the part, so B0-first is rejected until material removal is simulated.
+    if(secondaryContours.length && cutOrder==='B0_B90')
+      throw new StepError("Порядок B0 → B90 не подтверждён: наружный профиль B0 может освободить деталь до реза B90. Выберите B90 → B0 или проверьте сохранность детали после B0.");
     // Cross-direction operations run BEFORE the outer profile releases the
     // part. B rotates the original (X,Y) stock frame, not the foam geometry.
     // For a rotation theta, along-wire = X*sin(theta)-Y*cos(theta),
@@ -3397,7 +4031,7 @@ const Gen = (() => {
         throw new StepError("При повороте для второго реза заготовка задевает парковочный коридор (радиус "+radius90.toFixed(1)+" мм)");
       if(stockWidth>cfg.FieldWidth-2)
         throw new StepError("Ширина заготовки "+stockWidth+" мм не помещается между башнями после поворота стола");
-      const zMid=o.bottomZ+stockHeight/2;
+      const zMid=o.bottomZ+stockHeight/2+offset[2];
       for(const op of secondaryContours) {
         const [dx,dy]=op.dir;
         let angle=Math.atan2(dx,-dy)*180/Math.PI;
@@ -3438,7 +4072,8 @@ const Gen = (() => {
       program += block; allTowers.push(...towers);
     };
     const addProfile = (layout, side) => {
-      const [block, towers] = profileBlock(safe, prog, outer, layout, axis, kerf, warnings, side, stockWidth, o.leadMargin, sag, maxStep, sideEntry);
+      const [block, towers] = profileBlock(safe, prog, outer, layout, axis, kerf, warnings, side, stockWidth, o.leadMargin, sag, maxStep, sideEntry, offset[1]);
+      profileTowers = towers;
       program += block; allTowers.push(...towers);
     };
     if (o.pair) {
@@ -3476,14 +4111,726 @@ const Gen = (() => {
     // --- Проверка пределов хода
     const halfY = cfg.HorizontalTravel / 2;
     for (const [[yl, zl], [yr, zr]] of allTowers) {
-      if (Math.abs(yl) > halfY || Math.abs(yr) > halfY || Math.min(zl, zr) < 0 || Math.max(zl, zr) > cfg.VerticalTravel) {
+      if (!cfg.PlacementProbe && (Math.abs(yl) > halfY || Math.abs(yr) > halfY || Math.min(zl, zr) < 0 || Math.max(zl, zr) > cfg.VerticalTravel)) {
         throw new Error("Контур выходит за ход кареток: Y=(" + yl.toFixed(1) + ", " + yr.toFixed(1) + ") Z=(" + zl.toFixed(1) + ", " + zr.toFixed(1) + ")");
       }
     }
     if (prog.clipped) warnings.push("Мощность проволоки упёрлась в максимум S=" + fmtG(cfg.WireMaxPower) + ": проволока слишком длинная для этой формулы");
-    return { program, warnings: [...new Set(warnings)], part, points: allTowers.length, holes: holes.length+secondaryContours.length, secondary: secondaryContours.length, power: [prog.minPower, prog.maxPower, prog.changes] };
+    return { program, warnings: [...new Set(warnings)], part, points: allTowers.length,
+      smoothSurface: !o.pair && !o.mirror && !holes.length && !secondaryContours.length && !model.wireframe && (!hasTrim || trimAngle===90) && profileTowers ? {
+        towers:profileTowers,fieldWidth:cfg.FieldWidth,
+        x0:offset[0]-(hasTrim?part.span+kerf:stockLength)/2,
+        x1:offset[0]+(hasTrim?part.span+kerf:stockLength)/2
+      } : null,
+      holes: holes.length+secondaryContours.length, secondary: secondaryContours.length,
+      power: [prog.minPower, prog.maxPower, prog.changes],
+      ...(cfg.PlacementProbe?{probeTargets:prog.probeTargets}: {}) };
   }
-  return { buildProgram, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
+
+  // Find a common machine-frame translation of the STEP model AND stock.
+  // First derive the affine response of every actual carriage target to X/Y/Z
+  // displacement (four diagnostic posts, no hardware or file export).
+  // Then project the zero-offset candidate onto the intersection of machine
+  // travel and translated stock bounds. The final post is ALWAYS normal.
+  function autoPlace(text,fileName,o) {
+    if(o.pair||o.mirror||o.sideEntry)
+      throw new StepError("Авторазмещение: сначала отключите пару, зеркало и боковой вход");
+    if(o.manualGuidePairs?.length)
+      throw new StepError("Авторазмещение ручных пар F4 пока не поддерживается");
+    const step=1,base={...o,offset:[0,0,0]};
+    const probes=[];
+    for(let k=0;k<4;k++){
+      const offset=k===0?[0,0,0]:[0,0,0].map((v,i)=>i===k-1?step:v);
+      placementProbeDepth++;
+      try{probes.push(buildProgram(text,fileName,{...base,offset}).probeTargets);}
+      finally{placementProbeDepth--;}
+    }
+    const n=probes[0].length;
+    if(!n||probes.some(p=>p.length!==n))
+      throw new StepError("Авторазмещение: изменяется последовательность операций при смещении");
+    const constraints=[];
+    const add=(a,b)=>{
+      const norm=a.reduce((z,v)=>z+v*v,0);
+      if(norm>1e-18) constraints.push({a,b,norm});
+      else if(b<-.001) throw new StepError("Авторазмещение: фиксированный ход выходит за пределы станка");
+    };
+    const limits=[CONFIG.HorizontalTravel/2,0,CONFIG.HorizontalTravel/2,0];
+    const lo=[-limits[0],0,-limits[2],0];
+    const hi=[limits[0],CONFIG.VerticalTravel,limits[2],CONFIG.VerticalTravel];
+    const reserve=.10, verticalReserve=5.01;
+    for(let i=0;i<n;i++){
+      for(let k=0;k<4;k++){
+        const value=probes[0][i][k];
+        const a=[1,2,3].map(j=>(probes[j][i][k]-value)/step);
+        const margin=k%2 ? verticalReserve : reserve;
+        add(a,hi[k]-margin-value);
+        add(a.map(v=>-v),value-lo[k]-margin);
+      }
+    }
+    const [L,W,H]=o.stock,clear=o.clearance||0,bottom=o.bottomZ;
+    const xLimit=CONFIG.FieldWidth/2-L/2;
+    const yLimit=CONFIG.HorizontalTravel/2-W/2;
+    add([1,0,0],xLimit); add([-1,0,0],xLimit);
+    add([0,1,0],yLimit); add([0,-1,0],yLimit);
+    add([0,0,1],CONFIG.VerticalTravel-(bottom+H+clear));
+    add([0,0,-1],bottom);
+    if(o.grounded){
+      add([0,0,1],CONFIG.VerticalTravel-bottom-H-clear);
+      add([0,0,-1],0);
+    }
+    if(o.keepHeight){add([0,0,1],0);add([0,0,-1],0);}
+    if(o.preferNegativeX)add([1,0,0],-5);
+    // When the table actually rotates to B90, X and Y stock spans exchange.
+    if(o.trim!==false&&Number(o.trimAngle)===90){
+      const xr=CONFIG.HorizontalTravel/2-L/2;
+      const yr=CONFIG.FieldWidth/2-W/2;
+      add([1,0,0],xr);add([-1,0,0],xr);
+      add([0,1,0],yr);add([0,-1,0],yr);
+    }
+    // Dykstra projections locate a feasible continuous offset.
+    const correction=new Float64Array(constraints.length);
+    const position=[0,0,0];
+    let violation=Infinity;
+    for(let iteration=0;iteration<200;iteration++){
+      for(let i=0;i<constraints.length;i++){
+        const {a,b,norm}=constraints[i];
+        const old=correction[i];
+        const d=a[0]*position[0]+a[1]*position[1]+a[2]*position[2]+old*norm-b;
+        const fresh=Math.max(0,d/norm);
+        const diff=old-fresh;
+        position[0]+=diff*a[0];position[1]+=diff*a[1];position[2]+=diff*a[2];
+        correction[i]=fresh;
+      }
+      if(iteration%10===9){
+        violation=0;
+        for(const {a,b} of constraints)
+          violation=Math.max(violation,a[0]*position[0]+a[1]*position[1]+a[2]*position[2]-b);
+        if(violation<.0005) break;
+      }
+    }
+    if(violation>.002||position.some(v=>!Number.isFinite(v)))
+      throw new StepError("Не найдено смещение, укладывающее все движения в ходы кареток");
+    const gridStep=5;
+    const xy=[];
+    for(let x=Math.ceil(-xLimit/gridStep);x<=Math.floor(xLimit/gridStep);x++){
+      for(let y=Math.ceil(-yLimit/gridStep);y<=Math.floor(yLimit/gridStep);y++){
+        const dx=x*gridStep-position[0],dy=y*gridStep-position[1];
+        xy.push({x:x*gridStep,y:y*gridStep,distance:dx*dx+dy*dy});
+      }
+    }
+    xy.sort((first,second)=>first.distance-second.distance);
+    for(const candidate of xy){
+      let minZ=o.grounded||o.keepHeight?0:-bottom,maxZ=o.keepHeight?0:CONFIG.VerticalTravel-(bottom+H+clear),feasible=true;
+      for(const {a,b} of constraints){
+        const remaining=b-a[0]*candidate.x-a[1]*candidate.y;
+        if(Math.abs(a[2])<1e-12){
+          if(remaining < -1e-8){feasible=false;break;}
+        }else if(a[2]>0) maxZ=Math.min(maxZ,remaining/a[2]);
+        else minZ=Math.max(minZ,remaining/a[2]);
+        if(minZ>maxZ+1e-8){feasible=false;break;}
+      }
+      if(!feasible)continue;
+      const minGrid=Math.ceil((minZ-1e-8)/gridStep),maxGrid=Math.floor((maxZ+1e-8)/gridStep);
+      const heights=[];
+      for(let z=minGrid;z<=maxGrid;z++)heights.push(z*gridStep || 0);
+      heights.sort((first,second)=>Math.abs(first-position[2])-Math.abs(second-position[2]));
+      for(const z of heights){
+        const offset=[candidate.x,candidate.y,z];
+        try{
+          const result=buildProgram(text,fileName,{...o,offset});
+          return {offset,rotation:o.rotation||identityRotation(),program:result.program,
+            points:result.points,displacement:Math.hypot(...offset),
+            warnings:result.warnings,geometry:result.part};
+        }catch(error){}
+      }
+    }
+    throw new StepError("Не найдено допустимое смещение с шагом 5 мм и запасом хода по Z");
+  }
+  function groundPlacement(text,fileName,o,placement) {
+    const lift=placement.offset[2];
+    if(lift < 0) throw new StepError("Для установки заготовки на стол требуется другое размещение без отрицательного подъёма");
+    const stock=[o.stock[0],o.stock[1],o.stock[2]+lift];
+    const offset=[placement.offset[0],placement.offset[1],0];
+    const modelZOffset=(o.modelZOffset||0)+lift/2;
+    if(!Number.isFinite(modelZOffset)||!Number.isFinite(stock[2])||o.bottomZ<0||
+       o.bottomZ+stock[2]+(o.sideEntry?0:o.clearance)>CONFIG.VerticalTravel)
+      throw new StepError("Скорректированная заготовка выходит за пределы станка");
+    return {stock,offset,modelZOffset,lift,rotation:placement.rotation,displacement:placement.displacement};
+  }
+  // Preliminary F4 two-carriage motion from explicitly assigned guide pairs.
+  // Coordinates are machine-frame candidates, NOT verified cutting moves.
+  // Conservative two-carriage approach/exit inspection. A wire is a line
+  // segment between towers; its sweep must not enter *uncut stock* during
+  // any rapid approach. Cutting leads touching stock need separate validation.
+  function inspectGuideEntryExit(samples, stockRect, options={}) {
+    if(!Array.isArray(samples)||samples.length<2)throw new StepError("Нет траектории для проверки входа и выхода");
+    const [xmin,xmax,zmin,zmax]=stockRect;
+    if(![xmin,xmax,zmin,zmax].every(Number.isFinite)||xmin>=xmax||zmin>=zmax)
+      throw new StepError("Некорректная геометрия заготовки для проверки входа");
+    const field=options.field||CONFIG.HorizontalTravel,vertical=options.vertical||CONFIG.VerticalTravel;
+    const clearance=Number.isFinite(options.clearance)?Math.max(.1,options.clearance):10;
+    const margin=Number.isFinite(options.margin)?Math.max(.1,options.margin):2;
+    const limit=p=>p.every(v=>Number.isFinite(v))&&p[0]>=0&&p[0]<=field&&p[1]>=0&&p[1]<=vertical;
+    // Clip line against the interior of the cross-section. Touching the
+    // surface within 0.01 mm is not counted as a cut into virgin stock.
+    const inside=(l,r)=>{
+      const eps=.01,loX=xmin+eps,hiX=xmax-eps,loZ=zmin+eps,hiZ=zmax-eps;
+      let t0=0,t1=1;
+      for(const [v,w,low,high] of [[l[0],r[0],loX,hiX],[l[1],r[1],loZ,hiZ]]){
+        const dv=w-v;
+        if(Math.abs(dv)<1e-10){if(v<=low||v>=high)return false;continue;}
+        const a=(low-v)/dv,b=(high-v)/dv;
+        t0=Math.max(t0,Math.min(a,b));t1=Math.min(t1,Math.max(a,b));
+        if(t0>t1)return false;
+      }
+      return t0<t1+1e-10;
+    };
+    // Conservatively cover the *entire swept wire* between two tower
+    // positions, not just 65 sampled snapshots. The convex hull may flag
+    // extra intersections, but it must not overlook a narrow collision.
+    const hullTouchesStock=points=>{
+      const cross=(a,b,c)=>(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+      const sorted=points.slice().sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+      const lower=[],upper=[];
+      for(const p of sorted){
+        while(lower.length>=2&&cross(lower.at(-2),lower.at(-1),p)<=0)lower.pop();
+        lower.push(p);
+      }
+      for(const p of sorted.slice().reverse()){
+        while(upper.length>=2&&cross(upper.at(-2),upper.at(-1),p)<=0)upper.pop();
+        upper.push(p);
+      }
+      let poly=lower.slice(0,-1).concat(upper.slice(0,-1));
+      const clip=(axis,edge,greater)=>{
+        if(!poly.length)return;
+        const old=poly,output=[];
+        const ok=p=>greater?p[axis]>=edge:p[axis]<=edge;
+        const intersect=(a,b)=>{
+          const k=(edge-a[axis])/(b[axis]-a[axis]);
+          return a.map((v,i)=>v+(b[i]-v)*k);
+        };
+        for(let i=0;i<old.length;i++){
+          const a=old[i],b=old[(i+1)%old.length],insideA=ok(a),insideB=ok(b);
+          if(insideA&&insideB)output.push(b);
+          else if(insideA&&!insideB)output.push(intersect(a,b));
+          else if(!insideA&&insideB){output.push(intersect(a,b));output.push(b);}
+        }
+        poly=output;
+      };
+      clip(0,xmin+.01,true);clip(0,xmax-.01,false);
+      clip(1,zmin+.01,true);clip(1,zmax-.01,false);
+      if(poly.length<3)return false;
+      let area=0;
+      for(let i=0;i<poly.length;i++){
+        const a=poly[i],b=poly[(i+1)%poly.length];
+        area+=a[0]*b[1]-b[0]*a[1];
+      }
+      return Math.abs(area)>.000001;
+    };
+    const inspect=(from,to)=>{
+      const steps=64;let intersects=false,firstContact=null;
+      for(let k=0;k<=steps;k++){
+        const u=k/steps;
+        const l=from.left.map((v,i)=>v+(to.left[i]-v)*u);
+        const r=from.right.map((v,i)=>v+(to.right[i]-v)*u);
+        if(inside(l,r)){intersects=true;if(firstContact===null)firstContact=u;}
+      }
+      // Hull-based overapproximation also catches thin contacts occurring
+      // strictly between the sampled wire positions.
+      intersects=intersects||inside(from.left,to.left)||inside(from.right,to.right)||
+        hullTouchesStock([from.left,from.right,to.left,to.right]);
+      const within=[from.left,from.right,to.left,to.right].every(limit);
+      return {from,to,withinMachineTravel:within,intersectsUncutStock:intersects,
+        firstStockContactFraction:firstContact,
+        rapidTravelAllowed:within&&!intersects,
+        requiresCuttingLead:intersects,
+        status:!within?"OUT_OF_TRAVEL":intersects?"CUTTING_LEAD_REQUIRED":"CLEAR_RAPID"};
+    };
+    const safeZ=zmax+clearance;
+    const sideStart=(endpoint,side)=>{
+      const v=[endpoint.left[0],endpoint.right[0]];
+      const delta=side==="left"?(xmin-margin-Math.max(...v)):
+        (xmax+margin-Math.min(...v));
+      return {left:[endpoint.left[0]+delta,endpoint.left[1]],
+        right:[endpoint.right[0]+delta,endpoint.right[1]]};
+    };
+    const endpoint=s=>({left:s.left.slice(),right:s.right.slice()});
+    const inspectEnd=(tip,entry)=>{
+      const target=endpoint(tip);
+      const high={left:[tip.left[0],safeZ],right:[tip.right[0],safeZ]};
+      const evaluate=(standby)=>entry?inspect(standby,target):inspect(target,standby);
+      const candidates=[
+        {route:"ABOVE_STOCK",...evaluate(high)},
+        ...["left","right"].map(side=>({
+          route:side==="left"?"OUTSIDE_LEFT":"OUTSIDE_RIGHT",
+          ...evaluate(sideStart(target,side))
+        }))
+      ];
+      const clear=candidates.find(c=>c.rapidTravelAllowed);
+      return {candidates,
+        recommended:clear?clear.route:null,
+        hasClearRapid:!!clear,
+        status:clear?"CLEAR_RAPID":"UNVERIFIED_ENTRY_EXIT"};
+    };
+    const entry=inspectEnd(samples[0],true);
+    const exit=inspectEnd(samples.at(-1),false);
+    return {entry,exit,stockRect,clearance,margin,checkedAgainst:"UNCUT_STOCK_RECTANGLE",
+      // This check does not prove stock preservation, kerf, machine
+      // fixturing, ruled-surface accuracy, or ordered stock removal.
+      approvedForGcode:false};
+  }
+  // Conservative voxel model of sequential hot-wire material removal.
+  // The initial block is *fully filled*. Each operation sweeps its finite
+  // wire segment through 3D, eroding occupied voxels near the swept surface.
+  // Afterwards entry checks query the material remaining after prior cuts,
+  // while exit checks query the stock after the current cut. Connectivity
+  // estimates are diagnostic only and must not certify a finished part.
+  function simulateSequentialStockRemoval(operations, origin, stock, o = {}) {
+    if(!Array.isArray(operations)||!operations.length)
+      throw new StepError("Нет операций для моделирования удаления материала");
+    const voxel=Math.max(1,Math.min(8,Number(o.voxelSize)||4));
+    const kerf=Math.max(.01,Number(o.kerf)||1);
+    const offset=o.offset||[0,0,0];
+    const sizes=[stock[1],stock[0],stock[2]];
+    if(!sizes.every(n=>Number.isFinite(n)&&n>0))
+      throw new StepError("Некорректные размеры заготовки для объёмного моделирования");
+    const nx=sizes.map(n=>Math.ceil(n/voxel)), total=nx.reduce((a,b)=>a*b,1);
+    if(total>400000)throw new StepError("Превышен лимит объёмной сетки 400000 ячеек: увеличьте шаг");
+    const lo=[origin[0]-sizes[0]/2,origin[1]-sizes[1]/2,origin[2]-sizes[2]/2];
+    const cell=sizes.map((v,k)=>v/nx[k]), [sx,sy,sz]=nx;
+    const occupancy=new Uint8Array(total).fill(1);
+    const index=(x,y,z)=>(z*sy+y)*sx+x;
+    const point=(x,y,z)=>[lo[0]+(x+.5)*cell[0],lo[1]+(y+.5)*cell[1],lo[2]+(z+.5)*cell[2]];
+    // Trim slabs are physically removed before either main operation.
+    // The expected finished dimension is centred in the same model frame.
+    const trimOp=o.trimOperation||null;
+    let trimmedVoxels=0;
+    if(trimOp){
+      const axis=trimOp.angle===90?1:0;
+      const allowance=trimOp.trimAllowance;
+      if(allowance>0){
+        const half=(trimOp.finishedDimension+(Number(o.kerf)||0))/2;
+        for(let z=0;z<sz;z++)for(let y=0;y<sy;y++)for(let x=0;x<sx;x++){
+          const idx=index(x,y,z),coord=point(x,y,z)[axis];
+          if(Math.abs(coord-origin[axis])>half){
+            occupancy[idx]=0;trimmedVoxels++;
+          }
+        }
+      }
+    }
+    const sub=(a,b)=>a.map((v,k)=>v-b[k]);
+    const dot=(a,b)=>a.reduce((sum,v,k)=>sum+v*b[k],0);
+    const dist2=(a,b)=>dot(sub(a,b),sub(a,b));
+    const segmentDist2=(p,a,b)=>{
+      const ab=sub(b,a),d=dot(ab,ab),t=d>1e-18?Math.max(0,Math.min(1,dot(sub(p,a),ab)/d)):0;
+      return dist2(p,a.map((v,k)=>v+t*ab[k]));
+    };
+    const pointTriangleDist2=(p,a,b,c)=>{
+      // Closest-point regions from Real-Time Collision Detection, with a
+      // degenerate triangle fallback for collinear wire positions.
+      const ab=sub(b,a),ac=sub(c,a),ap=sub(p,a);
+      const d1=dot(ab,ap),d2=dot(ac,ap);
+      if(d1<=0&&d2<=0)return dist2(p,a);
+      const bp=sub(p,b),d3=dot(ab,bp),d4=dot(ac,bp);
+      if(d3>=0&&d4<=d3)return dist2(p,b);
+      const vc=d1*d4-d3*d2;
+      if(vc<=0&&d1>=0&&d3<=0){
+        const t=d1/(d1-d3);
+        return dist2(p,a.map((v,k)=>v+t*ab[k]));
+      }
+      const cp=sub(p,c),d5=dot(ab,cp),d6=dot(ac,cp);
+      if(d6>=0&&d5<=d6)return dist2(p,c);
+      const vb=d5*d2-d1*d6;
+      if(vb<=0&&d2>=0&&d6<=0){
+        const t=d2/(d2-d6);
+        return dist2(p,a.map((v,k)=>v+t*ac[k]));
+      }
+      const va=d3*d6-d5*d4;
+      if(va<=0&&d4-d3>=0&&d5-d6>=0){
+        const bc=sub(c,b),t=(d4-d3)/((d4-d3)+(d5-d6));
+        return dist2(p,b.map((v,k)=>v+t*bc[k]));
+      }
+      const den=va+vb+vc;
+      if(Math.abs(den)<1e-15)
+        return Math.min(segmentDist2(p,a,b),segmentDist2(p,b,c),segmentDist2(p,c,a));
+      const v=vb/den,w=vc/den;
+      return dist2(p,a.map((x,k)=>x+ab[k]*v+ac[k]*w));
+    };
+    // Voxel centres are expanded by half the cell diagonal, producing a
+    // conservative overapproximation of occupied/cut material.
+    const radius=kerf/2+Math.hypot(...cell)/2,radius2=radius*radius;
+    const scanTriangle=(a,b,c,callback)=>{
+      const mins=[0,1,2].map(k=>Math.max(0,Math.ceil((Math.min(a[k],b[k],c[k])-radius-lo[k])/cell[k]-.5)));
+      const maxs=[0,1,2].map(k=>Math.min(nx[k]-1,Math.floor((Math.max(a[k],b[k],c[k])+radius-lo[k])/cell[k]-.5)));
+      for(let z=mins[2];z<=maxs[2];z++)
+        for(let y=mins[1];y<=maxs[1];y++)
+          for(let x=mins[0];x<=maxs[0];x++){
+            const p=point(x,y,z);
+            if(pointTriangleDist2(p,a,b,c)<=radius2)callback(index(x,y,z));
+          }
+    };
+    const scanSweep=(wire0,wire1,callback)=>{
+      const [a,b]=wire0,[c,d]=wire1;
+      scanTriangle(a,b,c,callback);
+      scanTriangle(c,b,d,callback);
+    };
+    const towerToModel=(op,pos)=>{
+      const along=op.angle===0?1:0,cross=along===1?0:1;
+      const crossBase=CONFIG.HorizontalTravel/2+(along===1?offset[1]:offset[0]);
+      const zBase=(Number(o.bottomZ)||0)+stock[2]/2+offset[2];
+      const alongShift=op.angle===0?offset[0]:-offset[1];
+      return [-1,1].map((sign,i)=>{
+        const p=origin.slice();
+        p[along]+=sign*CONFIG.FieldWidth/2-alongShift;
+        p[cross]+=pos[i][0]-crossBase;
+        p[2]+=pos[i][1]-zBase;
+        return p;
+      });
+    };
+    const candidateHits=(op,c)=>{
+      const from=towerToModel(op,[c.from.left,c.from.right]);
+      const to=towerToModel(op,[c.to.left,c.to.right]);
+      const hit=new Set();
+      scanSweep(from,to,i=>{if(occupancy[i])hit.add(i)});
+      return {occupiedVoxelHits:hit.size,clearAfterPriorCuts:hit.size===0&&c.withinMachineTravel};
+    };
+    const connected=()=>{
+      const visited=new Uint8Array(total),parts=[],queue=new Int32Array(total);
+      for(let start=0;start<total;start++){
+        if(!occupancy[start]||visited[start])continue;
+        let head=0,tail=1;queue[0]=start;visited[start]=1;
+        while(head<tail){
+          const i=queue[head++],x=i%sx,y=Math.floor(i/sx)%sy,z=Math.floor(i/(sx*sy));
+          const around=[
+            x>0?i-1:-1,x<sx-1?i+1:-1,
+            y>0?i-sx:-1,y<sy-1?i+sx:-1,
+            z>0?i-sx*sy:-1,z<sz-1?i+sx*sy:-1
+          ];
+          for(const j of around)if(j>=0&&occupancy[j]&&!visited[j]){
+            visited[j]=1;queue[tail++]=j;
+          }
+        }
+        parts.push(tail);
+      }
+      return parts.sort((a,b)=>b-a);
+    };
+    const reports=[];
+    for(const op of operations){
+      const entry=op.entryExit.entry.candidates.map(c=>({route:c.route,...candidateHits(op,c)}));
+      let removed=0;
+      for(let k=1;k<op.samples.length;k++){
+        const w0=[op.samples[k-1].profileA,op.samples[k-1].profileB];
+        const w1=[op.samples[k].profileA,op.samples[k].profileB];
+        scanSweep(w0,w1,i=>{
+          if(occupancy[i]){occupancy[i]=0;removed++;}
+        });
+      }
+      const exit=op.entryExit.exit.candidates.map(c=>({route:c.route,...candidateHits(op,c)}));
+      const parts=connected();
+      const remaining=parts.reduce((a,b)=>a+b,0);
+      // Deterministic sparse cloud for 3D visualization; the full binary
+      // occupancy stays private to the simulator to avoid giant JSON exports.
+      const cloud=[],maxVisualPoints=3500,stride=Math.max(1,Math.ceil(remaining/maxVisualPoints));
+      let seen=0;
+      for(let z=0;z<sz;z++)for(let y=0;y<sy;y++)for(let x=0;x<sx;x++){
+        if(!occupancy[index(x,y,z)])continue;
+        if(seen++%stride===0)cloud.push(...point(x,y,z));
+      }
+      op.sequentialStock={
+        voxelResolution:cell.slice(),removedVoxels:removed,remainingVoxels:remaining,
+        sparseRemainingPoints:cloud,
+        remainingPercent:100*remaining/total,componentVoxelCounts:parts.slice(0,12),
+        componentCount:parts.length,entry,exit,
+        // Never assert the largest component is the actual desired STEP body
+        // until an independently classified BREP solid has been voxelized.
+        protectedSolidIdentified:false,validatedKerfSide:false,
+        approvedForGcode:false
+      };
+      reports.push({angle:op.angle,ids:op.ids.slice(),...op.sequentialStock});
+    }
+    return {schema:"foam-wire-stock-removal-v1",voxelSize:cell,
+      grid: nx,initialVoxels:total,trimmedVoxels,operations:reports,
+      remainingVoxels:reports.at(-1).remainingVoxels,
+      protectedSolidIdentified:false,approvedForGcode:false,
+      limitation:"Консервативная дискретная симуляция резов. Не распознаёт внутри ячеек сохранённую STEP-деталь, не проверяет крепления и режущие подводы."};
+  }
+  function manualGuideDiagnostics(text, manualGuidePairs, o = {}) {
+    const pairs = manualGuidePairs || [];
+    if (!Array.isArray(pairs) || !pairs.length) throw new StepError("Не заданы пары направляющих");
+    const scale=o.scale===undefined?1:o.scale;
+    const offset=o.offset||[0,0,0];
+    if(!Array.isArray(offset)||offset.length!==3||!offset.every(Number.isFinite))
+      throw new StepError("Недопустимое смещение заготовки F4");
+    const model=new Model(text,o.rotation||identityRotation(),scale,o.tolerance===undefined?.1:o.tolerance);
+    const curves=new Map(model.auxiliaryCurves().map(c=>[c.id,c]));
+    const all=[...model.edges.values()].flat().concat([...curves.values()].flatMap(c=>c.points));
+    const origin=[0,1,2].map(k=>(Math.min(...all.map(p=>p[k]))+Math.max(...all.map(p=>p[k])))/2);
+    const stock=o.stock||[100,300,100],bottom=o.bottomZ||0;
+    const towersDistance=CONFIG.FieldWidth;
+    const nSamples=o.samples||128;
+    if(!Number.isInteger(nSamples)||nSamples<16||nSamples>1024)throw new StepError("Неверное число отсчётов");
+    const at=(curve,u)=>{
+      const v=Math.max(0,Math.min(curve.points.length-1,u*(curve.points.length-1)));
+      const i=Math.min(curve.points.length-2,Math.floor(v)),f=v-i;
+      return curve.points[i].map((n,k)=>n+(curve.points[i+1][k]-n)*f);
+    };
+    const used=new Set(), operations=[];
+    for(const ids of pairs){
+      if(!Array.isArray(ids)||ids.length!==2||ids[0]===ids[1]||ids.some(id=>used.has(id)))
+        throw new StepError("Недопустимое повторное назначение направляющих");
+      const [a,b]=ids.map(id=>curves.get(id));
+      if(!a||!b||a.fixedAxis!==b.fixedAxis||a.fixedAxis===2||a.fixedAxis<0||a.closed!==b.closed)
+        throw new StepError("Несовместимая пара направляющих #"+ids.join("/#"));
+      const axis=a.fixedAxis,cross=axis===1?0:1;
+      const aa=a.points[0][axis]-origin[axis],bb=b.points[0][axis]-origin[axis];
+      const den=bb-aa;
+      if(Math.abs(den)<.1)throw new StepError("Направляющие лежат в одной плоскости");
+      ids.forEach(id=>used.add(id));
+      const key=ids.join(':');
+      const userStart=o.guideStarts?.[key]??0;
+      const {correspondence,mapA,mapB,startU,reverseA}=resolveGuideStart(a,b,userStart);
+      const samples=[], bounds=[Infinity,-Infinity,Infinity,-Infinity], axisName=axis===1?"B0":"B90";
+      const zBase=bottom+stock[2]/2+offset[2];
+      const crossBase=CONFIG.HorizontalTravel/2+
+        (axis===1?offset[1]:offset[0]);
+      // The stock is translated as one body and rotates about the table centre.
+      // At B90 a positive initial Y translation becomes negative along-wire X.
+      const alongShift=axis===1?offset[0]:-offset[1];
+      for(let i=0;i<=nSamples;i++){
+        const u=i/nSamples,pa=at(a,mapA(u)),pb=at(b,mapB(u));
+        const crossA=pa[cross]-origin[cross],crossB=pb[cross]-origin[cross];
+        const zA=pa[2]-origin[2],zB=pb[2]-origin[2];
+        const ext=(v1,v2,x)=>v1+(v2-v1)*(x-aa)/den;
+        const left=[crossBase+ext(crossA,crossB,-towersDistance/2-alongShift), zBase+ext(zA,zB,-towersDistance/2-alongShift)];
+        const right=[crossBase+ext(crossA,crossB,towersDistance/2-alongShift),zBase+ext(zA,zB,towersDistance/2-alongShift)];
+        if([...left,...right].some(v=>!Number.isFinite(v)))throw new StepError("Некорректная экстраполяция струны");
+        bounds[0]=Math.min(bounds[0],left[0],right[0]);bounds[1]=Math.max(bounds[1],left[0],right[0]);
+        bounds[2]=Math.min(bounds[2],left[1],right[1]);bounds[3]=Math.max(bounds[3],left[1],right[1]);
+        samples.push({u,left,right,profileA:pa,profileB:pb});
+      }
+      const insideEnvelope=bounds[0]>=0&&bounds[1]<=CONFIG.HorizontalTravel&&
+        bounds[2]>=0&&bounds[3]<=CONFIG.VerticalTravel;
+      const clearance=Math.max(0,Number(o.clearance)||0);
+      const insideWithClearance=insideEnvelope&&bounds[3]+clearance<=CONFIG.VerticalTravel;
+      const insideStockHeight=bounds[2]>=bottom+offset[2]-1e-6&&
+        bounds[3]<=bottom+offset[2]+stock[2]+1e-6;
+      const stockCrossWidth=axis===1?stock[1]:stock[0];
+      const entryExit=inspectGuideEntryExit(samples,[
+        crossBase-stockCrossWidth/2,crossBase+stockCrossWidth/2,
+        bottom+offset[2],bottom+offset[2]+stock[2]
+      ],{clearance,margin:Math.max(2,Number(o.kerf)||0),field:CONFIG.HorizontalTravel,
+        vertical:CONFIG.VerticalTravel});
+      operations.push({ids:ids.slice(),angle:axis===1?0:90,operation:axisName,closed:a.closed,
+        planeSpan:Math.abs(den),towersDistance,correspondence,startU,reverseA,samples,
+        alignmentNeedsReview:correspondence.shapeRms>2,
+        bounds:{transverse:[bounds[0],bounds[1]],z:[bounds[2],bounds[3]]},
+        insideEnvelope,insideWithClearance,insideStockHeight,entryExit,approvedForGcode:false,
+        warnings:["Начало и направление обхода автоматически согласованы по форме",
+          ...(correspondence.shapeRms>2?
+            ["Расхождение форм после согласования RMS "+correspondence.shapeRms.toFixed(2)+
+              " мм — требуется визуальная проверка положения струны"]:[]),
+          "Прямолинейная струна не проверена на сохранность детали",
+          ...(entryExit.entry.hasClearRapid?[]:
+            ["Вход: не найден подход без проникновения струны в исходную заготовку"]),
+          ...(entryExit.exit.hasClearRapid?[]:
+            ["Выход: не найден отвод без проникновения струны в исходную заготовку"]),
+          ...(a.closed?["Замкнутый контур требует прорези входа или предварительного отверстия, если находится внутри блока"]:[]),
+          "Проверка использует только прямоугольник исходной заготовки, а не удалённый материал", 
+          ...(insideEnvelope?[]:["Предварительная траектория выходит за пределы рабочих ходов"]),
+          ...(insideWithClearance?[]:["Недостаточен заданный запас по верхней границе Z"]),
+          ...(insideStockHeight?[]:["Часть траектории находится вне заданной высоты заготовки"]),
+          "Кинематика поворота стола и знак поперечной оси B90 требуют калибровки"]});
+    }
+    const cutOrder=o.cutOrder||'B90_B0',trimAngle=o.trimAngle===undefined?90:Number(o.trimAngle);
+    if(!['B0_B90','B90_B0'].includes(cutOrder)||![0,90].includes(trimAngle))
+      throw new StepError("Некорректный угол торцевания или порядок операций");
+    const angleOrder=cutOrder==='B0_B90'?[0,90]:[90,0];
+    operations.sort((a,b)=>angleOrder.indexOf(a.angle)-angleOrder.indexOf(b.angle));
+    const trimStockDimension=trimAngle===90?stock[0]:stock[1];
+    const finishedDimension=trimAngle===90?
+      Math.max(...all.map(p=>p[1]))-Math.min(...all.map(p=>p[1])):
+      Math.max(...all.map(p=>p[0]))-Math.min(...all.map(p=>p[0]));
+    const trimAllowance=(trimStockDimension-finishedDimension)/2-(Number(o.kerf)||0)/2;
+    const trimEnabled=o.trim!==false&&trimAllowance>1e-6;
+    const trimOperation=trimEnabled?{
+      type:'TRIM',angle:trimAngle,
+      stockDimension:trimStockDimension,finishedDimension,trimAllowance,
+      status:'NOT_CERTIFIED_FOR_F4',
+      description:trimAngle===90?'Торцевание по длине заготовки':'Торцевание по ширине заготовки'
+    }:null;
+    const plannedSequence=[
+      ...(trimOperation?[trimOperation]:[]),
+      ...operations.map((op,i)=>({type:'PROFILE',angle:op.angle,ids:op.ids.slice(),
+        step:i+1,status:'NOT_CERTIFIED_FOR_F4'}))
+    ];
+    const stockRemoval=simulateSequentialStockRemoval(operations,origin,stock,{
+      kerf:o.kerf,offset,bottomZ:bottom,voxelSize:o.voxelSize,trimOperation
+    });
+    return {schema:"foam-wire-f4-diagnostic-motion-v1",operations,origin,
+      rotation:o.rotation||identityRotation(),scale,offset,stock:stock.slice(),
+      bottomZ:bottom,kerf:Number(o.kerf)||0,
+      trimAngle,cutOrder,trimOperation,plannedSequence,stockRemoval,
+      approvedForGcode:false,notes:"Моделирование последовательного удаления материала выполнено на объёмной сетке. Сохранность STEP-детали и безопасные режущие входы ещё не сертифицированы. Не станочный код."};
+  }
+  // Operator-directed F4 postprocessor. User-supplied guides and starts
+  // control cutting; unresolved stock-surface and lead checks are WARNINGS.
+  // Machine travel validation remains mandatory through Program.travel().
+  function buildF4Program(text,pairs,o={}) {
+    if(!Array.isArray(pairs)||!pairs.length)throw new StepError("Подтвердите минимум одну пару направляющих");
+    if(o.mirror||o.pair)
+      throw new StepError("Режим зеркальной/двойной детали для ручных направляющих F4 не реализован");
+    if(!Array.isArray(o.stock)||o.stock.length!==3||
+       ![...o.stock,o.bottomZ,o.kerf,o.feed,o.minS,o.maxS,o.clearance,o.retract].every(Number.isFinite)||
+       Math.min(...o.stock,o.feed,o.minS,o.kerf)<=0||o.maxS<o.minS||
+       o.bottomZ<0||o.clearance<0||o.retract<0)
+      throw new StepError("Некорректные параметры F4");
+    const offset=o.offset||[0,0,0];
+    if(!Array.isArray(offset)||offset.length!==3||!offset.every(Number.isFinite))
+      throw new StepError("Некорректное смещение заготовки F4");
+    const report=manualGuideDiagnostics(text,pairs,{...o,voxelSize:o.voxelSize||6});
+    const cfg={...CONFIG,TravelClearance:o.clearance,FeedRateCut:o.feed,
+      WireMinPower:o.minS,WireMaxPower:o.maxS};
+    const p=new Program(cfg,!!o.powerComp,1);
+    const midpoint=cfg.HorizontalTravel/2;
+    const stockZ=o.bottomZ+offset[2];
+    if(stockZ<0||stockZ+o.stock[2]+o.clearance>cfg.VerticalTravel)
+      throw new StepError("Смещённая заготовка выходит за вертикальный ход станка");
+    const move=(kind,s)=>p.travel(kind,s.left[0]-midpoint,s.left[1],
+      s.right[0]-midpoint,s.right[1]);
+    const eol=EOL, warnings=[
+      "F4: геометрия направляющих определена оператором; сохранность STEP-тела не подтверждена",
+      "Начало и окончание каждого реза требуют выбранного оператором технологического входа/выхода",
+      "Между B0/B90 поворот стола разрешён только после фактического освобождения струны от материала"
+    ];
+    let program="; *** F4 OPERATOR-DIRECTED G-CODE ***"+eol+
+      "; WARNING: UNVERIFIED LEADS AND PRESERVED SOLID - REVIEW BEFORE MACHINING"+eol+
+      // The simulator's L is its Y extent, W its X extent.
+      "; STOCK L="+o.stock[1]+" W="+o.stock[0]+" H="+o.stock[2]+" Z0="+o.bottomZ+
+        " OX="+offset[0]+" OY="+offset[1]+" OZ="+offset[2]+eol+
+      "; CUT ORDER="+report.cutOrder+" TRIM="+(report.trimOperation?"B"+report.trimAngle:"OFF")+eol+
+      "$H"+eol+"G21 G90 G94"+eol+
+      "G92 "+travelPosition(cfg.HomingX1,cfg.HomingZ1,cfg.HomingX2,cfg.HomingZ2)+
+        " B"+fix2(cfg.HomingR1)+eol+
+      p.travel("move",cfg.ParkX,cfg.ParkZ,cfg.ParkX,cfg.ParkZ)+rotate(cfg,cfg.ParkR1)+
+      "M05"+eol;
+    let currentAngle=cfg.ParkR1;
+    const park=()=>p.travel("move",cfg.ParkX,cfg.ParkZ,cfg.ParkX,cfg.ParkZ);
+    const setAngle=angle=>{
+      if(currentAngle===angle)return "";
+      currentAngle=angle;
+      return "M05"+eol+park()+rotate(cfg,angle);
+    };
+    if(report.trimOperation){
+      const trim=report.trimOperation;
+      const dim=trim.angle===90?o.stock[0]:o.stock[1];
+      const along=trim.angle===90?o.stock[1]:o.stock[0];
+      const task={Length:dim,Width:along,Height:o.stock[2],TrimEnds:trim.trimAllowance,
+        BottomZ:stockZ,RetractOffset:o.retract,Angle:trim.angle,
+        CenterOffset:trim.angle===90?offset[0]:offset[1]};
+      const check=checkTrim(cfg,task,true);
+      if(check.length)throw new StepError("Торцевание B"+trim.angle+": "+check.join("; "));
+      program+="; *** TRIM B"+trim.angle+" ***"+eol;
+      program+=setAngle(trim.angle);
+      const safe=task.BottomZ+task.Height+cfg.TravelClearance;
+      const half=task.Length/2-task.TrimEnds;
+      for(const localY of [-half,half]){
+        const y=localY+task.CenterOffset;
+        const outer=y+(localY<=0?-task.RetractOffset:task.RetractOffset);
+        program+="; TRIM AT "+fix2(y)+" B"+trim.angle+eol+"M05"+eol;
+        program+=p.travel("move",y,safe,y,safe);
+        program+="M03 S"+fix2(o.minS)+eol;
+        program+=p.travel("cut",y,task.BottomZ,y,task.BottomZ);
+        program+=p.travel("cut",outer,task.BottomZ,outer,task.BottomZ);
+        program+=p.travel("cut",outer,safe,outer,safe);
+        program+="M05"+eol;
+      }
+      warnings.push("Торцевание и отвод после него следует проверить в симуляторе");
+    }
+    let count=0;
+    for(const op of report.operations){
+      const alongWire=op.angle===0?o.stock[0]:o.stock[1];
+      const alongOffset=op.angle===0?offset[0]:offset[1];
+      if(alongWire/2+Math.abs(alongOffset)>cfg.FieldWidth/2)
+        throw new StepError("B"+op.angle+": длина заготовки вдоль струны "+
+          alongWire+" мм превышает расстояние между башнями "+cfg.FieldWidth+" мм");
+      const crossOffset=op.angle===0?offset[1]:offset[0];
+      const crossLength=op.angle===0?o.stock[1]:o.stock[0];
+      if(crossLength/2+Math.abs(crossOffset)>cfg.HorizontalTravel/2)
+        throw new StepError("B"+op.angle+": смещённая заготовка выходит за поперечный ход кареток");
+      if(!op.insideEnvelope)
+        throw new StepError("Операция B"+op.angle+" #"+op.ids.join("/#")+
+          " выходит за физические ходы кареток");
+      program+="; *** F4 B"+op.angle+" GUIDES #"+op.ids.join("/#")+
+        " START="+(op.startU??0).toFixed(4)+" ***"+eol;
+      program+=setAngle(op.angle);
+      // At the first point the wire is off. Operator-designed guide start
+      // determines the actual entry; no implicit lead is invented.
+      program+="; POSITION AT USER-SELECTED START - CHECK APPROACH"+eol;
+      program+=move("move",op.samples[0]);
+      program+="M03 S"+fix2(o.minS)+eol;
+      for(let i=1;i<op.samples.length;i++){program+=move("cut",op.samples[i]);count++;}
+      program+="M05"+eol+
+        "; USER MUST CONFIRM CLEARANCE BEFORE FOLLOWING ROTATION / EXIT"+eol;
+      const bad=op.sequentialStock?.entry?.filter(c=>c.occupiedVoxelHits>0)||[];
+      if(bad.length)warnings.push("B"+op.angle+": пересечения входа с оставшимся материалом; "+
+        "проверьте точку и подход");
+      if(op.alignmentNeedsReview)warnings.push("B"+op.angle+": различия парных профилей RMS="+
+        op.correspondence.shapeRms.toFixed(2)+" мм");
+    }
+    // Do not add an implicit rapid retract: the cutting wire may still be
+    // embedded in foam when the final profile finishes.
+    program+="; END AT LAST GUIDE POINT - WIRE OFF; NO AUTOMATIC RETRACT"+eol+
+      "M05"+eol;
+    return {program,warnings,diagnostic:report,points:count,
+      part:{span:o.stock[0],x0:0,x1:o.stock[1],z0:o.bottomZ,z1:o.bottomZ+o.stock[2]},
+      holes:0,power:[o.minS,o.maxS,p.changes],operatorDirected:true};
+  }
+  // Review-only path encoding for the existing 3D G-code simulator.
+  // This is NOT a production postprocessor: leads, stock-preservation,
+  // turntable fixture and machine collisions remain unverified.
+  function buildF4VisualPreview(text,pairs,o={}) {
+    const diagnostic=manualGuideDiagnostics(text,pairs,o);
+    const f=n=>Number(n).toFixed(3);
+    const lines=[
+      '; *** SIMULATION ONLY / F4 UNVERIFIED / DO NOT SEND TO MACHINE ***',
+      '; No homing, no verified lead-in/out, no machine-safe output.',
+      '; STOCK L='+f(o.stock[1])+' W='+f(o.stock[0])+
+        ' H='+f(o.stock[2])+' Z0='+f(o.bottomZ)+
+        ' OX='+f(o.offset?.[0]||0)+' OY='+f(o.offset?.[1]||0)+' OZ='+f(o.offset?.[2]||0),
+      '; CUT ORDER='+diagnostic.cutOrder+'; TRIM B='+diagnostic.trimAngle,
+      '; *** VIRTUAL CUTTING PATH - NOT A MACHINE PROGRAM ***',
+      'G21 G90 G94'
+    ];
+    const midpoint=CONFIG.HorizontalTravel/2;
+    const format=s=>'X'+f(s.left[0]-midpoint)+' Y'+f(s.left[1])+
+      ' Z'+f(s.right[0]-midpoint)+' A'+f(s.right[1]);
+    // Visual marker for selected stock trimming. Actual trim path must be
+    // independently modeled before any machining export.
+    if(diagnostic.trimOperation)lines.push('; VIRTUAL TRIM B'+diagnostic.trimAngle+
+      ' allowance '+f(diagnostic.trimOperation.trimAllowance)+
+      'mm - NOT EXECUTED IN THIS VISUAL PREVIEW');
+    for(const op of diagnostic.operations){
+      if(!op.samples.length)continue;
+      lines.push('; *** PREVIEW B'+op.angle+' #'+op.ids.join('/#')+' ***');
+      lines.push('G00 B'+f(op.angle)+' F'+f(CONFIG.FeedRateRotate*60));
+      lines.push('; UNVERIFIED APPROACH: teleport-like simulator positioning');
+      lines.push('G00 '+format(op.samples[0])+' F'+f(CONFIG.FeedRateMove*60));
+      // The simulator renders the wire only when it is switched on.
+      // This M03 exists only inside in-memory preview state. All forms of
+      // transmission, export and copy are blocked for preview-only jobs.
+      lines.push('M03 S'+f(Math.max(1,Number(o.minS)||500)));
+      for(let i=1;i<op.samples.length;i++)
+        lines.push('G01 '+format(op.samples[i])+' F'+f(Math.max(.1,Number(o.feed)||7)*60));
+      lines.push('M05');
+      lines.push('; EXIT NOT VERIFIED; NO PARK COMMAND GENERATED');
+    }
+    lines.push('; *** END OF SIMULATION-ONLY DATA ***');
+    return {program:lines.join('\r\n')+'\r\n',diagnostic,
+      previewOnly:true,
+      warnings:['F4 review only: machine output, copy and export disabled',
+        'Start and exit cutting leads, kerf side, safe B rotation and preserved STEP solid are NOT validated']};
+  }
+  return { buildProgram, autoPlace, groundPlacement, buildF4Program, buildF4VisualPreview, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, resolveGuideStart, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
 })();
 
 // ---------------------------------------------------------------------------------------------
@@ -3491,18 +4838,32 @@ const Gen = (() => {
 // ---------------------------------------------------------------------------------------------
 let modelRotation = Gen.identityRotation();
 let modelOffset = [0,0,0];
+let modelZOffset = 0;
 let stepFile = null;        // - открытый STEP: { name, text }
+let generatorMode = "auto";
+function showGeneratorMode(mode) {
+  generatorMode = mode;
+  const manual = mode === "manual";
+  for (const el of document.querySelectorAll(".gn-manual")) el.hidden = !manual;
+  for (const el of document.querySelectorAll(".gn-auto")) el.hidden = manual;
+  $("gnModeAuto").setAttribute("aria-pressed", String(!manual));
+  $("gnModeManual").setAttribute("aria-pressed", String(manual));
+  generatorPreview.setManualActive(manual);
+  updateGenerateLabel();
+}
 function showTab(tab) {
   const gen = tab === "gen";
   $("panelGen").hidden = !gen; $("panelCut").hidden = gen;
-  $("tabGen").setAttribute("aria-pressed", String(gen)); $("tabCut").setAttribute("aria-pressed", String(!gen));
+  $("gnModeAuto").setAttribute("aria-pressed", String(gen && generatorMode === "auto"));
+  $("gnModeManual").setAttribute("aria-pressed", String(gen && generatorMode === "manual"));
+  $("tabCut").setAttribute("aria-pressed", String(!gen));
   for (const el of document.querySelectorAll(".cut-only")) el.hidden = gen;
 }
 function openStep(file, handle = null) {
   const rd = new FileReader();
   rd.onload = () => {
     stepFile = { name: file.name, text: String(rd.result), handle };
-    modelRotation = Gen.identityRotation(); modelOffset = [0,0,0]; $("gnOffset").textContent="X 0 · Y 0 · Z 0 мм"; $("gnScale").value = 100; $("gnTolerance").value = "0.1";
+    modelRotation = Gen.identityRotation(); modelOffset = [0,0,0]; modelZOffset = 0; $("gnOffset").textContent="X 0 · Y 0 · Z 0 мм"; $("gnScale").value = 100; $("gnTolerance").value = "0.1";
     $("gnFile").textContent = file.name;
     // Preliminary validated F2 setup. The 250 mm vertical travel allows
     // only 10 mm overhead above a 240 mm high blank with bottom at Z=0.
@@ -3530,15 +4891,46 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
   const n = (id) => parseFloat($(id).value);
   const ul = $("gnWarn"); ul.innerHTML = "";
   $("gnDone").hidden = true;
-  try {
-    const r = Gen.buildProgram(stepFile.text, stepFile.name, {
-      rotation: modelRotation, offset: [...modelOffset], scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
+  const config = {
+      manualGuidePairs: generatorMode === "manual" ? generatorPreview.getGuidePairs() : [],
+      guideStarts: generatorPreview.getGuideStarts(),
+      rotation: modelRotation, offset: [...modelOffset], modelZOffset, scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
-      clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair",
+      clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked,
+      trimAngle:n("gnTrimAngle"), cutOrder:$("gnCutOrder").value, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair"
+  };
+  try {
+    if (generatorMode === "manual") {
+      if(modelZOffset!==0)throw new Error("Для ручных направляющих сначала нажмите «По центру».");
+      if (!config.manualGuidePairs.length || !generatorPreview.hasAuxiliaryCurves()) throw new Error("Выберите и подтвердите пары направляющих в 3D.");
+      const result=Gen.buildF4Program(stepFile.text,config.manualGuidePairs,config);
+      const outName=stepFile.name.replace(/\.(stp|step)$/i,"")+"_F4_auto.gcode";
+      $("gnOut").textContent=outName;
+      loadProgram(result.program,outName,{generationStamp:generatorSignature(),previewOnly:false,operatorDirected:true});
+      setCamera("3d");
+      status.className="note";
+      const critical=prog.check.warns.filter(x=>x.level==="crit");
+      status.textContent="F4: создан G-code по "+result.diagnostic.operations.length+
+        " подтверждённым операциям. Строк: "+result.program.split("\n").length+
+        ". Проверьте движение в 3D и предупреждения."+
+        (critical.length?" Критических замечаний симулятора: "+critical.length+".":"");
+      for(const w of result.warnings){
+        const li=document.createElement("li");li.className="warn";
+        li.textContent=w;ul.appendChild(li);
+      }
+      $("gnDone").hidden=false;
+      $("gnSave").hidden=false;
+      $("gnToCut").textContent="Открыть в РЕЗКЕ";
+      return;
+    }
+    $("gnSave").hidden=false;
+    $("gnToCut").textContent="Открыть в РЕЗКЕ";
+    const r = Gen.buildProgram(stepFile.text, stepFile.name, {
+      ...config
     });
     const outName = stepFile.name.replace(/\.(stp|step)$/i, "") + (mode === "normal" ? "" : "_" + mode) + "_auto.gcode";
     $("gnOut").textContent = outName;
-    loadProgram(r.program, outName, {generationStamp:generatorSignature()});
+    loadProgram(r.program, outName, {generationStamp:generatorSignature(),smoothSurface:r.smoothSurface});
     if (prog.check.warns.some((w) => w.level === "crit")) throw new Error("Траектория не прошла проверку симулятора: " + prog.check.warns.find((w) => w.level === "crit").text);
     setCamera("3d");
     const p = r.part;
@@ -3553,8 +4945,9 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
     status.textContent = "Не удалось: " + e.message;
   }
 }
-$("tabGen").addEventListener("click", () => showTab("gen"));
 $("tabCut").addEventListener("click", () => showTab("cut"));
+$("gnModeAuto").addEventListener("click", () => { showTab("gen"); showGeneratorMode("auto"); });
+$("gnModeManual").addEventListener("click", () => { showTab("gen"); showGeneratorMode("manual"); });
 $("gnInput").addEventListener("change", (e) => { if (e.target.files[0]) openStep(e.target.files[0]); });
 // - Окно выбора с доступом к файлу нужно, чтобы потом сохранить G-code в ту же папку
 $("gnInput").addEventListener("click", async (e) => {
@@ -3575,9 +4968,12 @@ $("panelGen").addEventListener("drop", async (e) => {
   if (f) openStep(f, await Promise.resolve(pending).catch(() => null));
 });
 // The pair checkbox is a real machining mode, not just a stock preview.
-function selectedGenerateMode() { return $("gnStockPair").checked ? "pair" : "normal"; }
+function selectedGenerateMode() { return generatorMode === "auto" && $("gnStockPair").checked ? "pair" : "normal"; }
+function updateGenerateLabel() {
+  $("gnGo").textContent = generatorMode === "manual" ? "Создать G-code по парам" : $("gnStockPair").checked ? "Создать G-code: ПАРА (2 детали)" : "Создать G-code: 1 деталь";
+}
 function refreshGenerateMode() {
-  $("gnGo").textContent = $("gnStockPair").checked ? "Создать G-code: ПАРА (2 детали)" : "Создать G-code: 1 деталь";
+  updateGenerateLabel();
   // A previous file must not be presented as the output of a newly selected mode.
   $("gnDone").hidden = true;
   $("gnOut").textContent = "";

@@ -4,9 +4,10 @@ const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
 // Exercise the production generator without DOM stubs or a second implementation.
 const source=html.slice(html.indexOf('const Gen ='),html.indexOf('//  Вкладки и экран генератора'))
- .replace('return { buildProgram, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };','return { buildProgram, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel, Model, sampleFace, Program, startBlock, endBlock };');
+ .replace(/return \{ buildProgram,.*?CONFIG, previewGeometry, previewPair, identityRotation, rotateModel \};/,
+  match=>match.replace(' };', ', Model, sampleFace, Program, startBlock, endBlock };'));
 const gen=vm.runInNewContext(source+';Gen');
-const fixture=fs.readFileSync(path.join(__dirname,'fixtures/split-profile.stp'),'utf8');
+const fixture=fs.readFileSync(path.join(__dirname,'fixtures/split-profile.stp'),'utf8').replace(/\r\n/g,'\n');
 // Construct a genuine two-direction ruled STEP topology: the main sheet
 // is spanned along Y, while a curved bore runs from X=-50 to X=+50.
 // Both bore-end edges belong to the planar end faces.
@@ -85,6 +86,123 @@ test('swept wing keeps the real end-cap span even with oblique generators',()=>{
  assert.equal(r.secondary,0);
  assert.doesNotMatch(r.program,/SECONDARY CUT/);
 });
+test('strongly swept ruled faces retain their end-cap axis',()=>{
+ const swept=fixture.replace(/(CARTESIAN_POINT\('',\()\s*(-?[\d.]+),\s*(-?[\d.]+),\s*(-?[\d.]+)(\)\))/g,
+  (_,prefix,x,y,z,suffix)=>prefix+(+x*2.3+(+y)*1.8)+','+(+y*6)+','+(+z)+suffix);
+ const shape=new gen.Model(swept).build();
+ assert.equal(shape.axis,1);
+ assert.equal(shape.outer.length,4);
+});
+
+test('oblique vertical STEP faces produce advisory rotation candidates',()=>{
+ const angle=Math.PI/6,c=Math.cos(angle),q=Math.sin(angle);
+ const rotated=fixture.replace(/(CARTESIAN_POINT\('',\()\s*(-?[\d.]+),\s*(-?[\d.]+),\s*(-?[\d.]+)(\)\))/g,
+  (_,prefix,x,y,z,suffix)=>prefix+(x*c-y*q)+','+(x*q+y*c)+','+z+suffix);
+ const m=new gen.Model(rotated),faces=m.verticalBevels();
+ assert.ok(faces.length>=2);
+ for(const face of faces){
+   assert.ok(Math.abs(face.normal[2])<1e-6);
+   assert.ok(face.angle>=0&&face.angle<180);
+   const t=face.angle*Math.PI/180;
+   assert.ok(Math.abs(Math.sin(t)*face.normal[0]-Math.cos(t)*face.normal[1])<1e-6);
+ }
+});
+
+test('kil2 retains diagnostic STEP edges when safe generation is not established',{skip:!process.env.KIL_STEP},()=>{
+ const step=fs.readFileSync(process.env.KIL_STEP,'utf8');
+ const preview=gen.previewGeometry(step,gen.identityRotation(),1,.6);
+ assert.equal(preview.diagnosticOnly,true);
+ const bevel=preview.bevelCandidates.find(face=>face.face===1235);
+ assert.ok(bevel,'the root bevel is identified from its plane and boundary');
+ assert.ok(Math.abs(bevel.angle-113.93)<.1,`unexpected bevel angle: ${bevel.angle}`);
+ assert.ok(preview.edgeLines.length>0);
+ assert.equal(preview.diagnosticFaces.length,10);
+ assert.ok(preview.diagnosticFaces[1].patch,'curved rudder uses a surface patch');
+ const patch=preview.diagnosticFaces[1].patch;
+ assert.equal(patch.length,33);assert.ok(patch.every(row=>row.length===33));
+ assert.ok(preview.size[1]>280);
+ const three=require('../lib/three.min.js');
+ for(const boundary of preview.diagnosticFaces){
+   const n=[0,0,0];
+   boundary.forEach((a,i)=>{const b=boundary[(i+1)%boundary.length];n[0]+=(a[1]-b[1])*(a[2]+b[2]);n[1]+=(a[2]-b[2])*(a[0]+b[0]);n[2]+=(a[0]-b[0])*(a[1]+b[1]);});
+   const axis=n.reduce((best,v,i)=>Math.abs(v)>Math.abs(n[best])?i:best,0),axes=[0,1,2].filter(k=>k!==axis);
+   assert.ok(three.ShapeUtils.triangulateShape(boundary.map(p=>new three.Vector2(p[axes[0]],p[axes[1]])),[]).length>0);
+ }
+ assert.match(preview.previewError,/Грань #790/);
+ assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({stock:[250,250,50],tolerance:.6})),/Грань #790/);
+});
+
+// Synthetic solid with a single closed outer skin and one seam vertex per cap.
+function closedSkinFixture() {
+ let id=1,lines=[];
+ const add=(type,args)=>{const ref='#'+id++;lines.push(ref+' = '+type+"('',"+args+');');return ref;};
+ const point=p=>add('CARTESIAN_POINT','('+p.join(',')+')');
+ const profile=[[30,0],[30,5],[15,10],[0,10],[-15,10],[-30,5],[-30,0],[-30,-5],[-15,-10],[0,-10],[15,-10],[30,-5],[30,0]];
+ // Deliberately place the STEP seam at the top, away from either entry side.
+ profile.pop();profile.push(...profile.splice(0,3));profile.push(profile[0]);
+ const rows=[0,1].map(end=>profile.map(([x,z])=>point([x+end*60,end*100,z+20])));
+ const curves=rows.map(row=>add('B_SPLINE_CURVE_WITH_KNOTS','3,('+row.join(',')+'),.UNSPECIFIED.,.T.,.F.,(4,3,3,3,4),(0.,0.25,0.5,0.75,1.),.UNSPECIFIED.'));
+ const vertices=rows.map(row=>add('VERTEX_POINT',row[0]));
+ const edges=curves.map((c,k)=>add('EDGE_CURVE',vertices[k]+','+vertices[k]+','+c+',.T.'));
+ const seam=add('EDGE_CURVE',vertices.join(',')+',$,.T.');
+ const bound=ids=>add('FACE_OUTER_BOUND',add('EDGE_LOOP','('+ids.map(e=>add('ORIENTED_EDGE','*,*,'+e+',.T.')).join(',')+')')+',.T.');
+ const skin=add('B_SPLINE_SURFACE_WITH_KNOTS','3,1,('+rows[0].map((v,i)=>'('+v+','+rows[1][i]+')').join(',')+'),.UNSPECIFIED.,.T.,.F.,.F.,(4,3,3,3,4),(2,2),(0.,0.25,0.5,0.75,1.),(0.,1.),.UNSPECIFIED.');
+ const faces=[add('ADVANCED_FACE','('+bound([edges[0],seam,edges[1],seam])+'),'+skin+',.T.')];
+ for(let k=0;k<2;k++){
+   const grid=[[-40,0],[-40,40],[100,0],[100,40]].map(([x,z])=>point([x,k*100,z]));
+   const cap=add('B_SPLINE_SURFACE_WITH_KNOTS','1,1,(('+grid.slice(0,2).join(',')+'),('+grid.slice(2).join(',')+')),.UNSPECIFIED.,.F.,.F.,.F.,(2,2),(2,2),(0.,1.),(0.,1.),.UNSPECIFIED.');
+   faces.push(add('ADVANCED_FACE','('+bound([edges[k]])+'),'+cap+',.T.'));
+ }
+ add('MANIFOLD_SOLID_BREP',add('CLOSED_SHELL','('+faces.join(',')+')'));
+ return 'ISO-10303-21;\nDATA;\n'+lines.join('\n')+'\nENDSEC;\nEND-ISO-10303-21;';
+}
+test('closed exterior uses cap topology and exact boundary splines despite swept generators',()=>{
+ const text=closedSkinFixture(),m=new gen.Model(text),shape=m.build();
+ assert.equal(shape.axis,1);assert.equal(shape.outer.length,1);assert.equal(shape.holes.length,0);
+ assert.equal(gen.previewGeometry(text).diagnosticOnly,false);
+ for(const side of [-1,1]){
+   const r=gen.buildProgram(text,'closed.stp',options({stock:[110,140,60],side}));
+   assert.match(r.program,/PROFILE/);assert.doesNotMatch(r.program,/HOLE:/);
+   const block=r.program.slice(r.program.indexOf('; *** PROFILE:'));
+   const count=+block.match(/PROFILE: (\d+)/)[1];
+   const moves=block.split(/\r?\n/).filter(line=>/^G01 /.test(line)).slice(0,count);
+   const xs=moves.map(line=>+line.match(/X(-?[\d.]+)/)[1]);
+   const extreme=side>0?Math.max(...xs):Math.min(...xs);
+   assert.ok(Math.abs(xs[0]-extreme)<.02,'entry is on the selected extreme, not the STEP seam');
+ }
+ const raw=m.facesRaw[0],surface=m.surface(raw.surf),face=shape.outer[0][0];
+ for(let i=0;i<=100;i++)for(const f of [0,.25,.5,.75,1]){
+   const t=i/100,a=face.A(t),b=face.B(t),p=surface.at(t,f);
+   assert.ok(Math.hypot(...p.map((v,k)=>v-a[k]-f*(b[k]-a[k])))<1e-6);
+ }
+});
+test('closed exterior rejects internal bounds, missing solids and mismatched curve controls',()=>{
+ const text=closedSkinFixture();
+ assert.equal(new gen.Model(text.replaceAll('FACE_OUTER_BOUND','FACE_BOUND')).closedExterior(),null);
+ assert.equal(new gen.Model(text.replace('MANIFOLD_SOLID_BREP','OPEN_SOLID')).closedExterior(),null);
+ const m=new gen.Model(text),edge=m.facesRaw[1].edgeIds[0],curve=m.get(m.entities.get(edge).args[3]);
+ curve.args[2]=curve.args[2].slice().reverse();
+ assert.equal(m.closedExterior(),null);
+});
+test('external kil3 builds an exterior profile and safe G-code',{skip:!process.env.KIL3_STEP},()=>{
+ const text=fs.readFileSync(process.env.KIL3_STEP,'utf8'),m=new gen.Model(text),shape=m.build();
+ assert.equal(shape.axis,1);assert.equal(shape.holes.length,0);assert.equal(shape.secondaryContours.length,0);
+ const preview=gen.previewGeometry(text);
+ assert.equal(preview.diagnosticOnly,false);assert.ok(preview.size[1]>280);
+ assert.ok(preview.closedShell);
+ const three=require('../lib/three.min.js'),axes=[0,1,2].filter(k=>k!==preview.closedShell.capAxis);
+ for(const end of [0,1]){
+   const points=preview.closedShell.rail.slice(0,-1).map(pair=>new three.Vector2(pair[end][axes[0]],pair[end][axes[1]]));
+   assert.ok(three.ShapeUtils.triangulateShape(points,[]).length>0);
+ }
+ for(const side of [-1,1]){
+   const r=gen.buildProgram(text,'kil3.stp',options({stock:[250,320,60],side}));
+   assert.match(r.program,/PROFILE/);assert.doesNotMatch(r.program,/HOLE:|SECONDARY CUT/);
+   const p=sim.parseGcode(r.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+   assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
+ }
+});
+
 test('pair checkbox controls Create G-code, not only the stock preview',()=>{
  // Exercise the actual UI mode dispatch and event handlers with minimal DOM stubs.
  const clickHandlers=new Map();
@@ -93,7 +211,7 @@ test('pair checkbox controls Create G-code, not only the stock preview',()=>{
  const get=id=>nodes[id],modes=[];
  // Use only the production dispatch wiring; do not silently substitute another implementation.
  const ui=html.slice(html.indexOf('// The pair checkbox is a real machining mode'),html.indexOf('$("gnToCut").addEventListener'));
- vm.runInNewContext(ui,{ $:get,generate:mode=>modes.push(mode),generatorPreview:{rebuild(){}},
+ vm.runInNewContext(ui,{ $:get,generatorMode:'auto',generate:mode=>modes.push(mode),generatorPreview:{rebuild(){}},
    showTab(){},saveProgram(){},});
  get('gnStockPair').checked=true;
  clickHandlers.get('gnStockPair:change')();
@@ -153,9 +271,9 @@ test('external W1: no false transverse operation from STEP end caps',{skip:!proc
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
  assert.doesNotMatch(r.program,/SECONDARY CUT/);
 });
-test('auto stock takes standard sheet thickness along wire, not vertical Z',()=>{
+test('auto stock takes standard sheet thickness along wire, not vertical Z',async()=>{
  const source=fs.readFileSync(path.join(__dirname,'../generator-view.js'),'utf8');
- const begin=source.indexOf('  function autoStockOptions()');
+ const begin=source.indexOf('  async function autoStockOptions(');
  const end=source.indexOf("  document.getElementById('gnStockFromModel').addEventListener",begin);
  assert.ok(begin>0&&end>begin);
  const text=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-profile.stp'),'utf8');
@@ -163,11 +281,11 @@ test('auto stock takes standard sheet thickness along wire, not vertical Z',()=>
   Gen:gen,stepFile:{text},modelRotation:gen.identityRotation(),modelOffset:[0,0,0],
   geometry:gen.previewGeometry(text),machine:gen.CONFIG,
   document:{getElementById:()=>({checked:false})},
-  n:id=>({gnScale:100,gnKerf:1,gnZ:10,gnClear:20,gnLead:5,gnTolerance:.6})[id]
+  n:id=>({gnScale:100,gnKerf:1,gnZ:10,gnClear:20,gnLead:5,gnTolerance:.6})[id],setTimeout
  };
  const seenTolerances=[];
  state.Gen={...gen,previewGeometry:(...args)=>{seenTolerances.push(args[3]);return gen.previewGeometry(...args)}};
- const options=vm.runInNewContext(source.slice(begin,end)+';autoStockOptions()',state);
+ const options=await vm.runInNewContext(source.slice(begin,end)+';autoStockOptions()',state);
  assert.ok(seenTolerances.length>0 && seenTolerances.every(v=>v===.6),'candidate orientations use selected STEP tolerance');
  assert.ok(options.length);
  const best=options[0];
@@ -176,6 +294,10 @@ test('auto stock takes standard sheet thickness along wire, not vertical Z',()=>
  assert.equal(best.standard,true);
  assert.ok(best.height+1e-7>=state.geometry.size[2]+20); // geometrically required allowance
  assert.ok(best.width>best.length);
+ state.geometry={...state.geometry,diagnosticOnly:true};
+ state.Gen={...state.Gen,previewGeometry:(...args)=>({...gen.previewGeometry(...args),diagnosticOnly:true})};
+ const unavailable=await vm.runInNewContext(source.slice(begin,end)+';autoStockOptions()',state);
+ assert.equal(unavailable.length,0);
 });
 test('wireframe U-arch uses one safe waste corridor to both openings',()=>{
  const step=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-two-holes.stp'),'utf8');
@@ -278,7 +400,7 @@ test('split coedges yield the complete trimmed rectangular profile',()=>{
  assert.equal(r.holes,0);assert.ok(r.points>100);
 });
 test('no trimming: no B90, stock metadata agrees with simulator X=W Y=L',()=>{
- const r=build();assert.doesNotMatch(r.program,/TRIM BLOCK|Rotation 90|B90/);
+ const r=build();assert.doesNotMatch(r.program,/TRIM BLOCK|Rotation B90|^G00 B90/m);
  assert.match(r.program,/STOCK L=140 W=50 H=60 Z0=10/);
  const angles=[...r.program.matchAll(/^G00 B([\d.-]+)/gm)].map(m=>+m[1]);assert.ok(angles.length);assert.ok(angles.every(a=>a===0));
  // All commanded destination coordinates, including approach, exit and park.
@@ -322,7 +444,7 @@ test('right-side entry stays outside stock on rapids and needs no overhead heigh
  const r=build({stock:[50,140,240],bottomZ:10,sideEntry:true});
  const p=sim.parseGcode(r.program),s={...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false};
  assert.equal(sim.analyse(p,s).warns.filter(w=>w.level==='crit').length,0);
- assert.doesNotMatch(r.program,/TRIM BLOCK|B90/);
+ assert.doesNotMatch(r.program,/TRIM BLOCK|Rotation B90|^G00 B90/m);
  assert.ok(p.moves.every(m=>Math.max(m.to.Y,m.to.A)<=250));
  // Approach and return are on the right, all rapid destinations outside the stock width.
  assert.ok(p.moves.filter(m=>m.type==='G0').every(m=>m.to.X>70&&m.to.Z>70));
@@ -337,7 +459,7 @@ test('external F1: 400×240×50, right-side path at B0 fits confirmed machine',{
  const r=gen.buildProgram(text,'F1.stp',options({stock:[50,400,240],bottomZ:10,sideEntry:true}));
  const p=sim.parseGcode(r.program),s={...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false};
  const check=sim.analyse(p,s);assert.equal(check.warns.filter(w=>w.level==='crit').length,0);
- assert.doesNotMatch(r.program,/TRIM BLOCK|B90/);
+ assert.doesNotMatch(r.program,/TRIM BLOCK|Rotation B90|^G00 B90/m);
  assert.ok(p.moves.every(m=>Math.abs(m.to.X)<=245&&Math.abs(m.to.Z)<=245&&Math.min(m.to.Y,m.to.A)>=0&&Math.max(m.to.Y,m.to.A)<=250));
  assert.ok(p.moves.filter(m=>m.type==='G0').every(m=>m.to.X>=205&&m.to.Z>=205));
  assert.ok(p.moves.filter(m=>m.wire&&m.type==='G1').every(m=>m.to.B===0));
@@ -533,7 +655,10 @@ test('external F1-1: resolve the closed seam before checking ruled-surface accur
  const text=fs.readFileSync(process.env.F11_STEP,'utf8');
  // The actual cross-edge parameters are on a different scale from the
  // surface; the geometry-based seam resolver must reach the accuracy check.
- assert.throws(()=>gen.previewGeometry(text),/Грань #1807: синхронная струна отклоняется от STEP-поверхности/);
+ const preview=gen.previewGeometry(text);
+ assert.equal(preview.diagnosticOnly,true);
+ assert.match(preview.previewError,/Грань #1807: синхронная струна отклоняется от STEP-поверхности/);
+ assert.throws(()=>new gen.Model(text).build(),/Грань #1807: синхронная струна отклоняется от STEP-поверхности/);
 });
 
 test('external F1-1: explicit 0.6 mm tolerance, tower travel and simulation',{skip:!process.env.F11_STEP},()=>{
@@ -553,14 +678,112 @@ test('surface deviation tolerance must be finite and nonnegative',()=>{
  assert.throws(()=>gen.buildProgram(fixture,'invalid.stp',options({tolerance:NaN})),/Допуск/);
 });
 
-test('model offset is bounded by stock and moves both tower profiles',()=>{
+test('automatic placement returns normally validated G-code with shared stock offset',()=>{
+ const opts=options({stock:[80,160,100],bottomZ:10,trim:false,
+   rotation:gen.identityRotation(),powerComp:false});
+ const placed=gen.autoPlace(fixture,'synthetic.stp',opts);
+ assert.equal(placed.offset.length,3);
+ assert.ok(placed.offset.every(Number.isFinite));
+ assert.ok(placed.offset.every(value=>value%5===0));
+ assert.ok(placed.displacement>=0);
+ const normal=gen.buildProgram(fixture,'synthetic.stp',{...opts,offset:placed.offset});
+ assert.equal(placed.program,normal.program);
+ const decoded=sim.parseGcode(placed.program);
+ assert.ok(decoded.moves.every(move=>Math.min(move.to.Y,move.to.A)>=5 &&
+   Math.max(move.to.Y,move.to.A)<=gen.CONFIG.VerticalTravel-5));
+ assert.equal(decoded.stock.OX,placed.offset[0]);
+ assert.equal(decoded.stock.OY,placed.offset[1]);
+ assert.equal(decoded.stock.OZ,placed.offset[2]);
+ const chk=sim.analyse(decoded,{...decoded.stock,FW:370,HT:490,VT:250,
+   angle:45,invB:false,laser:false});
+ assert.equal(chk.warns.filter(w=>w.level==='crit').length,0);
+});
+
+test('F1-1 automatic positioning finds feasible shift on real STEP', {skip:!process.env.F11_STEP},()=>{
+ const step=fs.readFileSync(process.env.F11_STEP,'utf8');
+ const opts=options({stock:[100,145,135],bottomZ:40,clearance:20,
+   tolerance:.6,trim:false,powerComp:false,
+   rotation:gen.rotateModel(gen.identityRotation(),2,1)});
+ assert.throws(()=>gen.buildProgram(step,'F1-1.stp',{...opts,offset:[0,0,0]}),
+   /Перемещение выходит за ход кареток/);
+ const result=gen.autoPlace(step,'F1-1.stp',{...opts,grounded:true});
+ assert.ok(Math.hypot(...result.offset)>0);
+ assert.ok(result.offset.every(value=>value%5===0));
+ const preferred=gen.autoPlace(step,'F1-1.stp',{...opts,grounded:true,keepHeight:true,preferNegativeX:true});
+ assert.ok(preferred.offset[0]<0);
+ assert.equal(preferred.offset[2],0);
+ const unchanged=gen.groundPlacement(step,'F1-1.stp',opts,preferred);
+ assert.equal(unchanged.stock[2],opts.stock[2]);
+ const grounded=gen.groundPlacement(step,'F1-1.stp',opts,result);
+ assert.equal(grounded.offset[2],0);
+ assert.equal(grounded.stock[2],opts.stock[2]+result.offset[2]);
+ assert.equal(grounded.modelZOffset,result.offset[2]/2);
+ assert.equal(grounded.stock[2]/2-grounded.modelZOffset,opts.stock[2]/2);
+ const groundedResult=gen.buildProgram(step,'F1-1.stp',{...opts,...grounded});
+ const originalCut=sim.parseGcode(result.program).moves.filter(move=>move.type==='G1');
+ const groundedCut=sim.parseGcode(groundedResult.program).moves.filter(move=>move.type==='G1');
+ assert.deepEqual(JSON.parse(JSON.stringify(groundedCut.map(move=>move.to))),JSON.parse(JSON.stringify(originalCut.map(move=>move.to))));
+ const groundedProgram=sim.parseGcode(groundedResult.program);
+ assert.equal(groundedProgram.stock.Z0,opts.bottomZ);
+ assert.equal(groundedProgram.stock.OZ,0);
+ assert.equal(groundedProgram.stock.H,grounded.stock[2]);
+ const groundedCheck=sim.analyse(groundedProgram,{...groundedProgram.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(groundedCheck.warns.filter(w=>w.level==='crit').length,0);
+ assert.throws(()=>gen.groundPlacement(step,'F1-1.stp',opts,{...result,offset:[0,0,-5]}),/отрицательного подъёма/);
+ assert.throws(()=>gen.groundPlacement(step,'F1-1.stp',opts,{...result,offset:[0,0,100]}),/пределы станка|хода каретки|высота/i);
+ const smooth=gen.buildProgram(step,'F1-1.stp',{...opts,offset:result.offset}).smoothSurface;
+ assert.ok(smooth && smooth.towers.length>2);
+ assert.equal(smooth.x0,result.offset[0]-opts.stock[0]/2);
+ assert.equal(smooth.x1,result.offset[0]+opts.stock[0]/2);
+ assert.ok(smooth.towers.flat(2).every(Number.isFinite));
+ const three=require('../lib/three.min.js');
+ for(const x of [smooth.x0,smooth.x1]){
+   const fraction=(x+smooth.fieldWidth/2)/smooth.fieldWidth;
+   const boundary=smooth.towers.map(pair=>new three.Vector2(
+     pair[0][0]+fraction*(pair[1][0]-pair[0][0]),
+     pair[0][1]+fraction*(pair[1][1]-pair[0][1])));
+   if(boundary[0].distanceTo(boundary.at(-1))<0.01)boundary.pop();
+   assert.ok(three.ShapeUtils.triangulateShape(boundary,[]).length>0);
+ }
+ const p=sim.parseGcode(result.program),check=sim.analyse(p,{
+   ...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.ok(p.moves.every(move=>Math.min(move.to.Y,move.to.A)>=5 &&
+   Math.max(move.to.Y,move.to.A)<=gen.CONFIG.VerticalTravel-5));
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,
+   JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+});
+
+test('automatic placement rejects a stock setup without the vertical travel margin',()=>{
+ const opts=options({stock:[80,160,240],bottomZ:0,clearance:10,trim:false,
+   rotation:gen.identityRotation(),powerComp:false});
+ assert.throws(()=>gen.autoPlace(fixture,'synthetic.stp',opts),
+   /Не найдено смещение|фиксированный ход выходит за пределы станка/);
+});
+
+test('negative X preference falls back when the stock fills the tower width',()=>{
+ const opts=options({stock:[370,160,100],bottomZ:10,trim:false,grounded:true,keepHeight:true,powerComp:false});
+ assert.throws(()=>gen.autoPlace(fixture,'synthetic.stp',{...opts,preferNegativeX:true}),/Не найдено|пределы станка/);
+ const placement=gen.autoPlace(fixture,'synthetic.stp',opts);
+ assert.equal(Math.abs(placement.offset[0]),0);
+ assert.equal(placement.offset[2],0);
+});
+
+test('model height offset must fit the stock and unsupported pair modes are rejected',()=>{
+ assert.throws(()=>build(options({stock:[80,160,100],modelZOffset:100})),/не помещается по высоте/i);
+ assert.throws(()=>build(options({stock:[80,160,100],modelZOffset:5,pair:true})),/только для одиночной детали/i);
+});
+
+test('stock and model translate together inside machine envelope',()=>{
  const base=build({stock:[80,160,100],bottomZ:10,trim:false}), shifted=build({stock:[80,160,100],bottomZ:10,trim:false,offset:[0,5,5]});
- assert.match(shifted.program,/MODEL OFFSET X=0 Y=5 Z=5 mm/);
+ assert.match(shifted.program,/STOCK\+MODEL OFFSET X=0 Y=5 Z=5 mm/);
+ assert.match(shifted.program,/OX=0 OY=5 OZ=5/);
  const contour=r=>sim.parseGcode(r.program.split('corner entry, upper first')[1]).moves.filter(m=>m.type==='G1').slice(0,12);
  const a=contour(base),b=contour(shifted);assert.equal(a.length,b.length);
  for(let i=0;i<a.length;i++)for(const axis of ['X','Y','Z','A'])assert.ok(Math.abs(b[i].to[axis]-a[i].to[axis]-5)<.03,axis);
- assert.throws(()=>build({stock:[80,160,100],offset:[20,0,0],trim:false}),/не помещается/);
- assert.throws(()=>build({stock:[80,160,100],offset:[5,0,0],trim:true}),/Торцевание со смещением/);
+ // Offset no longer changes model/stock fit; only machine travel can reject it.
+ assert.doesNotThrow(()=>build({stock:[80,160,100],offset:[20,0,0],trim:false}));
+ assert.throws(()=>build({stock:[80,160,100],offset:[150,0,0],trim:false}),/физические пределы/);
+ assert.doesNotThrow(()=>build({stock:[80,160,100],offset:[5,0,0],trim:true}));
  assert.throws(()=>build({stock:[80,160,100],offset:[5,0,0],pair:true,trim:false}),/Смещение пока/);
 });
 
@@ -569,7 +792,416 @@ test('external F1-1 offset toward tower fixes travel limits',{skip:!process.env.
  const opts=options({rotation,tolerance:.6,stock:[100,145,135],bottomZ:40,clearance:20,trim:false,powerComp:false});
  assert.throws(()=>gen.buildProgram(text,'F1-1.stp',opts),/ход кареток/);
  const result=gen.buildProgram(text,'F1-1.stp',{...opts,offset:[-25,0,0]});
- assert.match(result.program,/MODEL OFFSET X=-25 Y=0 Z=0/);
+ assert.match(result.program,/STOCK\+MODEL OFFSET X=-25 Y=0 Z=0/);
  const p=sim.parseGcode(result.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
+});
+
+test('solid STEP keeps separate guide curves and refuses incomplete G-code',()=>{
+ const extra=[
+  "#900001 = CARTESIAN_POINT('',(0.,0.,0.));",
+  "#900002 = CARTESIAN_POINT('',(10.,0.,0.));",
+  "#900003 = B_SPLINE_CURVE_WITH_KNOTS ('guide',1,(#900001,#900002),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
+  "#900004 = GEOMETRIC_CURVE_SET ('guides',(#900003));"
+ ].join('\n');
+ const idx=fixture.lastIndexOf('ENDSEC;');
+ assert.ok(idx>0);
+ const solidWithCurves=fixture.slice(0,idx)+extra+'\n'+fixture.slice(idx);
+ const model=new gen.Model(solidWithCurves);
+ assert.equal(model.wireframe,false);
+ const curves=model.auxiliaryCurves();
+ assert.equal(curves.length,1);
+ assert.equal(curves[0].id,900003);
+ assert.equal(curves[0].fixedAxis,1);
+ assert.equal(curves[0].closed,false);
+ assert.ok(Math.abs(curves[0].points.at(-1)[0]-10)<1e-6);
+ const preview=gen.previewGeometry(solidWithCurves);
+ assert.equal(preview.auxiliaryCurves.length,1);
+ assert.equal(preview.guideAnalysis.count,1);
+ assert.equal(preview.guideAnalysis.pairs.length,0);
+ assert.equal(preview.guideAnalysis.ambiguous.length,1);
+ assert.equal(preview.guideKinematics.operations.length,0);
+ assert.equal(preview.guideKinematics.safeForGcode,false);
+ assert.throws(()=>gen.buildProgram(solidWithCurves,'solid-guides.stp',options()),
+  /вспомогательных кривых.*Станочный G-code для F4 пока запрещён/);
+});
+test('external F4-1: retains all four design B-splines without unsafe G-code',
+ {skip:!process.env.F4_STEP},()=>{
+ const step=fs.readFileSync(process.env.F4_STEP,'utf8');
+ const m=new gen.Model(step),curves=m.auxiliaryCurves();
+ assert.equal(m.wireframe,false);
+ assert.equal(curves.length,4);
+ assert.deepEqual(Array.from(curves,c=>c.fixedAxis).sort(),[0,0,1,1]);
+ const groups=m.guideAnalysis();
+ assert.equal(groups.pairs.length,2);
+ assert.equal(groups.ambiguous.length,0);
+ assert.deepEqual(groups.pairs.map(p=>p.ids),[[544,681],[197,406]]);
+ assert.ok(groups.pairs.every(p=>p.span>1));
+ const motion=m.guideKinematics(gen.CONFIG.FieldWidth);
+ assert.equal(motion.operations.length,2);
+ assert.deepEqual(motion.operations.map(p=>p.angle).sort(),[0,90]);
+ assert.ok(motion.operations.every(p=>p.samples.length>=128));
+ assert.ok(motion.operations.every(p=>p.samples.every(s=>[...s.left,...s.right].every(Number.isFinite))));
+ assert.equal(motion.safeForGcode,false);
+ assert.equal(motion.origin.length,3);
+ assert.ok(motion.operations.every(op=>Math.abs(op.transverseCenter-motion.origin[op.axis===1?0:1])<1e-9));
+ assert.throws(()=>gen.buildProgram(step,'F4-1.stp',options()),
+  /вспомогательных кривых.*Станочный G-code для F4 пока запрещён/);
+});
+
+test('paired planar STEP guides extrapolate to both towers at B0 without releasing G-code',()=>{
+ const extra=[
+  "#900001 = CARTESIAN_POINT('',(0.,0.,0.));",
+  "#900002 = CARTESIAN_POINT('',(10.,0.,0.));",
+  "#900003 = CARTESIAN_POINT('',(0.,25.,0.));",
+  "#900004 = CARTESIAN_POINT('',(10.,25.,0.));",
+  "#900005 = B_SPLINE_CURVE_WITH_KNOTS ('guide',1,(#900001,#900002),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
+  "#900006 = B_SPLINE_CURVE_WITH_KNOTS ('guide',1,(#900003,#900004),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
+  "#900007 = GEOMETRIC_CURVE_SET ('guides',(#900005,#900006));"
+ ].join('\n');
+ const idx=fixture.lastIndexOf('ENDSEC;');
+ const step=fixture.slice(0,idx)+extra+'\n'+fixture.slice(idx);
+ const m=new gen.Model(step),motion=m.guideKinematics(370);
+ assert.equal(motion.operations.length,1);
+ const op=motion.operations[0];
+ assert.equal(op.angle,0);
+ assert.equal(op.samples.length,129);
+ assert.equal(op.fitsHorizontalTravel,true);
+ assert.equal(op.fitsVerticalTravel,true);
+ assert.ok(op.requiredVerticalTravel>=0);
+ assert.ok(op.samples.every(p=>Math.abs(p.left[0]-p.right[0])<1e-7));
+ assert.ok(op.samples.every(p=>Math.abs(p.left[1]-p.right[1])<1e-7));
+ assert.equal(motion.safeForGcode,false);
+});
+
+test('external F4-11 ambiguous BREP must still preview model edges and selectable curves',
+ {skip:!process.env.F4_11_STEP},()=>{
+ const step=fs.readFileSync(process.env.F4_11_STEP,'utf8');
+ const g=gen.previewGeometry(step);
+ assert.match(g.previewError,/Углы грани.*не соединены боковым ребром/);
+ assert.ok(g.edgeLines.length>0,'BREP edge skeleton must remain visible');
+ assert.deepEqual(Array.from(g.auxiliaryCurves,c=>c.id),[197,337,544,681,694,707]);
+ assert.ok(g.size.every(v=>Number.isFinite(v)&&v>0));
+ assert.equal(g.diagnosticOnly,true);
+ const motion=gen.manualGuideDiagnostics(step,[[197,544],[337,681]],{
+  stock:[100,300,180],bottomZ:5,samples:128
+ });
+ assert.equal(motion.operations.length,2);
+ assert.deepEqual(Array.from(motion.operations,x=>x.angle),[0,90]);
+ assert.ok(motion.operations.every(x=>x.samples.length===129));
+ assert.ok(motion.operations.every(x=>x.samples.every(p=>
+  [...p.left,...p.right].every(Number.isFinite))));
+ assert.equal(motion.operations[0].correspondence.reverse,false);
+ assert.equal(motion.operations[0].correspondence.shift,0);
+ assert.equal(motion.operations[0].correspondence.shapeRms,0);
+ assert.ok(motion.operations[1].correspondence.shapeRms>=0);
+ const last=motion.operations[1].samples.at(-1),first=motion.operations[1].samples[0];
+ assert.ok(Math.hypot(...first.profileA.map((v,k)=>v-last.profileA[k]))<1e-5);
+ assert.ok(Math.hypot(...first.profileB.map((v,k)=>v-last.profileB[k]))<1e-5);
+
+ assert.equal(motion.approvedForGcode,false);
+ assert.ok(motion.operations.every(op=>op.entryExit.approvedForGcode===false));
+ assert.ok(motion.operations.every(op=>op.entryExit.entry.candidates.length===3));
+ assert.ok(motion.operations.every(op=>op.entryExit.exit.candidates.length===3));
+ assert.ok(motion.operations.every(op=>op.entryExit.entry.hasClearRapid===false));
+ assert.ok(motion.operations.every(op=>op.entryExit.exit.hasClearRapid===false));
+
+ assert.throws(()=>gen.buildProgram(step,'F4-11.stp',options()),/Ручных подтверждённых пар не передано/);
+ assert.throws(()=>gen.buildProgram(step,'F4-11.stp',options({
+  manualGuidePairs:[[197,544],[337,681]]
+ })),/Принято ручных пар: 2.*Станочный G-code для F4 пока запрещён/);
+ assert.throws(()=>gen.buildProgram(step,'F4-11.stp',options({
+  manualGuidePairs:[[197,544],[544,681]]
+ })),/используется повторно/);
+ assert.throws(()=>gen.buildProgram(step,'F4-11.stp',options({
+  manualGuidePairs:[[197,337]]
+ })),/геометрически несовместима/);
+});
+
+
+test('manual guide kinematics returns left/right tower samples but never releases machine code',()=>{
+ const extra=[
+  "#910001 = CARTESIAN_POINT('',(0.,-30.,10.));",
+  "#910002 = CARTESIAN_POINT('',(15.,-30.,20.));",
+  "#910003 = CARTESIAN_POINT('',(0.,30.,10.));",
+  "#910004 = CARTESIAN_POINT('',(15.,30.,20.));",
+  "#910005 = B_SPLINE_CURVE_WITH_KNOTS ('guide',1,(#910001,#910002),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
+  "#910006 = B_SPLINE_CURVE_WITH_KNOTS ('guide',1,(#910003,#910004),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
+  "#910007 = GEOMETRIC_CURVE_SET ('guides',(#910005,#910006));"
+ ].join('\n');
+ const idx=fixture.lastIndexOf('ENDSEC;');
+ const step=fixture.slice(0,idx)+extra+'\n'+fixture.slice(idx);
+ const path=gen.manualGuideDiagnostics(step,[[910005,910006]],{
+  stock:[100,200,70],bottomZ:10,clearance:15,samples:32
+ });
+ assert.equal(path.schema,'foam-wire-f4-diagnostic-motion-v1');
+ assert.equal(path.approvedForGcode,false);
+ assert.equal(path.operations.length,1);
+ const op=path.operations[0];
+ assert.equal(op.angle,0);assert.equal(op.samples.length,33);
+ const reverse=gen.manualGuideDiagnostics(step,[[910005,910006]],{
+  stock:[100,200,70],bottomZ:10,clearance:15,samples:32,
+  guideStarts:{'910005:910006':1}
+ });
+ assert.equal(reverse.operations[0].startU,1);
+ assert.equal(reverse.operations[0].reverseA,true);
+ assert.deepEqual(JSON.parse(JSON.stringify(reverse.operations[0].samples[0].profileA)),
+  JSON.parse(JSON.stringify(op.samples.at(-1).profileA)));
+ assert.ok(op.samples.every(p=>[...p.left,...p.right].every(Number.isFinite)));
+ assert.ok(op.samples.every(p=>Math.abs(p.left[0]-p.right[0])<1e-6));
+ assert.equal(op.approvedForGcode,false);
+ assert.throws(()=>gen.manualGuideDiagnostics(step,[[910005,910005]]),/повторное назначение/);
+ assert.throws(()=>gen.buildProgram(step,'guides.stp',options({
+  manualGuidePairs:[[910005,910006]]
+ })),/Станочный G-code для F4 пока запрещён/);
+});
+
+
+test('guide matcher resolves reversed open profile and shifted closed seam',()=>{
+ const mk=(id,points,closed)=>({id,points,closed,fixedAxis:1});
+ const openA=mk(1,[[0,0,0],[10,0,4],[13,0,10],[22,0,3]],false);
+ const openB=mk(2,[[22,50,3],[13,50,10],[10,50,4],[0,50,0]],false);
+ const open=gen.matchGuideCurves(openA,openB);
+ assert.equal(open.correspondence.reverse,true);
+ assert.equal(open.correspondence.shift,0);
+ assert.ok(open.correspondence.shapeRms<1e-6);
+ const pa=[[0,0,0],[20,0,0],[17,0,8],[1,0,12],[0,0,0]];
+ const pb=[[17,50,8],[1,50,12],[0,50,0],[20,50,0],[17,50,8]];
+ const closed=gen.matchGuideCurves(mk(3,pa,true),mk(4,pb,true));
+ assert.ok(closed.correspondence.shapeRms<1);
+ const start=closed.at(mk(4,pb,true),closed.mapB(0));
+ const end=closed.at(mk(4,pb,true),closed.mapB(1));
+ assert.ok(Math.hypot(...start.map((v,k)=>v-end[k]))<1e-6);
+});
+
+
+test('F4 entry/exit inspection distinguishes clear rapid from sweep through uncut stock',()=>{
+ const pt=(x,z)=>({left:[x,z],right:[x,z]});
+ const clear=gen.inspectGuideEntryExit([pt(100,80),pt(110,90)],[80,120,10,50],{clearance:15});
+ assert.equal(clear.entry.candidates[0].route,'ABOVE_STOCK');
+ assert.equal(clear.entry.candidates[0].rapidTravelAllowed,true);
+ assert.equal(clear.exit.candidates[0].rapidTravelAllowed,true);
+ const buried=gen.inspectGuideEntryExit([pt(100,20),pt(105,25)],[80,120,10,50],{clearance:15});
+ assert.equal(buried.entry.hasClearRapid,false);
+ assert.equal(buried.exit.hasClearRapid,false);
+ assert.ok(buried.entry.candidates.every(c=>c.requiresCuttingLead));
+ assert.equal(buried.approvedForGcode,false);
+});
+test('F4 lead check tests whole angled wire, not just its carriage endpoints',()=>{
+ const p=(left,right)=>({left,right});
+ // End towers are outside the rectangle, but the wire between them
+ // crosses the uncut foam. This must NOT be treated as a safe rapid.
+ const path=gen.inspectGuideEntryExit([
+  p([50,25],[150,25]),p([51,26],[149,26])
+ ],[80,120,10,50],{clearance:10});
+ assert.equal(path.entry.candidates[0].intersectsUncutStock,true);
+ assert.equal(path.entry.candidates[0].rapidTravelAllowed,false);
+});
+test('F4 lead checker catches a very thin foam strip between sampled positions',()=>{
+ // The wire sweeps horizontally from x=70 to x=130, endpoints remain at
+ // z=10 and z=30. Foam is only 0.06 mm wide at x=100: 64 samples miss it.
+ const a={left:[70,10],right:[70,30]};
+ const b={left:[130,10],right:[130,30]};
+ const r=gen.inspectGuideEntryExit([b,b],[100,100.06,15,25],
+   {clearance:15});
+ // The above-stock lead to x=130 does not cross foam. The independent
+ // full-sweep function is exercised by the side candidate from x≈98 to x=130.
+ const left=r.entry.candidates.find(c=>c.route==='OUTSIDE_LEFT');
+ assert.equal(left.intersectsUncutStock,true);
+ assert.equal(left.status,'CUTTING_LEAD_REQUIRED');
+ assert.equal(r.approvedForGcode,false);
+});
+test('F4 entry/exit rejects out-of-range approach positions',()=>{
+ const pt=(x,z)=>({left:[x,z],right:[x,z]});
+ const r=gen.inspectGuideEntryExit([pt(100,45),pt(100,44)],
+   [80,120,10,240],{clearance:30,vertical:250});
+ assert.equal(r.entry.candidates[0].status,'OUT_OF_TRAVEL');
+ assert.equal(r.entry.candidates[0].withinMachineTravel,false);
+ assert.ok(r.entry.candidates.some(c=>c.status==='CUTTING_LEAD_REQUIRED'));
+});
+
+
+test('stock trim B90 and B0 are distinct machine-frame operations',()=>{
+ const stock=[90,170,60];
+ for(const angle of [90,0]){
+  const r=gen.buildProgram(fixture,'split-profile.stp',options({
+    stock,trim:true,trimAngle:angle,cutOrder:'B90_B0'
+  }));
+  assert.match(r.program,new RegExp('TRIM B='+angle+' ENABLED=1'));
+  assert.match(r.program,new RegExp('Rotation B'+angle+' for trimming'));
+  assert.match(r.program,/TRIM BLOCK/);
+  const rotations=[...r.program.matchAll(/^G00 B([-\d.]+)/gm)].map(x=>Number(x[1]));
+  if(angle===90)assert.ok(rotations.includes(90));
+  else assert.ok(rotations.every(x=>x===0));
+ }
+ assert.throws(()=>gen.buildProgram(fixture,'test.stp',options({
+  stock,trim:true,trimAngle:45
+ })),/Угол торцевания/);
+ assert.throws(()=>gen.buildProgram(fixture,'test.stp',options({
+  stock,trim:true,cutOrder:'WRONG'
+ })),/Порядок должен быть/);
+});
+test('selected B0/B90 order cannot silently reverse solid secondary operations',()=>{
+ const step=transverseFixture();
+ const stock=[50,140,60];
+ const permitted=gen.buildProgram(step,'test.stp',options({
+   stock,cutOrder:'B90_B0',trim:false
+ }));
+ assert.ok(permitted.program.indexOf('SECONDARY CUT')<permitted.program.indexOf('corner entry, upper first'));
+ assert.throws(()=>gen.buildProgram(step,'test.stp',options({
+   stock,cutOrder:'B0_B90',trim:false
+ })),/наружный профиль B0 может освободить деталь/);
+});
+test('manual F4 planning follows trim-first and selected B0/B90 order without generating machine instructions',{
+ skip:!process.env.F4_11_STEP
+},()=>{
+ const source=fs.readFileSync(process.env.F4_11_STEP,'utf8');
+ const pairIds=[[197,544],[337,681]];
+ for(const [cutOrder,expected] of [
+  ['B0_B90',[0,90]],['B90_B0',[90,0]]
+ ]){
+  const plan=gen.manualGuideDiagnostics(source,pairIds,{
+   stock:[100,300,180],bottomZ:5,clearance:20,kerf:1,
+   trim:true,trimAngle:0,cutOrder
+  });
+  assert.deepEqual(Array.from(plan.operations,o=>o.angle),expected);
+  assert.deepEqual(Array.from(plan.plannedSequence,o=>o.angle),[0,...expected]);
+  assert.equal(plan.trimOperation.angle,0);
+  assert.equal(plan.approvedForGcode,false);
+ }
+});
+
+
+test('sequential hot-wire volume sim updates remaining foam and flags unverified protected solid',()=>{
+ const points=i=>({profileA:[i,0,20],profileB:[i,50,20],left:[i,20],right:[i,20]});
+ const path=[points(10),points(15),points(20),points(25)];
+ const empty={entry:{candidates:[]},exit:{candidates:[]}};
+ const make=(angle,shift=0)=>({angle,ids:[angle+1,angle+2],samples:path.map(p=>({
+  ...p,profileA:p.profileA.map((v,k)=>k===2?v+shift:v),
+  profileB:p.profileB.map((v,k)=>k===2?v+shift:v)
+ })),entryExit:empty});
+ const op1=make(0),op2=make(90,10);
+ const sim=gen.simulateSequentialStockRemoval([op1,op2],[20,25,25],[50,40,50],{
+  voxelSize:5,kerf:1,bottomZ:0,trimOperation:null
+ });
+ assert.equal(sim.operations.length,2);
+ assert.ok(op1.sequentialStock.removedVoxels>0);
+ assert.ok(op2.sequentialStock.removedVoxels>0);
+ assert.ok(sim.remainingVoxels<sim.initialVoxels);
+ assert.ok(op1.sequentialStock.remainingVoxels>op2.sequentialStock.remainingVoxels);
+ assert.equal(sim.approvedForGcode,false);
+ assert.equal(sim.protectedSolidIdentified,false);
+ assert.ok(op1.sequentialStock.sparseRemainingPoints.length>0);
+});
+test('F4 sequential simulation accounts for B0 or B90 trimming BEFORE profile cuts',()=>{
+ const op={angle:0,ids:[1,2],samples:[
+  {profileA:[-8,-20,10],profileB:[-8,20,10]},
+  {profileA:[8,-20,10],profileB:[8,20,10]}
+ ],entryExit:{entry:{candidates:[]},exit:{candidates:[]}}};
+ const mk=()=>JSON.parse(JSON.stringify(op));
+ const untrimmed=gen.simulateSequentialStockRemoval([mk()],[0,0,10],[40,40,20],{voxelSize:4,kerf:1});
+ const trimmed=gen.simulateSequentialStockRemoval([mk()],[0,0,10],[40,40,20],{
+  voxelSize:4,kerf:1,trimOperation:{angle:0,finishedDimension:20,trimAllowance:9}
+ });
+ assert.equal(untrimmed.trimmedVoxels,0);
+ assert.ok(trimmed.trimmedVoxels>0);
+ assert.ok(trimmed.remainingVoxels<untrimmed.remainingVoxels);
+ assert.equal(trimmed.approvedForGcode,false);
+});
+
+
+test('guide cut start: closed arbitrary phase, open from either endpoint',()=>{
+ const mk=(id,points,closed)=>({id,points,closed,fixedAxis:1});
+ const openA=mk(1,[[0,0,5],[20,0,15]],false);
+ const openB=mk(2,[[20,50,15],[0,50,5]],false);
+ const f=gen.resolveGuideStart(openA,openB,0);
+ const r=gen.resolveGuideStart(openA,openB,1);
+ assert.equal(f.reverseA,false);
+ assert.equal(r.reverseA,true);
+ assert.equal(r.mapA(0),1);assert.equal(r.mapA(1),0);
+ assert.equal(r.mapB(0),0);assert.equal(r.mapB(1),1);
+ const closedA=mk(3,[[0,0,0],[25,0,0],[25,0,25],[0,0,25],[0,0,0]],true);
+ const closedB=mk(4,[[0,60,0],[25,60,0],[25,60,25],[0,60,25],[0,60,0]],true);
+ const c=gen.resolveGuideStart(closedA,closedB,.375);
+ assert.equal(c.startU,.375);
+ assert.ok(Math.abs(c.mapA(0)-.375)<1e-9);
+ assert.ok(Math.abs(c.mapA(1)-.375)<1e-9);
+ assert.ok(Math.abs(c.mapB(0)-c.mapB(1))<1e-9);
+ assert.throws(()=>gen.resolveGuideStart(closedA,closedB,NaN),/Начало реза/);
+});
+
+
+test('operator-directed F4 outputs actual G-code with two tower coordinates and user start',()=>{
+ const extra=[
+  "#910001 = CARTESIAN_POINT('',(0.,-30.,10.));",
+  "#910002 = CARTESIAN_POINT('',(15.,-30.,20.));",
+  "#910003 = CARTESIAN_POINT('',(0.,30.,10.));",
+  "#910004 = CARTESIAN_POINT('',(15.,30.,20.));",
+  "#910005 = B_SPLINE_CURVE_WITH_KNOTS ('guide',1,(#910001,#910002),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
+  "#910006 = B_SPLINE_CURVE_WITH_KNOTS ('guide',1,(#910003,#910004),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
+  "#910007 = GEOMETRIC_CURVE_SET ('guides',(#910005,#910006));"
+ ].join('\n');
+ const idx=fixture.lastIndexOf('ENDSEC;');
+ const step=fixture.slice(0,idx)+extra+'\n'+fixture.slice(idx);
+ const base={stock:[100,200,70],bottomZ:10,kerf:1,feed:7,
+   minS:500,maxS:1000,clearance:15,retract:20,
+   leadMargin:5,rotation:gen.identityRotation(),offset:[0,0,0],
+   scale:1,tolerance:.1,trim:false,trimAngle:0,cutOrder:'B0_B90',
+   guideStarts:{'910005:910006':1},powerComp:false};
+ const p=gen.buildF4Program(step,[[910005,910006]],base);
+ assert.match(p.program,/G92 X/);
+ assert.match(p.program,/GUIDES #910005\/#910006 START=1.0000/);
+ assert.match(p.program,/G00 B0.00/);
+ assert.match(p.program,/G01 X[-\d.]+ Y[-\d.]+ Z[-\d.]+ A[-\d.]+/);
+ assert.match(p.program,/M03 S500/);
+ assert.equal(p.operatorDirected,true);
+ assert.ok(p.points>0);
+ // Stock and guide profiles are translated in the same machine frame.
+ const moved=gen.buildF4Program(step,[[910005,910006]],{...base,offset:[0,7,3]});
+ assert.match(moved.program,/STOCK L=200 W=100 H=70 Z0=10 OX=0 OY=7 OZ=3/);
+ const parsedStock=sim.parseGcode(moved.program).stock;
+ assert.equal(parsedStock.W,base.stock[0]);
+ assert.equal(parsedStock.L,base.stock[1]);
+ assert.equal(parsedStock.OY,7);
+ assert.equal(parsedStock.OZ,3);
+ const getCut=r=>sim.parseGcode(r.program).moves.find(m=>m.type==='G1');
+ const before=getCut(p),after=getCut(moved);
+ assert.ok(before && after);
+ for(const [axis,delta] of [['X',7],['Y',3],['Z',7],['A',3]])
+   assert.ok(Math.abs(after.to[axis]-before.to[axis]-delta)<.03,
+     axis+' failed to follow stock translation');
+ assert.throws(()=>gen.buildF4Program(step,[[910005,910006]],{...base,offset:[0,0,-20]}),
+   /вертикальный ход/);
+ assert.throws(()=>gen.buildF4Program(step,[[910005,910006]],{...base,offset:[0,150,0]}),
+   /поперечный ход/);
+ // Trimming coordinates must follow the same offset at either table angle.
+ for(const [angle,deltaOffset,dy] of [
+   [0,[0,7,3],7],
+   [90,[5,0,3],5]
+ ]){
+   const opts={...base,trim:true,trimAngle:angle};
+   const t0=gen.buildF4Program(step,[[910005,910006]],opts);
+   const t1=gen.buildF4Program(step,[[910005,910006]],{...opts,offset:deltaOffset});
+   assert.match(t0.program,new RegExp('TRIM B'+angle));
+   const first=r=>sim.parseGcode(r.program).moves.find(m=>m.type==='G1');
+   const a=first(t0),b=first(t1);
+   assert.ok(a&&b,'expected a trimming cut at B'+angle);
+   for(const [axis,delta] of [['X',dy],['Y',3],['Z',dy],['A',3]])
+     assert.ok(Math.abs(b.to[axis]-a.to[axis]-delta)<.03,
+       'trim B'+angle+' axis '+axis);
+ }
+
+ // Invalid motion parameters must be rejected rather than normalized or
+ // passed through to the postprocessor.
+ for(const invalid of [
+   {kerf:0},{kerf:-1},{clearance:-1},{retract:-1},{bottomZ:-1},
+   {minS:1000,maxS:500}
+ ]){
+   assert.throws(()=>gen.buildF4Program(step,[[910005,910006]],{...base,...invalid}),
+     /Некорректные параметры F4/,JSON.stringify(invalid));
+ }
+ const broken=JSON.parse(JSON.stringify(base));
+ broken.stock=[1000,200,70];
+ assert.throws(()=>gen.buildF4Program(step,[[910005,910006]],broken),
+  /выходит за физические ходы|превышает расстояние между башнями|Превышен лимит/);
 });
