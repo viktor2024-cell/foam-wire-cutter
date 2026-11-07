@@ -585,6 +585,20 @@ test('F1-1 automatic positioning finds feasible shift on real STEP', {skip:!proc
  const result=gen.autoPlace(step,'F1-1.stp',opts);
  assert.ok(Math.hypot(...result.offset)>0);
  assert.ok(result.offset.every(value=>value%5===0));
+ const smooth=gen.buildProgram(step,'F1-1.stp',{...opts,offset:result.offset}).smoothSurface;
+ assert.ok(smooth && smooth.towers.length>2);
+ assert.equal(smooth.x0,result.offset[0]-opts.stock[0]/2);
+ assert.equal(smooth.x1,result.offset[0]+opts.stock[0]/2);
+ assert.ok(smooth.towers.flat(2).every(Number.isFinite));
+ const three=require('../lib/three.min.js');
+ for(const x of [smooth.x0,smooth.x1]){
+   const fraction=(x+smooth.fieldWidth/2)/smooth.fieldWidth;
+   const boundary=smooth.towers.map(pair=>new three.Vector2(
+     pair[0][0]+fraction*(pair[1][0]-pair[0][0]),
+     pair[0][1]+fraction*(pair[1][1]-pair[0][1])));
+   if(boundary[0].distanceTo(boundary.at(-1))<0.01)boundary.pop();
+   assert.ok(three.ShapeUtils.triangulateShape(boundary,[]).length>0);
+ }
  const p=sim.parseGcode(result.program),check=sim.analyse(p,{
    ...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.ok(p.moves.every(move=>Math.min(move.to.Y,move.to.A)>=5 &&

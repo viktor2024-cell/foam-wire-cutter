@@ -323,6 +323,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
     </div>
     <div class="row">
       <label class="check"><input type="checkbox" id="resultPreview"> Показать результат резки</label>
+      <label class="check"><input type="checkbox" id="smoothPreview"> Гладкий профиль по траектории</label>
       <button id="resultAll" type="button" hidden>Показать все куски</button>
       <span class="note" id="resultStatus" role="status" aria-live="polite"></span>
     </div>
@@ -1329,6 +1330,37 @@ new MutationObserver(applyTheme).observe(document.documentElement, { attributes:
 
 let machineGroup = null, stockGroup = null, wireMesh = null, carriages = [], trailMesh = null, faceLines = null;
 let resultGroup = null, resultVersion = 0, resultPointer = null;
+let smoothGroup = null;
+function clearSmoothPreview() {
+  $("smoothPreview").checked=false;
+  if(smoothGroup){scene.remove(smoothGroup);smoothGroup.geometry.dispose();smoothGroup.material.dispose();smoothGroup=null;}
+  $("cutLegend").hidden=false;
+  if(machineGroup)machineGroup.visible=true;
+}
+$("smoothPreview").addEventListener("change",()=>{
+  if(!$("smoothPreview").checked){clearSmoothPreview();$("resultStatus").textContent="";return;}
+  const surface=prog?.smoothSurface;
+  if(!surface || prog.smoothSettings!==JSON.stringify(readSettings())){clearSmoothPreview();$("resultStatus").textContent="Гладкий профиль доступен после генерации одной детали без отверстий и дополнительных резов с текущими настройками станка.";return;}
+  if(resultGroup || $("resultPreview").checked)clearResultPreview();
+  $("smoothPreview").checked=true;
+  const vertices=[],left=[],right=[],half=surface.fieldWidth/2;
+  for(const pair of surface.towers){
+    const at=x=>{const fraction=(x+half)/surface.fieldWidth;return [x,pair[0][0]+fraction*(pair[1][0]-pair[0][0]),pair[0][1]+fraction*(pair[1][1]-pair[0][1])];};
+    left.push(at(surface.x0));right.push(at(surface.x1));
+  }
+  for(let i=1;i<left.length;i++)vertices.push(...left[i-1],...right[i-1],...left[i],...left[i],...right[i-1],...right[i]);
+  for(const end of [left,right]){
+    const boundary=end.slice();
+    if(boundary.length>1 && Math.hypot(boundary[0][1]-boundary.at(-1)[1],boundary[0][2]-boundary.at(-1)[2])<0.01)boundary.pop();
+    const triangles=THREE.ShapeUtils.triangulateShape(boundary.map(point=>new THREE.Vector2(point[1],point[2])),[]);
+    for(const triangle of triangles)for(const index of triangle)vertices.push(...boundary[index]);
+  }
+  const geometry=new THREE.BufferGeometry();geometry.setAttribute("position",new THREE.Float32BufferAttribute(vertices,3));geometry.computeVertexNormals();
+  smoothGroup=new THREE.Mesh(geometry,new THREE.MeshPhongMaterial({color:0x56a4c8,side:THREE.DoubleSide}));
+  scene.add(smoothGroup);machineGroup.visible=false;$("cutLegend").hidden=true;
+  playing=false;$("play").textContent="Пуск";
+  $("resultStatus").textContent="Приближённый профиль основного прохода по G-code. Торцы построены условно; отходы и другие резы не показаны.";
+});
 function clearResultPreview() {
   resultVersion++;
   $("resultPreview").checked = false;
@@ -1377,6 +1409,7 @@ function makeResultMeshes(result) {
 }
 $("resultPreview").addEventListener("change", async () => {
   if (!$("resultPreview").checked) { clearResultPreview(); return; }
+  clearSmoothPreview();
   const version=++resultVersion, settings=readSettings(), currentProgram=prog;
   if (!currentProgram) { clearResultPreview(); return; }
   playing=false; $("play").textContent="Пуск";
@@ -1675,10 +1708,12 @@ function loadProgram(text, name, opts = {}) {
   previewOnlyProgram=opts.keepOriginal?previewOnlyProgram:!!opts.previewOnly;
   if(!opts.keepOriginal)operatorDirectedProgram=!!opts.operatorDirected;
   const parsed = parseGcode(text);
+  parsed.smoothSurface=opts.smoothSurface || (opts.keepOriginal ? prog?.smoothSurface : null);
   if (parsed.stock) {
     for (const [id, k] of [["sL", "L"], ["sW", "W"], ["sH", "H"], ["sZ", "Z0"]]) if (parsed.stock[k] !== undefined) $(id).value = parsed.stock[k];
   }
   prog = parsed;
+  parsed.smoothSettings=JSON.stringify(readSettings());
   currentText = text; currentName = name;
   if (!opts.keepOriginal) generationStamp = opts.generationStamp || null;
   if (!opts.keepOriginal) {
@@ -1698,6 +1733,7 @@ function loadProgram(text, name, opts = {}) {
 }
 function recheck() {
   if (!prog) return;
+  clearSmoothPreview();
   clearResultPreview();
   prog.check = analyse(prog, readSettings());
   buildScene(readSettings());
@@ -3834,6 +3870,7 @@ const Gen = (() => {
     const prog = new Program(cfg, o.powerComp, 5);
     program += startBlock(cfg, prog);
     const allTowers = [], safe = sideEntry ? cfg.ParkZ : o.bottomZ + offset[2] + stockHeight + cfg.TravelClearance;
+    let profileTowers = null;
     // - Сначала отводим каретки в безопасную позицию; торцевание выполняется при столе 90°
     program += ";" + EOL + "; - Safe position before cutting" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe);
     if (hasTrim) {
@@ -3899,6 +3936,7 @@ const Gen = (() => {
     };
     const addProfile = (layout, side) => {
       const [block, towers] = profileBlock(safe, prog, outer, layout, axis, kerf, warnings, side, stockWidth, o.leadMargin, sag, maxStep, sideEntry, offset[1]);
+      profileTowers = towers;
       program += block; allTowers.push(...towers);
     };
     if (o.pair) {
@@ -3942,6 +3980,11 @@ const Gen = (() => {
     }
     if (prog.clipped) warnings.push("Мощность проволоки упёрлась в максимум S=" + fmtG(cfg.WireMaxPower) + ": проволока слишком длинная для этой формулы");
     return { program, warnings: [...new Set(warnings)], part, points: allTowers.length,
+      smoothSurface: !o.pair && !o.mirror && !holes.length && !secondaryContours.length && !model.wireframe && (!hasTrim || trimAngle===90) && profileTowers ? {
+        towers:profileTowers,fieldWidth:cfg.FieldWidth,
+        x0:offset[0]-(hasTrim?part.span+kerf:stockLength)/2,
+        x1:offset[0]+(hasTrim?part.span+kerf:stockLength)/2
+      } : null,
       holes: holes.length+secondaryContours.length, secondary: secondaryContours.length,
       power: [prog.minPower, prog.maxPower, prog.changes],
       ...(cfg.PlacementProbe?{probeTargets:prog.probeTargets}: {}) };
@@ -4731,7 +4774,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
     });
     const outName = stepFile.name.replace(/\.(stp|step)$/i, "") + (mode === "normal" ? "" : "_" + mode) + "_auto.gcode";
     $("gnOut").textContent = outName;
-    loadProgram(r.program, outName, {generationStamp:generatorSignature()});
+    loadProgram(r.program, outName, {generationStamp:generatorSignature(),smoothSurface:r.smoothSurface});
     if (prog.check.warns.some((w) => w.level === "crit")) throw new Error("Траектория не прошла проверку симулятора: " + prog.check.warns.find((w) => w.level === "crit").text);
     setCamera("3d");
     const p = r.part;
