@@ -564,6 +564,8 @@ test('automatic placement returns normally validated G-code with shared stock of
  const normal=gen.buildProgram(fixture,'synthetic.stp',{...opts,offset:placed.offset});
  assert.equal(placed.program,normal.program);
  const decoded=sim.parseGcode(placed.program);
+ assert.ok(decoded.moves.every(move=>Math.min(move.to.Y,move.to.A)>=5 &&
+   Math.max(move.to.Y,move.to.A)<=gen.CONFIG.VerticalTravel-5));
  assert.equal(decoded.stock.OX,placed.offset[0]);
  assert.equal(decoded.stock.OY,placed.offset[1]);
  assert.equal(decoded.stock.OZ,placed.offset[2]);
@@ -583,8 +585,17 @@ test('F1-1 automatic positioning finds feasible shift on real STEP', {skip:!proc
  assert.ok(Math.hypot(...result.offset)>0);
  const p=sim.parseGcode(result.program),check=sim.analyse(p,{
    ...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.ok(p.moves.every(move=>Math.min(move.to.Y,move.to.A)>=5 &&
+   Math.max(move.to.Y,move.to.A)<=gen.CONFIG.VerticalTravel-5));
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,
    JSON.stringify(check.warns.filter(w=>w.level==='crit')));
+});
+
+test('automatic placement rejects a stock setup without the vertical travel margin',()=>{
+ const opts=options({stock:[80,160,240],bottomZ:0,clearance:10,trim:false,
+   rotation:gen.identityRotation(),powerComp:false});
+ assert.throws(()=>gen.autoPlace(fixture,'synthetic.stp',opts),
+   /Не найдено смещение|фиксированный ход выходит за пределы станка/);
 });
 
 test('stock and model translate together inside machine envelope',()=>{

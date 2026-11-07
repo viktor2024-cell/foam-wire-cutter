@@ -3884,13 +3884,14 @@ const Gen = (() => {
     const limits=[CONFIG.HorizontalTravel/2,0,CONFIG.HorizontalTravel/2,0];
     const lo=[-limits[0],0,-limits[2],0];
     const hi=[limits[0],CONFIG.VerticalTravel,limits[2],CONFIG.VerticalTravel];
-    const reserve=.10; // small numerical margin on computed carriage targets
+    const reserve=.10, verticalReserve=5.01;
     for(let i=0;i<n;i++){
       for(let k=0;k<4;k++){
         const value=probes[0][i][k];
         const a=[1,2,3].map(j=>(probes[j][i][k]-value)/step);
-        add(a,hi[k]-reserve-value);
-        add(a.map(v=>-v),value-lo[k]-reserve);
+        const margin=k%2 ? verticalReserve : reserve;
+        add(a,hi[k]-margin-value);
+        add(a.map(v=>-v),value-lo[k]-margin);
       }
     }
     const [L,W,H]=o.stock,clear=o.clearance||0,bottom=o.bottomZ;
