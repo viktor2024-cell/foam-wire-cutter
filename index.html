@@ -3908,8 +3908,7 @@ const Gen = (() => {
       add([1,0,0],xr);add([-1,0,0],xr);
       add([0,1,0],yr);add([0,-1,0],yr);
     }
-    // Dykstra projections compute the nearest feasible offset to the origin
-    // in a convex intersection, instead of guessing a 5 mm search grid.
+    // Dykstra projections locate a feasible continuous offset.
     const correction=new Float64Array(constraints.length);
     const position=[0,0,0];
     let violation=Infinity;
@@ -3932,13 +3931,41 @@ const Gen = (() => {
     }
     if(violation>.002||position.some(v=>!Number.isFinite(v)))
       throw new StepError("Не найдено смещение, укладывающее все движения в ходы кареток");
-    const offset=position.map(v=>Math.round(v*1000)/1000);
-    // Quantization can push a very tight fit outside a limit. Never
-    // return an unchecked suggestion or bypass the normal postprocessor.
-    const result=buildProgram(text,fileName,{...o,offset});
-    return {offset,rotation:o.rotation||identityRotation(),program:result.program,
-      points:result.points,displacement:Math.hypot(...offset),
-      warnings:result.warnings,geometry:result.part};
+    const gridStep=5;
+    const xy=[];
+    for(let x=Math.ceil(-xLimit/gridStep);x<=Math.floor(xLimit/gridStep);x++){
+      for(let y=Math.ceil(-yLimit/gridStep);y<=Math.floor(yLimit/gridStep);y++){
+        const dx=x*gridStep-position[0],dy=y*gridStep-position[1];
+        xy.push({x:x*gridStep,y:y*gridStep,distance:dx*dx+dy*dy});
+      }
+    }
+    xy.sort((first,second)=>first.distance-second.distance);
+    for(const candidate of xy){
+      let minZ=-bottom,maxZ=CONFIG.VerticalTravel-(bottom+H+clear),feasible=true;
+      for(const {a,b} of constraints){
+        const remaining=b-a[0]*candidate.x-a[1]*candidate.y;
+        if(Math.abs(a[2])<1e-12){
+          if(remaining < -1e-8){feasible=false;break;}
+        }else if(a[2]>0) maxZ=Math.min(maxZ,remaining/a[2]);
+        else minZ=Math.max(minZ,remaining/a[2]);
+        if(minZ>maxZ+1e-8){feasible=false;break;}
+      }
+      if(!feasible)continue;
+      const minGrid=Math.ceil((minZ-1e-8)/gridStep),maxGrid=Math.floor((maxZ+1e-8)/gridStep);
+      const heights=[];
+      for(let z=minGrid;z<=maxGrid;z++)heights.push(z*gridStep);
+      heights.sort((first,second)=>Math.abs(first-position[2])-Math.abs(second-position[2]));
+      for(const z of heights){
+        const offset=[candidate.x,candidate.y,z];
+        try{
+          const result=buildProgram(text,fileName,{...o,offset});
+          return {offset,rotation:o.rotation||identityRotation(),program:result.program,
+            points:result.points,displacement:Math.hypot(...offset),
+            warnings:result.warnings,geometry:result.part};
+        }catch(error){}
+      }
+    }
+    throw new StepError("Не найдено допустимое смещение с шагом 5 мм и запасом хода по Z");
   }
   // Preliminary F4 two-carriage motion from explicitly assigned guide pairs.
   // Coordinates are machine-frame candidates, NOT verified cutting moves.

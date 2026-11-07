@@ -560,6 +560,7 @@ test('automatic placement returns normally validated G-code with shared stock of
  const placed=gen.autoPlace(fixture,'synthetic.stp',opts);
  assert.equal(placed.offset.length,3);
  assert.ok(placed.offset.every(Number.isFinite));
+ assert.ok(placed.offset.every(value=>value%5===0));
  assert.ok(placed.displacement>=0);
  const normal=gen.buildProgram(fixture,'synthetic.stp',{...opts,offset:placed.offset});
  assert.equal(placed.program,normal.program);
@@ -583,6 +584,7 @@ test('F1-1 automatic positioning finds feasible shift on real STEP', {skip:!proc
    /Перемещение выходит за ход кареток/);
  const result=gen.autoPlace(step,'F1-1.stp',opts);
  assert.ok(Math.hypot(...result.offset)>0);
+ assert.ok(result.offset.every(value=>value%5===0));
  const p=sim.parseGcode(result.program),check=sim.analyse(p,{
    ...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.ok(p.moves.every(move=>Math.min(move.to.Y,move.to.A)>=5 &&

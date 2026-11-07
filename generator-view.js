@@ -779,7 +779,7 @@ const generatorPreview = (() => {
       fit.textContent+=' Авторазмещение: X='+best.offset[0].toFixed(2)+
         ', Y='+best.offset[1].toFixed(2)+', Z='+best.offset[2].toFixed(2)+
         ' мм; поворотов от исходного положения: '+best.turns+
-        '. Запас хода кареток по Z: не менее 5 мм. Траектория проверена обычным генератором. Проверяйте G-code в РЕЗКЕ.';
+        '. Шаг смещения: 5 мм; запас хода кареток по Z: не менее 5 мм. Траектория проверена обычным генератором. Проверяйте G-code в РЕЗКЕ.';
     }catch(e){
       fit.className='note crit';
       fit.textContent='Ошибка авторазмещения: '+e.message;
