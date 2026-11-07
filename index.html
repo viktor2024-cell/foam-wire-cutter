@@ -121,6 +121,7 @@ pre.code .ln { color: var(--muted); display: inline-block; min-width: 4.5ch; }
 #gnRotate [data-axis="2"] .axis-letter { color: #0000ff; }
 #gnRotate .axis-letter { font-weight: 800; }
 #gnView { height: 420px; min-height: 260px; position: relative; border-radius: 8px; overflow: hidden; background: var(--view); }
+#gnView .gn-file { position: absolute; top: 8px; left: 8px; z-index: 2; max-width: calc(100% - 16px); padding: 5px; border-radius: 6px; background: var(--panel); }
 #gnView canvas { display: block; width: 100%; height: 100%; }
 #panelGen .gn-result { grid-column: 1 / -1; }
 .fields select { width: 100%; padding: 4px 6px; font-family: var(--font-num); font-size: 13px; }
@@ -183,7 +184,12 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       <span class="note" id="gnGuideStatus" role="status" aria-live="polite">Откройте STEP с вспомогательными кривыми.</span>
       <span class="note">Alt + ПКМ — перемещение · Ctrl + ПКМ — поворот · ПКМ — подтвердить пару</span>
     </div>
-    <div id="gnView" aria-label="Модель, заготовка и рабочая область станка"></div>
+    <div id="gnView" aria-label="Модель, заготовка и рабочая область станка">
+      <div class="mline gn-file">
+        <label class="btn" for="gnInput">Открыть STEP<input type="file" id="gnInput" accept=".stp,.step"></label>
+        <span class="file-name" id="gnFile">файл не выбран</span>
+      </div>
+    </div>
     <div class="row gn-manual" aria-label="Диагностическая траектория струны" hidden>
       <label for="gnGuideOperation">Пара для просмотра</label>
       <select id="gnGuideOperation" disabled aria-label="Выбранная пара кривых"></select>
@@ -225,15 +231,6 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
     </div>
     <div class="note">X — вдоль струны (красная ось), Y — поперёк (зелёная), Z — вверх (синяя). Смещение перемещает модель вместе с заготовкой относительно станка и оси поворотного стола. Авторазмещение рассчитывает допустимые ходы кареток и проверяет результат обычным генератором.</div>
     <div class="note" id="gnFit" role="status">Откройте STEP для проверки размещения.</div>
-  </section>
-  <section class="box">
-    <h2>Модель</h2>
-    <div class="mline">
-      <label class="btn" for="gnInput">Открыть STEP<input type="file" id="gnInput" accept=".stp,.step"></label>
-      <span class="file-name" id="gnFile">файл не выбран</span>
-      
-    </div>
-    <div class="note">Твёрдое тело с профилями в двух плоскостях, размах вдоль оси Y модели. Файл можно перетащить в это окно.</div>
   </section>
   <section class="box">
     <h2>Заготовка</h2>
