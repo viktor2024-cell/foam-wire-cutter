@@ -94,10 +94,27 @@ test('strongly swept ruled faces retain their end-cap axis',()=>{
  assert.equal(shape.outer.length,4);
 });
 
+test('oblique vertical STEP faces produce advisory rotation candidates',()=>{
+ const angle=Math.PI/6,c=Math.cos(angle),q=Math.sin(angle);
+ const rotated=fixture.replace(/(CARTESIAN_POINT\('',\()\s*(-?[\d.]+),\s*(-?[\d.]+),\s*(-?[\d.]+)(\)\))/g,
+  (_,prefix,x,y,z,suffix)=>prefix+(x*c-y*q)+','+(x*q+y*c)+','+z+suffix);
+ const m=new gen.Model(rotated),faces=m.verticalBevels();
+ assert.ok(faces.length>=2);
+ for(const face of faces){
+   assert.ok(Math.abs(face.normal[2])<1e-6);
+   assert.ok(face.angle>=0&&face.angle<180);
+   const t=face.angle*Math.PI/180;
+   assert.ok(Math.abs(Math.sin(t)*face.normal[0]-Math.cos(t)*face.normal[1])<1e-6);
+ }
+});
+
 test('kil2 retains diagnostic STEP edges when safe generation is not established',{skip:!process.env.KIL_STEP},()=>{
  const step=fs.readFileSync(process.env.KIL_STEP,'utf8');
  const preview=gen.previewGeometry(step,gen.identityRotation(),1,.6);
  assert.equal(preview.diagnosticOnly,true);
+ const bevel=preview.bevelCandidates.find(face=>face.face===1235);
+ assert.ok(bevel,'the root bevel is identified from its plane and boundary');
+ assert.ok(Math.abs(bevel.angle-113.93)<.1,`unexpected bevel angle: ${bevel.angle}`);
  assert.ok(preview.edgeLines.length>0);
  assert.equal(preview.diagnosticFaces.length,10);
  assert.ok(preview.diagnosticFaces[1].patch,'curved rudder uses a surface patch');

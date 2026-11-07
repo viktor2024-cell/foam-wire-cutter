@@ -2165,6 +2165,8 @@ const Gen = (() => {
     let diagnosticShell=null;
     if(!built)try{diagnosticShell=diagnosticClosedShell(model);}catch(e){diagnosticShell=null;}
     const diagnosticFaces=!built&&!diagnosticShell ? diagnosticFaceBoundaries(model) : [];
+    let bevelCandidates=[];
+    if(!built&&!model.wireframe)try{bevelCandidates=model.verticalBevels();}catch(e){/* advisory only */}
     const edgeLines = [];
     if (!built) for (const ends of model.edges.values()) {
       if (ends.length===2 && ends.every(p=>p.every(Number.isFinite)))
@@ -2183,7 +2185,7 @@ const Gen = (() => {
     const high=[0,1,2].map(k=>Math.max(...points.map(p=>p[k])));
     const closedShell=built&&outer.length===1&&outer[0][0].closed&&!holes.length
       ? {rail:rails[0],capAxis:axis===0?1:axis===1?0:2} : null;
-    return {rails,edgeLines,diagnosticShell,diagnosticFaces,closedShell,previewError,diagnosticOnly:!!previewError,
+    return {rails,edgeLines,diagnosticShell,diagnosticFaces,closedShell,bevelCandidates,previewError,diagnosticOnly:!!previewError,
       axis, sampled, wireframe:!!wireframe, auxiliaryCurves, guideAnalysis,
       guideKinematics, secondaryCount:secondaryContours.length,
       center:low.map((v,k)=>(v+high[k])/2),
@@ -2520,6 +2522,30 @@ const Gen = (() => {
         }
       }
       return groups;
+    }
+    // Identify oblique vertical planar faces without assuming STEP entity IDs.
+    // A candidate is geometry for a future final trim, not permission to cut.
+    verticalBevels() {
+      const result=[];
+      for(const raw of this.facesRaw){
+        const surf=this.surface(raw.surf);
+        if(surf.pu!==1||surf.pv!==1||surf.nu!==1||surf.nv!==1)continue;
+        const p=surf.P[0][0],u=surf.P[1][0].map((v,i)=>v-p[i]),v=surf.P[0][1].map((x,i)=>x-p[i]);
+        const n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]],length=Math.hypot(...n);
+        if(length<1e-8)continue;
+        const normal=n.map(x=>x/length);
+        if(Math.abs(normal[2])>1e-6||Math.abs(normal[0])<.01||Math.abs(normal[1])<.01)continue;
+        if(surf.P.flat().some(q=>Math.abs(q.reduce((sum,x,i)=>sum+(x-p[i])*normal[i],0))>.001))continue;
+        const vertices=raw.edgeIds.flatMap(id=>this.edges.get(id)||[]);
+        if(vertices.length<6||vertices.some(q=>Math.abs(q.reduce((sum,x,i)=>sum+(x-p[i])*normal[i],0))>.02))continue;
+        const z=vertices.map(q=>q[2]);
+        if(Math.max(...z)-Math.min(...z)<1)continue;
+        const direction=[normal[1],-normal[0]];
+        let angle=Math.atan2(direction[0],-direction[1])*180/Math.PI;
+        angle=((angle%180)+180)%180;
+        result.push({face:raw.fid,angle,normal,point:p,edges:raw.edgeIds.slice()});
+      }
+      return result;
     }
     // --- Ось размаха: единственная ось, по которой вершины лежат ровно в двух плоскостях
     spanAxis() {

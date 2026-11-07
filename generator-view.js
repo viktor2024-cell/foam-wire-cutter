@@ -704,6 +704,8 @@ const generatorPreview = (() => {
             : geometry.diagnosticShell
             ? '. Показана приближённая оболочка STEP; автоматический подбор заготовки и размещения недоступен.'
             : '. Показаны упрощённые рёбра STEP; автоматический подбор заготовки и размещения недоступен.');
+      if(geometry.previewError && geometry.bevelCandidates?.length)
+        fit.textContent+=' Возможные наклонные торцы: '+geometry.bevelCandidates.map(b=>'грань #'+b.face+' (B'+b.angle.toFixed(1)+'°)').join(', ')+'. Это анализ, не траектория реза.';
       if(!fits||unsupported||trimConflict||geometry.axis!==1||geometry.auxiliaryCurves?.length||geometry.previewError) fit.className='note crit';
     } else {
       fit.textContent = error || 'Откройте STEP для проверки размещения.';
