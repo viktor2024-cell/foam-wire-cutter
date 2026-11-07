@@ -116,7 +116,6 @@ pre.code .ln { color: var(--muted); display: inline-block; min-width: 4.5ch; }
 #panelGen { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-content: start; }
 #panelGen .gn-preview { grid-column: 1 / -1; }
 #panelGen [hidden] { display: none !important; }
-#panelGen .gn-modes { grid-column: 1 / -1; }
 #gnRotate [data-axis="0"] .axis-letter { color: #ff0000; }
 #gnRotate [data-axis="1"] .axis-letter { color: #00ff00; }
 #gnRotate [data-axis="2"] .axis-letter { color: #0000ff; }
@@ -148,7 +147,8 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
 <header>
   <h1>Струнная резка</h1>
   <div class="seg tabs" role="group" aria-label="Вкладки">
-    <button id="tabGen" aria-pressed="true">ГЕНЕРАТОР GCODE</button>
+    <button id="gnModeAuto" type="button" aria-pressed="true">АВТО</button>
+    <button id="gnModeManual" type="button" aria-pressed="false">ПОЛУАВТО</button>
     <button id="tabCut" aria-pressed="false">РЕЗКА</button>
   </div>
   <span class="file-name cut-only" id="fileName">пример: W2_auto.gcode</span>
@@ -162,10 +162,6 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
 </header>
 
 <div id="panelGen">
-  <div class="seg gn-modes" role="group" aria-label="Режим генератора">
-    <button id="gnModeAuto" type="button" aria-pressed="true">Автогенератор</button>
-    <button id="gnModeManual" type="button" aria-pressed="false">Полуавтомат</button>
-  </div>
   <section class="box gn-preview">
     <div class="row">
       <h2>Размещение модели</h2>
@@ -4563,7 +4559,9 @@ function showGeneratorMode(mode) {
 function showTab(tab) {
   const gen = tab === "gen";
   $("panelGen").hidden = !gen; $("panelCut").hidden = gen;
-  $("tabGen").setAttribute("aria-pressed", String(gen)); $("tabCut").setAttribute("aria-pressed", String(!gen));
+  $("gnModeAuto").setAttribute("aria-pressed", String(gen && generatorMode === "auto"));
+  $("gnModeManual").setAttribute("aria-pressed", String(gen && generatorMode === "manual"));
+  $("tabCut").setAttribute("aria-pressed", String(!gen));
   for (const el of document.querySelectorAll(".cut-only")) el.hidden = gen;
 }
 function openStep(file, handle = null) {
@@ -4651,10 +4649,9 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
     status.textContent = "Не удалось: " + e.message;
   }
 }
-$("tabGen").addEventListener("click", () => showTab("gen"));
 $("tabCut").addEventListener("click", () => showTab("cut"));
-$("gnModeAuto").addEventListener("click", () => showGeneratorMode("auto"));
-$("gnModeManual").addEventListener("click", () => showGeneratorMode("manual"));
+$("gnModeAuto").addEventListener("click", () => { showTab("gen"); showGeneratorMode("auto"); });
+$("gnModeManual").addEventListener("click", () => { showTab("gen"); showGeneratorMode("manual"); });
 $("gnInput").addEventListener("change", (e) => { if (e.target.files[0]) openStep(e.target.files[0]); });
 // - Окно выбора с доступом к файлу нужно, чтобы потом сохранить G-code в ту же папку
 $("gnInput").addEventListener("click", async (e) => {
