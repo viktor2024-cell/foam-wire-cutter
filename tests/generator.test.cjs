@@ -99,6 +99,15 @@ test('kil2 retains diagnostic STEP edges when safe generation is not established
  const preview=gen.previewGeometry(step,gen.identityRotation(),1,.6);
  assert.equal(preview.diagnosticOnly,true);
  assert.ok(preview.edgeLines.length>0);
+ assert.equal(preview.diagnosticFaces.length,10);
+ assert.ok(preview.size[1]>280);
+ const three=require('../lib/three.min.js');
+ for(const boundary of preview.diagnosticFaces){
+   const n=[0,0,0];
+   boundary.forEach((a,i)=>{const b=boundary[(i+1)%boundary.length];n[0]+=(a[1]-b[1])*(a[2]+b[2]);n[1]+=(a[2]-b[2])*(a[0]+b[0]);n[2]+=(a[0]-b[0])*(a[1]+b[1]);});
+   const axis=n.reduce((best,v,i)=>Math.abs(v)>Math.abs(n[best])?i:best,0),axes=[0,1,2].filter(k=>k!==axis);
+   assert.ok(three.ShapeUtils.triangulateShape(boundary.map(p=>new three.Vector2(p[axes[0]],p[axes[1]])),[]).length>0);
+ }
  assert.match(preview.previewError,/Грань #790/);
  assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({stock:[250,250,50],tolerance:.6})),/Грань #790/);
 });

@@ -2081,6 +2081,39 @@ const Gen = (() => {
     if(!((matches(0,curves[0])&&matches(1,curves[1]))||(matches(0,curves[1])&&matches(1,curves[0]))))return null;
     return {rail:sidePoints.map(pair=>pair.map(p=>[-p[1],p[0],p[2]])),capAxis:fixedAxis===0?1:fixedAxis===1?0:2};
   }
+  // Approximate trimmed STEP faces for display only; never used for toolpaths.
+  function diagnosticFaceBoundaries(model) {
+    const boundaries=[], curves=new WireframeModel(model), cache=new Map();
+    const edgePoints=id=>{
+      if(cache.has(id))return cache.get(id);
+      const edge=model.entities.get(id),ends=model.edges.get(id);
+      if(!edge||!ends)return null;
+      try {
+        const c=curves.curve(edge.args[3].id),forward=dist(c.start,ends[0])+dist(c.end,ends[1]),reverse=dist(c.end,ends[0])+dist(c.start,ends[1]);
+        if(Math.min(forward,reverse)>.04)return null;
+        let points=Array.from({length:65},(_,i)=>c.at(i/64));
+        if(reverse<forward)points.reverse();
+        cache.set(id,points);return points;
+      } catch(e){return null;}
+    };
+    for(const face of model.facesRaw){
+      const raw=model.entities.get(face.fid);
+      if(raw.args[1].length!==1||model.get(raw.args[1][0]).name!=='FACE_OUTER_BOUND')continue;
+      const todo=face.edgeIds.map(id=>edgePoints(id));
+      if(todo.some(x=>!x)||todo.length<3)continue;
+      let path=todo.shift().slice(),guard=0;
+      while(todo.length&&guard++<face.edgeIds.length){
+        const end=path.at(-1), ranked=todo.map((p,i)=>({i,d:Math.min(dist(end,p[0]),dist(end,p.at(-1)))})).sort((a,b)=>a.d-b.d);
+        if(!ranked.length||ranked[0].d>.02)break;
+        const i=ranked[0].i;
+        let next=todo.splice(i,1)[0];if(dist(end,next.at(-1))<dist(end,next[0]))next=next.slice().reverse();
+        path.push(...next.slice(1));
+      }
+      if(todo.length||dist(path[0],path.at(-1))>.02)continue;
+      path.pop();boundaries.push(path.map(p=>[-p[1],p[0],p[2]]));
+    }
+    return boundaries;
+  }
   function previewGeometry(text, rotation = identityRotation(), scale = 1, tolerance = 0.1) {
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
     const model = new Model(text, rotation, scale, tolerance);
@@ -2110,6 +2143,7 @@ const Gen = (() => {
         .map(pair => pair.map(p => [-p[1],p[0],p[2]])));
     let diagnosticShell=null;
     if(!built)try{diagnosticShell=diagnosticClosedShell(model);}catch(e){diagnosticShell=null;}
+    const diagnosticFaces=!built&&!diagnosticShell ? diagnosticFaceBoundaries(model) : [];
     const edgeLines = [];
     if (!built) for (const ends of model.edges.values()) {
       if (ends.length===2 && ends.every(p=>p.every(Number.isFinite)))
@@ -2119,6 +2153,7 @@ const Gen = (() => {
     // recovery preview use STEP edge endpoints, not unbounded surface poles.
     let points = sampled.flat(2).map(p => [-p[1],p[0],p[2]]);
     if (!points.length && diagnosticShell) points = diagnosticShell.rail.flat();
+    if (!points.length && diagnosticFaces.length) points = diagnosticFaces.flat();
     if (!points.length) points = edgeLines.flat();
     if (!points.length) points = auxiliaryCurves.flatMap(c =>
       c.points.map(p=>[-p[1],p[0],p[2]]));
@@ -2127,7 +2162,7 @@ const Gen = (() => {
     const high=[0,1,2].map(k=>Math.max(...points.map(p=>p[k])));
     const closedShell=built&&outer.length===1&&outer[0][0].closed&&!holes.length
       ? {rail:rails[0],capAxis:axis===0?1:axis===1?0:2} : null;
-    return {rails,edgeLines,diagnosticShell,closedShell,previewError,diagnosticOnly:!!previewError,
+    return {rails,edgeLines,diagnosticShell,diagnosticFaces,closedShell,previewError,diagnosticOnly:!!previewError,
       axis, sampled, wireframe:!!wireframe, auxiliaryCurves, guideAnalysis,
       guideKinematics, secondaryCount:secondaryContours.length,
       center:low.map((v,k)=>(v+high[k])/2),

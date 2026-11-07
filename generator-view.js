@@ -628,6 +628,23 @@ const generatorPreview = (() => {
             for(const triangle of triangles)for(const index of triangle)vertices.push(...boundary[index]);
           }
         }
+        // Boundary-only tessellation is a diagnostic approximation for trimmed
+        // faces; it must not be interpreted as a machining surface.
+        for(const face of geometry.diagnosticFaces||[]){
+          const boundary=face.map(point),normal=[0,0,0];
+          for(let i=0;i<boundary.length;i++){
+            const a=boundary[i],b=boundary[(i+1)%boundary.length];
+            normal[0]+=(a[1]-b[1])*(a[2]+b[2]);
+            normal[1]+=(a[2]-b[2])*(a[0]+b[0]);
+            normal[2]+=(a[0]-b[0])*(a[1]+b[1]);
+            lines.push(...a,...b);
+          }
+          const axis=normal.reduce((best,v,i)=>Math.abs(v)>Math.abs(normal[best])?i:best,0);
+          if(Math.abs(normal[axis])<1e-8)continue;
+          const axes=[0,1,2].filter(k=>k!==axis);
+          const triangles=THREE.ShapeUtils.triangulateShape(boundary.map(p=>new THREE.Vector2(p[axes[0]],p[axes[1]])),[]);
+          for(const triangle of triangles)for(const index of triangle)vertices.push(...boundary[index]);
+        }
         const color=fits&&!unsupported&&!trimConflict?copy.color:0xd73333;
         const mesh=new THREE.BufferGeometry();mesh.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));
         group.add(new THREE.Mesh(mesh,new THREE.MeshBasicMaterial({color,side:THREE.DoubleSide,transparent:true,opacity:.45,depthWrite:false})));
@@ -673,7 +690,9 @@ const generatorPreview = (() => {
       if (geometry.previewError) fit.textContent += ' Траектория не определена: ' +
         geometry.previewError + (geometry.auxiliaryCurves?.length
           ? '. Для ручной привязки выберите две кривые и нажмите Enter.'
-          : geometry.diagnosticShell
+          : geometry.diagnosticFaces?.length
+            ? '. Показаны приближённые грани STEP; генерация и автоматическое размещение недоступны.'
+            : geometry.diagnosticShell
             ? '. Показана приближённая оболочка STEP; автоматический подбор заготовки и размещения недоступен.'
             : '. Показаны упрощённые рёбра STEP; автоматический подбор заготовки и размещения недоступен.');
       if(!fits||unsupported||trimConflict||geometry.axis!==1||geometry.auxiliaryCurves?.length||geometry.previewError) fit.className='note crit';
