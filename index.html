@@ -113,9 +113,10 @@ pre.code .ln { color: var(--muted); display: inline-block; min-width: 4.5ch; }
 .row button { padding: 5px 10px; font-size: 13px; }
 .delta-up { color: var(--wire); font-weight: 600; } .delta-down { color: var(--info); font-weight: 600; }
 .tabs button { font-weight: 600; letter-spacing: 0.03em; }
-#panelGen { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-content: start; }
+#panelGen { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-content: start; }
 #panelGen .gn-preview { grid-column: 1 / -1; }
 #panelGen [hidden] { display: none !important; }
+#panelGen .fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 #gnRotate [data-axis="0"] .axis-letter { color: #ff0000; }
 #gnRotate [data-axis="1"] .axis-letter { color: #00ff00; }
 #gnRotate [data-axis="2"] .axis-letter { color: #0000ff; }
