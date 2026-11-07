@@ -585,6 +585,11 @@ test('F1-1 automatic positioning finds feasible shift on real STEP', {skip:!proc
  const result=gen.autoPlace(step,'F1-1.stp',{...opts,grounded:true});
  assert.ok(Math.hypot(...result.offset)>0);
  assert.ok(result.offset.every(value=>value%5===0));
+ const preferred=gen.autoPlace(step,'F1-1.stp',{...opts,grounded:true,keepHeight:true,preferNegativeX:true});
+ assert.ok(preferred.offset[0]<0);
+ assert.equal(preferred.offset[2],0);
+ const unchanged=gen.groundPlacement(step,'F1-1.stp',opts,preferred);
+ assert.equal(unchanged.stock[2],opts.stock[2]);
  const grounded=gen.groundPlacement(step,'F1-1.stp',opts,result);
  assert.equal(grounded.offset[2],0);
  assert.equal(grounded.stock[2],opts.stock[2]+result.offset[2]);
@@ -629,6 +634,14 @@ test('automatic placement rejects a stock setup without the vertical travel marg
    rotation:gen.identityRotation(),powerComp:false});
  assert.throws(()=>gen.autoPlace(fixture,'synthetic.stp',opts),
    /Не найдено смещение|фиксированный ход выходит за пределы станка/);
+});
+
+test('negative X preference falls back when the stock fills the tower width',()=>{
+ const opts=options({stock:[370,160,100],bottomZ:10,trim:false,grounded:true,keepHeight:true,powerComp:false});
+ assert.throws(()=>gen.autoPlace(fixture,'synthetic.stp',{...opts,preferNegativeX:true}),/Не найдено|пределы станка/);
+ const placement=gen.autoPlace(fixture,'synthetic.stp',opts);
+ assert.equal(Math.abs(placement.offset[0]),0);
+ assert.equal(placement.offset[2],0);
 });
 
 test('model height offset must fit the stock and unsupported pair modes are rejected',()=>{

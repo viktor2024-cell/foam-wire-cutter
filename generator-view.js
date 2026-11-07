@@ -753,12 +753,18 @@ const generatorPreview = (() => {
         for(let axis=0;axis<3;axis++)
           queue.push({matrix:Gen.rotateModel(candidate.matrix,axis,1),turns:candidate.turns+1});
       }
+      const stages=[
+        {keepHeight:true,preferNegativeX:true,label:'сдвиг по −X без изменения заготовки'},
+        {keepHeight:true,preferNegativeX:false,label:'без изменения заготовки'},
+        {keepHeight:false,preferNegativeX:false,label:'с увеличением высоты заготовки'}
+      ];
+      for(const stage of stages){
       for(const item of rotations){
         checked++;
-        progressBar.max=rotations.length;progressBar.value=checked-1;
-        progressText.textContent='Проверяется поворот '+checked+' из '+rotations.length+'…';
+        progressBar.max=rotations.length*stages.length;progressBar.value=checked-1;
+        progressText.textContent='Поиск: '+stage.label+'; проверено '+(checked-1)+' из '+(rotations.length*stages.length)+' вариантов…';
         fit.className='note';
-        fit.textContent='Проверка поворотов '+checked+'/'+rotations.length+
+        fit.textContent='Проверка вариантов '+checked+'/'+(rotations.length*stages.length)+
           ': рассчитываю полные траектории обеих кареток…';
         // Refresh the canvas and status between computational candidates.
         await new Promise(resolve=>setTimeout(resolve,0));
@@ -767,7 +773,7 @@ const generatorPreview = (() => {
           if(g.axis!==1||g.secondaryCount||g.wireframe||
              g.size[0]>config.stock[0]+.001||g.size[1]>config.stock[1]+.001||
              g.size[2]>config.stock[2]+.001) continue;
-          const options={...config,rotation:item.matrix,grounded:true};
+          const options={...config,rotation:item.matrix,grounded:true,keepHeight:stage.keepHeight,preferNegativeX:stage.preferNegativeX};
           const result=Gen.groundPlacement(stepFile.text,stepFile.name,options,
             Gen.autoPlace(stepFile.text,stepFile.name,options));
           // Prefer a small translation; a quarter turn costs a little to
@@ -776,7 +782,9 @@ const generatorPreview = (() => {
           if(!best||score<best.score)best={...result,score,turns:item.turns};
         }catch(e){if(!firstError)firstError=e.message;}
       }
-      progressBar.value=rotations.length;
+      if(best)break;
+      }
+      progressBar.value=progressBar.max;
       if(initialSignature!==generatorSignature()){
         fit.className='note crit';
         fit.textContent='Параметры изменились во время расчёта. Запустите авторазмещение заново.';

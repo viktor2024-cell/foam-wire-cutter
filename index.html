@@ -3965,6 +3965,8 @@ const Gen = (() => {
       add([0,0,1],CONFIG.VerticalTravel-bottom-H-clear);
       add([0,0,-1],0);
     }
+    if(o.keepHeight){add([0,0,1],0);add([0,0,-1],0);}
+    if(o.preferNegativeX)add([1,0,0],-5);
     // When the table actually rotates to B90, X and Y stock spans exchange.
     if(o.trim!==false&&Number(o.trimAngle)===90){
       const xr=CONFIG.HorizontalTravel/2-L/2;
@@ -4005,7 +4007,7 @@ const Gen = (() => {
     }
     xy.sort((first,second)=>first.distance-second.distance);
     for(const candidate of xy){
-      let minZ=o.grounded?0:-bottom,maxZ=CONFIG.VerticalTravel-(bottom+H+clear),feasible=true;
+      let minZ=o.grounded||o.keepHeight?0:-bottom,maxZ=o.keepHeight?0:CONFIG.VerticalTravel-(bottom+H+clear),feasible=true;
       for(const {a,b} of constraints){
         const remaining=b-a[0]*candidate.x-a[1]*candidate.y;
         if(Math.abs(a[2])<1e-12){
@@ -4017,7 +4019,7 @@ const Gen = (() => {
       if(!feasible)continue;
       const minGrid=Math.ceil((minZ-1e-8)/gridStep),maxGrid=Math.floor((maxZ+1e-8)/gridStep);
       const heights=[];
-      for(let z=minGrid;z<=maxGrid;z++)heights.push(z*gridStep);
+      for(let z=minGrid;z<=maxGrid;z++)heights.push(z*gridStep || 0);
       heights.sort((first,second)=>Math.abs(first-position[2])-Math.abs(second-position[2]));
       for(const z of heights){
         const offset=[candidate.x,candidate.y,z];
