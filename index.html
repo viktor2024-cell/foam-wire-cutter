@@ -3990,7 +3990,7 @@ const Gen = (() => {
     g += prog.travel("cut", yl, levelL, yr, levelR);       // - обратно по той же щели
     return [g, towers];
   }
-  function profileBlock(safe, prog, contour, layout, axis, kerf, notes, side, stockWidth, margin, sag, maxStep, sideEntry = false, stockCenter = 0) {
+  function profileBlock(safe, prog, contour, layout, axis, kerf, notes, side, stockWidth, margin, sag, maxStep, sideEntry = false, stockCenter = 0, preferTop = false) {
     let segments = prepareContour(contour.map(([f, fw]) => faceSegment(f, fw)), axis, kerf, true, notes);
     const smoothExterior=contour.length===1&&contour[0][0].closed;
     if(smoothExterior){
@@ -4072,20 +4072,42 @@ const Gen = (() => {
     const yOut = stockCenter + side * (stockWidth / 2 + margin);
     const [[yl, zl], [yr, zr]] = towers[0];
     let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", corner entry, upper first, " + (hasUpperCorner ? "exit Z+5 mm" : "exit via entry slit") + " ***" + EOL;
-    // Move to the entry height outside the block, then enter horizontally.
-    // With normal overhead mode, descend only OUTSIDE the stock.
-    if (sideEntry) g += prog.travel("move", yOut, zl, yOut, zr);
-    else {
-      g += prog.travel("move", yOut, safe, yOut, safe);
-      g += prog.travel("move", yOut, zl, yOut, zr);
+    // Check the full wire at multiple span sections: a vertical approach to
+    // this same corner must not first cross another part of the profile.
+    let topEntry=preferTop&&!sideEntry&&safe>=Math.max(zl,zr)-1e-7;
+    if(topEntry){
+      for(let j=0;j<=32&&topEntry;j++){
+        const f=j/32,section=pair=>({x:pair[0][0]+f*(pair[1][0]-pair[0][0]),z:pair[0][1]+f*(pair[1][1]-pair[0][1])});
+        const start=section(towers[0]);
+        for(let i=1;i<towers.length;i++){
+          const a=section(towers[i-1]),b=section(towers[i]);
+          if(Math.abs(a.x-start.x)<1e-7&&Math.abs(b.x-start.x)<1e-7&&Math.max(a.z,b.z)>start.z+.02){topEntry=false;break;}
+          if((a.x>start.x)===(b.x>start.x))continue;
+          const z=a.z+(b.z-a.z)*(start.x-a.x)/(b.x-a.x);
+          if(z>start.z+.02){topEntry=false;break;}
+        }
+      }
     }
-    g += prog.travel("cut", yl, zl, yr, zr);
-    for (const [[yl2, zl2], [yr2, zr2]] of towers.slice(1)) g += prog.travel("cut", yl2, zl2, yr2, zr2);
-    // With a distinct upper corner cross into waste; a single side corner
-    // returns through the existing entry slit as requested for such profiles.
-    if (hasUpperCorner) g += prog.travel("cut", yl, zl+5, yr, zr+5);
-    g += prog.travel("cut", yOut, zl+(hasUpperCorner?5:0), yOut, zr+(hasUpperCorner?5:0));
-    if (!sideEntry) g += prog.travel("move", yOut, safe, yOut, safe);
+    if(topEntry){
+      g=g.replace(hasUpperCorner?"exit Z+5 mm":"exit via entry slit","exit via entry slit");
+      g+="; ENTRY FROM ABOVE; EXIT THROUGH THE SAME SLIT"+EOL;
+      g+=prog.travel("move",yl,safe,yr,safe);
+      g+=prog.travel("cut",yl,zl,yr,zr);
+      for(const [[yl2,zl2],[yr2,zr2]] of towers.slice(1))g+=prog.travel("cut",yl2,zl2,yr2,zr2);
+      g+=prog.travel("cut",yl,safe,yr,safe);
+    } else {
+      if(preferTop)notes.push("Вход сверху пересекает контур или превышает безопасную высоту; использован боковой вход");
+      if(sideEntry)g+=prog.travel("move",yOut,zl,yOut,zr);
+      else{
+        g+=prog.travel("move",yOut,safe,yOut,safe);
+        g+=prog.travel("move",yOut,zl,yOut,zr);
+      }
+      g+=prog.travel("cut",yl,zl,yr,zr);
+      for(const [[yl2,zl2],[yr2,zr2]] of towers.slice(1))g+=prog.travel("cut",yl2,zl2,yr2,zr2);
+      if(hasUpperCorner)g+=prog.travel("cut",yl,zl+5,yr,zr+5);
+      g+=prog.travel("cut",yOut,zl+(hasUpperCorner?5:0),yOut,zr+(hasUpperCorner?5:0));
+      if(!sideEntry)g+=prog.travel("move",yOut,safe,yOut,safe);
+    }
     return [g, towers];
   }
 
@@ -4198,7 +4220,7 @@ const Gen = (() => {
     const modelZOffset=o.modelZOffset===undefined?0:o.modelZOffset;
     if(!Number.isFinite(modelZOffset))throw new StepError("Недопустимое положение модели по высоте");
     if(Math.abs(modelZOffset)>1e-9 && (o.pair || o.mirror || model.wireframe || secondaryContours.length || (holes.length&&!slopedEnd)))
-      throw new StepError("Размещение модели выше центра пока недоступно для этого типа отверстий или дополнительных резов");
+      throw new StepError("Размещение модели выше центра доступно только для одиночной детали без неподдерживаемых отверстий или дополнительных резов");
     if(Math.abs(modelZOffset)+(part.z1-part.z0)/2>stockHeight/2+1e-6)
       throw new StepError("Модель не помещается по высоте внутри заготовки");
     if (part.x1 - part.x0 > stockWidth || part.z1 - part.z0 > stockHeight || part.span > stockLength) {
@@ -4357,7 +4379,7 @@ const Gen = (() => {
       program += block; allTowers.push(...towers);
     };
     const addProfile = (layout, side) => {
-      const [block, towers] = profileBlock(safe, prog, outer, layout, axis, kerf, warnings, side, stockWidth, o.leadMargin, sag, maxStep, sideEntry, offset[1]);
+      const [block, towers] = profileBlock(safe, prog, outer, layout, axis, kerf, warnings, side, stockWidth, o.leadMargin, sag, maxStep, sideEntry, offset[1], !!slopedEnd && !holes.length);
       profileTowers = towers;
       program += block; allTowers.push(...towers);
     };

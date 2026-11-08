@@ -5,7 +5,7 @@ const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
 // Exercise the production generator without DOM stubs or a second implementation.
 const source=html.slice(html.indexOf('const Gen ='),html.indexOf('//  Вкладки и экран генератора'))
  .replace(/return \{ buildProgram,.*?CONFIG, previewGeometry, previewPair, identityRotation, rotateModel \};/,
-  match=>match.replace(' };', ', Model, sampleFace, Program, startBlock, endBlock };'));
+  match=>match.replace(' };', ', Model, sampleFace, Program, startBlock, endBlock, profileBlock };'));
 const gen=vm.runInNewContext(source+';Gen');
 const fixture=fs.readFileSync(path.join(__dirname,'fixtures/split-profile.stp'),'utf8').replace(/\r\n/g,'\n');
 // Construct a genuine two-direction ruled STEP topology: the main sheet
@@ -179,6 +179,19 @@ test('rotation projection is informational; clearance at cutting angle is checke
  }
 });
 
+test('top entry falls back to the side when the profile lies above the corner',()=>{
+ const left=[[10,5],[15,15],[-10,15],[-10,0],[10,0]],right=[[30,5],[5,15],[-10,15],[-10,0],[30,0]];
+ const contour=left.map((p,i)=>{
+   const j=(i+1)%left.length,at=(a,b,u)=>[a[0]+u*(b[0]-a[0]),0,a[1]+u*(b[1]-a[1])];
+   return [{A:u=>at(p,left[j],u),B:u=>at(right[i],right[j],u),t0:0,t1:1},true];
+ });
+ const layout={machine:p=>[p[1],p[0],p[2]],towers:(a,b)=>[[a[0],a[2]],[b[0],b[2]]]};
+ const notes=[],program=new gen.Program(gen.CONFIG,false,5);
+ const [code]=gen.profileBlock(40,program,contour,layout,1,0,notes,1,80,5,.01,1,false,0,true);
+ assert.doesNotMatch(code,/ENTRY FROM ABOVE/);
+ assert.ok(notes.some(note=>note.includes('Вход сверху пересекает контур')));
+});
+
 test('sloped end contour and final trim are generated from synthetic topology',()=>{
  const step=slopedCapFixture(),m=new gen.Model(step,gen.identityRotation(),1,.1);
  const shape=m.slopedEndContour();assert.equal(shape.contour.length,6);
@@ -332,6 +345,16 @@ test('kil2 G-code trims, cuts the main contour, then removes the bevel',{skip:!p
  const trim=program.indexOf('*** TRIM BLOCK'),profile=program.indexOf('*** PROFILE:'),bevel=program.indexOf('*** FINAL BEVEL');
  assert.ok(trim>=0&&profile>trim&&bevel>profile);
  assert.match(program.slice(bevel),/B66\.07/);
+ const profileBlock=program.slice(profile,bevel);
+ assert.match(profileBlock,/ENTRY FROM ABOVE; EXIT THROUGH THE SAME SLIT/);
+ const moves=profileBlock.split(/\r?\n/).filter(line=>/^G0[01] /.test(line));
+ const read=line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?[\d.]+)/g)].map(m=>[m[1],+m[2]]));
+ const first=read(moves[0]),entry=read(moves.find(line=>/^G01 /.test(line))),exit=read(moves.at(-1));
+ for(const k of ['X','Z']){
+   assert.ok(Math.abs(first[k]-entry[k])<.02,'vertical entry is aligned to the chosen corner');
+   assert.ok(Math.abs(exit[k]-entry[k])<.02,'exit uses the same slit');
+ }
+ assert.ok(first.Y>entry.Y&&first.A>entry.A,'entry descends from above');
  // Compare the final wire plane against the STEP bevel in the simulator's
  // coordinate convention, independently of the generator's angle formula.
  const model=new gen.Model(step,gen.identityRotation(),1,.6),face=model.verticalBevels().find(f=>f.face===1235);
@@ -364,6 +387,9 @@ test('kil2 G-code trims, cuts the main contour, then removes the bevel',{skip:!p
  assert.match(wider.program,/FINAL BEVEL/,'parked rotation can exceed the tower span without side walls');
  const shifted=gen.buildProgram(step,'kil2.stp',options({...o,offset:[-5,0,5]}));
  assert.match(shifted.program,/FINAL BEVEL/);
+ assert.match(shifted.program,/ENTRY FROM ABOVE; EXIT THROUGH THE SAME SLIT/);
+ const shiftedParsed=sim.parseGcode(shifted.program),shiftedCheck=sim.analyse(shiftedParsed,{...shiftedParsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(shiftedCheck.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(shiftedCheck.warns));
 });
 
 // Synthetic solid with a single closed outer skin and one seam vertex per cap.
