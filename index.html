@@ -2139,13 +2139,16 @@ const Gen = (() => {
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
     const model = new Model(text, rotation, scale, tolerance);
     const auxiliaryCurves = model.wireframe ? [] : model.auxiliaryCurves();
-    let built, previewError = null;
+    let built, previewError = null,slopedPreview=false;
     try { built = model.build(); }
     catch(e) {
-      // The toolpath topology may be ambiguous; editing its guide selection
-      // must still be possible. This is a preview-only wireframe fallback.
       if (!model.edges.size && !auxiliaryCurves.length) throw e;
-      previewError = e.message;
+      if(!model.wireframe&&!auxiliaryCurves.length)try{
+        const found=model.slopedEndContour();
+        built={outer:found.contour,holes:[],secondaryContours:[],axis:found.axis,planeA:found.planeA,planeB:found.planeB};
+        slopedPreview=true;
+      }catch(_) { /* keep diagnostic fallback */ }
+      if(!built)previewError=e.message;
     }
     const {outer=[], holes=[], secondaryContours=[], axis=1, wireframe=false} = built || {};
     let guideAnalysis = null, guideKinematics = null;
@@ -2164,7 +2167,7 @@ const Gen = (() => {
         .map(pair => pair.map(p => [-p[1],p[0],p[2]])));
     let diagnosticShell=null;
     if(!built)try{diagnosticShell=diagnosticClosedShell(model);}catch(e){diagnosticShell=null;}
-    const diagnosticFaces=!built&&!diagnosticShell ? diagnosticFaceBoundaries(model) : [];
+    const diagnosticFaces=(!built&&!diagnosticShell)||slopedPreview ? diagnosticFaceBoundaries(model) : [];
     let bevelCandidates=[];
     if(!built&&!model.wireframe)try{bevelCandidates=model.verticalBevels();}catch(e){/* advisory only */}
     const edgeLines = [];
@@ -2185,7 +2188,7 @@ const Gen = (() => {
     const high=[0,1,2].map(k=>Math.max(...points.map(p=>p[k])));
     const closedShell=built&&outer.length===1&&outer[0][0].closed&&!holes.length
       ? {rail:rails[0],capAxis:axis===0?1:axis===1?0:2} : null;
-    return {rails,edgeLines,diagnosticShell,diagnosticFaces,closedShell,bevelCandidates,previewError,diagnosticOnly:!!previewError,
+    return {rails,edgeLines,diagnosticShell,diagnosticFaces,closedShell,bevelCandidates,slopedPreview,previewError,diagnosticOnly:!!previewError,
       axis, sampled, wireframe:!!wireframe, auxiliaryCurves, guideAnalysis,
       guideKinematics, secondaryCount:secondaryContours.length,
       center:low.map((v,k)=>(v+high[k])/2),
@@ -2580,6 +2583,167 @@ const Gen = (() => {
       const best=ranked[0];
       if(!best||!best.score)throw new StepError("Не определено основное направление резки");
       return [best.axis,best.lo,best.hi];
+    }
+    // Build a single ruled patch bounded by two distinct planar end faces.
+    // This is a geometry primitive only: it does not authorize a toolpath.
+    ruledPatchBetweenCaps(faceId,capAId,capBId,axis=1) {
+      const raw=this.facesRaw.find(f=>f.fid===faceId),caps=[capAId,capBId].map(id=>this.facesRaw.find(f=>f.fid===id));
+      if(!raw||caps.some(x=>!x)||new Set([faceId,capAId,capBId]).size!==3)throw new StepError("Не найдены грань и два торца");
+      const surf=this.surface(raw.surf);
+      if(surf.w.some(row=>row.some(w=>Math.abs(w-1)>1e-12)))
+        throw new StepError("Грань #"+faceId+": рациональная поверхность не поддерживается");
+      const um=sum2(surf.udomain)/2,vm=sum2(surf.vdomain)/2,choices=[];
+      if(surf.pu===1&&surf.nu===1){const a=surf.at(surf.udomain[0],vm),b=surf.at(surf.udomain[1],vm);choices.push({spanU:true,delta:Math.abs(b[axis]-a[axis])});}
+      if(surf.pv===1&&surf.nv===1){const a=surf.at(um,surf.vdomain[0]),b=surf.at(um,surf.vdomain[1]);choices.push({spanU:false,delta:Math.abs(b[axis]-a[axis])});}
+      choices.sort((a,b)=>b.delta-a.delta);
+      if(!choices.length||choices[0].delta<1)throw new StepError("Грань #"+faceId+": нет линейной образующей вдоль размаха");
+      const spanU=choices[0].spanU,span=spanU?surf.udomain:surf.vdomain,domain=spanU?surf.vdomain:surf.udomain;
+      const surface=(t,v)=>spanU?surf.at(v,t):surf.at(t,v);
+      const edges=caps.map(cap=>raw.edgeIds.filter(id=>cap.edgeIds.includes(id)));
+      if(edges.some(ids=>ids.length!==1))throw new StepError("Грань #"+faceId+": неоднозначные границы торцов");
+      const plane=cap=>{
+        const s=this.surface(cap.surf),p=s.P[0][0],u=s.P.at(-1)[0].map((x,i)=>x-p[i]),v=s.P[0].at(-1).map((x,i)=>x-p[i]);
+        const n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]],length=Math.hypot(...n);
+        if(length<1e-8)throw new StepError("Вырожденный торец");
+        const normal=n.map(x=>x/length);
+        if(s.P.flat().some(q=>Math.abs(q.reduce((sum,x,i)=>sum+(x-p[i])*normal[i],0))>.001))throw new StepError("Торец не является плоскостью");
+        return {p,normal};
+      };
+      const planes=caps.map(plane);
+      const cross=(section,t,strict=true)=>{
+        const a=surface(t,span[0]),b=surface(t,span[1]),d=b.map((x,i)=>x-a[i]),{p,normal}=planes[section];
+        const den=d.reduce((sum,x,i)=>sum+x*normal[i],0);
+        if(Math.abs(den)<1e-9)throw new StepError("Образующая параллельна торцу");
+        const f=p.reduce((sum,x,i)=>sum+(x-a[i])*normal[i],0)/den;
+        if(strict&&(f<-.00001||f>1.00001))throw new StepError("Торец вне поверхности");
+        return a.map((x,i)=>x+f*d[i]);
+      };
+      const ends=edges.map(ids=>this.edges.get(ids[0]).slice());
+      const other=raw.edgeIds.filter(id=>!edges.some(ids=>ids.includes(id))).map(id=>this.edges.get(id));
+      const linked=(a,b)=>other.some(e=>e&&((dist(e[0],a)<.02&&dist(e[1],b)<.02)||(dist(e[1],a)<.02&&dist(e[0],b)<.02)));
+      if(linked(ends[0][0],ends[1][1])&&linked(ends[0][1],ends[1][0]))ends[1].reverse();
+      else if(!linked(ends[0][0],ends[1][0])||!linked(ends[0][1],ends[1][1]))throw new StepError("Не совпадают переходы между торцами");
+      const params=ends.map((pair,k)=>pair.map(p=>Model.project(t=>cross(k,t,false),domain,p)));
+      // Periodic spline seams have two parameters for one vertex. Select
+      // the interval that follows the actual trimmed STEP edge.
+      const curves=new WireframeModel(this);
+      for(let k=0;k<2;k++){
+        const edge=this.entities.get(edges[k][0]),curve=curves.curve(edge.args[3].id),samples=Array.from({length:1025},(_,i)=>curve.at(i/1024));
+        const alternatives=params[k].map((t,i)=>{
+          const result=[t];
+          if(dist(cross(k,domain[0],false),ends[k][i])<.01&&dist(cross(k,domain[1],false),ends[k][i])<.01)result.push(domain[0],domain[1]);
+          return [...new Set(result)];
+        });
+        let chosen=null;
+        for(const start of alternatives[0])for(const end of alternatives[1]){
+          if(Math.abs(start-end)<1e-8)continue;
+          let worst=0;
+          try{
+            for(let i=0;i<=32;i++){
+              const p=cross(k,start+i/32*(end-start));let best=Infinity;
+              for(let j=1;j<samples.length;j++){
+                const a=samples[j-1],d=samples[j].map((v,h)=>v-a[h]),len=d.reduce((sum,v)=>sum+v*v,0);
+                const f=len?Math.max(0,Math.min(1,d.reduce((sum,v,h)=>sum+v*(p[h]-a[h]),0)/len)):0;
+                best=Math.min(best,dist(p,a.map((v,h)=>v+f*d[h])));
+              }
+              worst=Math.max(worst,best);
+            }
+          }catch(e){continue;}
+          if(!chosen||worst<chosen.worst)chosen={start,end,worst};
+        }
+        if(!chosen||chosen.worst>.05)throw new StepError("Грань #"+faceId+": направляющая не совпадает с ребром торца");
+        params[k]=[chosen.start,chosen.end];
+      }
+      const at=(k,u)=>cross(k,params[k][0]+u*(params[k][1]-params[k][0]));
+      // Preserve knot sections on both rails for motion and validation.
+      const knots=spanU?surf.V:surf.U,breaks=[];
+      for(const [a,b] of params)if(Math.abs(b-a)>1e-12)for(const knot of knots){
+        const u=(knot-a)/(b-a);if(u>1e-9&&u<1-1e-9)breaks.push(u);
+      }
+      breaks.sort((a,b)=>a-b);
+      const uniqueBreaks=breaks.filter((u,i)=>!i||u-breaks[i-1]>1e-9);
+      const sections=[0,1,...uniqueBreaks,...Array.from({length:33},(_,i)=>i/32)].sort((a,b)=>a-b);
+      const checks=[...sections,...sections.slice(1).map((u,i)=>(u+sections[i])/2)];
+      let maxDeviation=0;
+      const distanceAtPlane=(p,t)=>{
+        const a=surface(t,span[0]),b=surface(t,span[1]),den=b[axis]-a[axis];
+        if(Math.abs(den)<1e-9)return Infinity;
+        const f=(p[axis]-a[axis])/den;
+        if(f<0||f>1)return Infinity;
+        return dist(p,a.map((x,i)=>x+f*(b[i]-x)));
+      };
+      for(const u of checks)for(const f of [.25,.5,.75]){
+        const a=at(0,u),b=at(1,u),p=a.map((x,k)=>x+f*(b[k]-x));
+        const ta=params[0][0]+u*(params[0][1]-params[0][0]),tb=params[1][0]+u*(params[1][1]-params[1][0]);
+        const direct=distanceAtPlane(p,ta+f*(tb-ta));
+        // This is an upper bound on nearest-surface deviation: if it passes,
+        // a costly global search cannot turn it into a failure.
+        if(direct<=this.tolerance){maxDeviation=Math.max(maxDeviation,direct);continue;}
+        let best=Infinity,index=0;const count=1000;
+        for(let j=0;j<=count;j++){
+          const d=distanceAtPlane(p,domain[0]+(domain[1]-domain[0])*j/count);
+          if(d<best){best=d;index=j;}
+        }
+        let lo=domain[0]+(domain[1]-domain[0])*Math.max(0,index-1)/count,hi=domain[0]+(domain[1]-domain[0])*Math.min(count,index+1)/count;
+        for(let j=0;j<35;j++){
+          const x=lo+(hi-lo)/3,y=hi-(hi-lo)/3;
+          if(distanceAtPlane(p,x)<distanceAtPlane(p,y))hi=y;else lo=x;
+        }
+        maxDeviation=Math.max(maxDeviation,distanceAtPlane(p,(lo+hi)/2));
+      }
+      if(maxDeviation>this.tolerance)throw new StepError("Грань #"+faceId+": отклонение струны "+maxDeviation.toFixed(3)+" мм больше допуска "+this.tolerance.toFixed(3)+" мм");
+      this.maxCheckedDeviation=Math.max(this.maxCheckedDeviation,maxDeviation);
+      return {A:u=>at(0,u),B:u=>at(1,u),t0:0,t1:1,closed:false,breaks:uniqueBreaks,source:faceId,maxDeviation,capFaces:[capAId,capBId]};
+    }
+    // Reconstruct a contour split across one flat and one oblique root cap.
+    // Diagnostic only until entry, kerf, final bevel and holding are planned.
+    slopedEndContour() {
+      if(this.wireframe)throw new StepError("Для контура требуется STEP-тело");
+      const solids=[...this.entities.values()].filter(e=>isTyped(e)&&e.name==='MANIFOLD_SOLID_BREP');
+      if(solids.length!==1)throw new StepError("Требуется одно замкнутое тело");
+      const shell=this.get(solids[0].args[1]);
+      if(shell?.name!=='CLOSED_SHELL'||shell.args[1].length!==this.facesRaw.length||
+         !shell.args[1].every(r=>this.facesRaw.some(f=>f.fid===r.id)))throw new StepError("Неполная оболочка тела");
+      if(!this.facesRaw.every(f=>{
+        const refs=this.entities.get(f.fid).args[1];
+        return refs.length===1&&this.get(refs[0]).name==='FACE_OUTER_BOUND';
+      }))throw new StepError("Внутренние границы пока не поддержаны");
+      const [axis,planeA,planeB]=this.spanAxis(),span=planeB-planeA;
+      const caps=this.facesRaw.filter(raw=>{
+        const s=this.surface(raw.surf);
+        if(s.pu!==1||s.pv!==1||s.nu!==1||s.nv!==1)return false;
+        const p=s.P[0][0],u=s.P[1][0].map((x,i)=>x-p[i]),v=s.P[0][1].map((x,i)=>x-p[i]);
+        const n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]],len=Math.hypot(...n);
+        if(len<1e-8)return false;
+        const normal=n.map(x=>x/len);
+        return Math.abs(normal[axis])>.85&&Math.abs(normal[2])<1e-6&&
+          s.P.flat().every(q=>Math.abs(q.reduce((sum,x,i)=>sum+(x-p[i])*normal[i],0))<.001);
+      });
+      if(caps.length!==3||!this.verticalBevels().some(b=>caps.some(c=>c.fid===b.face)))
+        throw new StepError("Не найдены два корневых торца и один внешний торец со скосом");
+      const mean=face=>{
+        const p=face.edgeIds.flatMap(id=>this.edges.get(id)||[]);
+        return p.reduce((sum,q)=>sum+q[axis],0)/p.length;
+      };
+      caps.sort((a,b)=>mean(a)-mean(b));
+      if(mean(caps[1])-mean(caps[0])>span*.25||mean(caps[2])-mean(caps[1])<span*.5)
+        throw new StepError("Положение торцов неоднозначно");
+      const tip=caps[2],roots=caps.slice(0,2),sides=this.facesRaw.filter(f=>!caps.includes(f));
+      const faces=sides.map(raw=>{
+        const hosts=roots.filter(root=>raw.edgeIds.some(id=>root.edgeIds.includes(id)&&dist(...this.edges.get(id))>.02));
+        const tipEdges=raw.edgeIds.filter(id=>tip.edgeIds.includes(id)&&dist(...this.edges.get(id))>.02);
+        if(hosts.length!==1||tipEdges.length!==1)throw new StepError("Грань #"+raw.fid+": неоднозначные торцевые рёбра");
+        return this.ruledPatchBetweenCaps(raw.fid,hosts[0].fid,tip.fid,axis);
+      });
+      const contour=Model.chain(faces);
+      for(let i=0;i<contour.length;i++){
+        const [a,forward]=contour[i],[b,next]=contour[(i+1)%contour.length];
+        const end=forward?a.t1:a.t0,start=next?b.t0:b.t1;
+        if(dist(a.A(end),b.A(start))>.01||dist(a.B(end),b.B(start))>.01)
+          throw new StepError("Контур не замкнут на обоих торцах");
+      }
+      return {axis,planeA,planeB,contour,rootFaces:roots.map(f=>f.fid),tipFace:tip.fid,
+        maxDeviation:Math.max(...faces.map(f=>f.maxDeviation)),safeForGcode:false};
     }
     // A secondary ruled patch is bounded by two STEP edges shared with
     // planar end faces. The end faces need NOT be X=constant: intersect each
@@ -3911,7 +4075,19 @@ const Gen = (() => {
         "без проверки стороны отхода и удаления материала невозможно безопасно "+
         "сформировать режущие перемещения. Станочный G-code для F4 пока запрещён.");
     }
-    const { outer, holes, secondaryContours, axis, planeA, planeB } = model.build();
+    let shape,slopedEnd=null;
+    try { shape=model.build(); }
+    catch(originalError) {
+      try {
+        model.maxCheckedDeviation=0;
+        slopedEnd=model.slopedEndContour();
+        shape={outer:slopedEnd.contour,holes:[],secondaryContours:[],axis:slopedEnd.axis,planeA:slopedEnd.planeA,planeB:slopedEnd.planeB};
+      } catch(e) {
+        if(/отклонение струны/.test(e.message))throw e;
+        throw originalError;
+      }
+    }
+    const { outer, holes, secondaryContours, axis, planeA, planeB } = shape;
     if (axis !== 1) throw new StepError("Поверните модель: размах должен идти вдоль струны (сейчас ось модели " + "XYZ"[axis] + ")");
 
     // - Габарит детали по направляющим
@@ -3931,6 +4107,10 @@ const Gen = (() => {
     const offset=o.offset===undefined?[0,0,0]:o.offset;
     if(!Array.isArray(offset)||offset.length!==3||!offset.every(Number.isFinite)) throw new Error("Недопустимое смещение модели");
     const shifted=offset.some(v=>Math.abs(v)>1e-9);
+    if(slopedEnd&&(o.pair||o.mirror||o.sideEntry||shifted||Math.abs(modelZOffset)>1e-9))
+      throw new StepError("Контур со скосом пока поддерживает одну деталь без смещений, зеркала и бокового входа");
+    if(slopedEnd&&o.trim!==false&&(trimAngle!==90||cutOrder!=='B90_B0'))
+      throw new StepError("Для детали со скосом выберите торцевание B90 до основного контура B0");
     if(shifted && (o.pair || model.wireframe || secondaryContours.length))
       throw new StepError("Смещение пока доступно для одиночной детали без дополнительных направлений и STEP только с кривыми");
     // Model and stock now translate together: fit is independent of offset.
@@ -4106,6 +4286,36 @@ const Gen = (() => {
       } else for (const hole of holes) addHole(hole, layout, null, false);
       addProfile(layout, o.side);
     }
+    if(slopedEnd){
+      const candidates=model.verticalBevels().filter(b=>slopedEnd.rootFaces.includes(b.face));
+      if(candidates.length!==1)throw new StepError("Не удалось однозначно определить завершающий скос");
+      const bevel=candidates[0],radians=bevel.angle*Math.PI/180,cs=Math.cos(radians),sn=Math.sin(radians);
+      const along=stockWidth*Math.abs(sn)+stockLength*Math.abs(cs);
+      if(along>cfg.FieldWidth-2)throw new StepError("При резе скоса заготовка вдоль струны "+along.toFixed(1)+" мм не помещается между башнями");
+      if(cfg.ParkX-radius<RadialMargin)throw new StepError("Нет безопасного места для поворота заготовки к скосу");
+      const signed=p=>p.reduce((sum,v,i)=>sum+(v-bevel.point[i])*bevel.normal[i],0);
+      const values=[];
+      for(const [face] of outer)for(let i=0;i<=128;i++){
+        const t=face.t0+(face.t1-face.t0)*i/128;
+        values.push(signed(face.A(t)),signed(face.B(t)));
+      }
+      const low=Math.min(...values),high=Math.max(...values);
+      if(low<-.02&&high>.02)throw new StepError("Плоскость скоса пересекает сохраняемую деталь");
+      const kept=high>.02?1:low<-.02?-1:0;
+      if(!kept)throw new StepError("Не определена сторона материала относительно скоса");
+      const projection=cs*bevel.normal[0]+sn*bevel.normal[1],waste=-Math.sign(projection*kept);
+      if(!waste)throw new StepError("Не определена сторона отхода скоса");
+      const cut=(bevel.point[0]-xc)*cs+(bevel.point[1]-yc)*sn+waste*kerf/2;
+      const exit=cut+waste*o.retract;
+      warnings.push("Перед поворотом для реза скоса убедитесь, что деталь закреплена после основного контура");
+      program+=";"+EOL+"; *** FINAL BEVEL: STEP face #"+bevel.face+" B="+fix2(bevel.angle)+" ***"+EOL;
+      program+=prog.travel("move",cfg.ParkX,safe,cfg.ParkX,safe)+rotate(cfg,bevel.angle);
+      program+=prog.travel("move",cut,safe,cut,safe);
+      program+=prog.travel("cut",cut,o.bottomZ,cut,o.bottomZ);
+      program+=prog.travel("cut",exit,o.bottomZ,exit,o.bottomZ);
+      program+=prog.travel("cut",exit,safe,exit,safe);
+      program+=prog.travel("move",cfg.ParkX,safe,cfg.ParkX,safe)+rotate(cfg,0);
+    }
     program += endBlock(cfg, prog);
 
     // --- Проверка пределов хода
@@ -4117,7 +4327,7 @@ const Gen = (() => {
     }
     if (prog.clipped) warnings.push("Мощность проволоки упёрлась в максимум S=" + fmtG(cfg.WireMaxPower) + ": проволока слишком длинная для этой формулы");
     return { program, warnings: [...new Set(warnings)], part, points: allTowers.length,
-      smoothSurface: !o.pair && !o.mirror && !holes.length && !secondaryContours.length && !model.wireframe && (!hasTrim || trimAngle===90) && profileTowers ? {
+      smoothSurface: !slopedEnd && !o.pair && !o.mirror && !holes.length && !secondaryContours.length && !model.wireframe && (!hasTrim || trimAngle===90) && profileTowers ? {
         towers:profileTowers,fieldWidth:cfg.FieldWidth,
         x0:offset[0]-(hasTrim?part.span+kerf:stockLength)/2,
         x1:offset[0]+(hasTrim?part.span+kerf:stockLength)/2

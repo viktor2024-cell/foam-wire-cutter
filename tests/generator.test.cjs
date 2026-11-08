@@ -108,14 +108,84 @@ test('oblique vertical STEP faces produce advisory rotation candidates',()=>{
  }
 });
 
-test('kil2 retains diagnostic STEP edges when safe generation is not established',{skip:!process.env.KIL_STEP},()=>{
+// A small solid with flat and oblique root caps and six ruled side faces.
+// It is generated in the test so no private CAD file is needed in CI.
+function slopedCapFixture(){
+ let id=1,lines=[],edges=new Map();
+ const add=(type,args)=>{const ref='#'+id++;lines.push(ref+' = '+type+"('',"+args+');');return ref;};
+ const point=p=>add('CARTESIAN_POINT','('+p.join(',')+')');
+ const coords=[[-40,0,-10],[0,0,-10],[40,12,-10],[40,12,10],[0,0,10],[-40,0,10]];
+ const pts=coords.concat(coords.map(([x,y,z])=>[x,60,z])).map(point);
+ const vertices=pts.map(p=>add('VERTEX_POINT',p));
+ const edge=(a,b)=>{
+   const key=[a,b].sort((x,y)=>x-y).join(':');if(edges.has(key))return edges.get(key);
+   const c=add('B_SPLINE_CURVE_WITH_KNOTS','1,('+pts[a]+','+pts[b]+'),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.');
+   const e=add('EDGE_CURVE',vertices[a]+','+vertices[b]+','+c+',.T.');edges.set(key,e);return e;
+ };
+ const face=(nodes,grid)=>{
+   const es=nodes.map((a,i)=>edge(a,nodes[(i+1)%nodes.length]));
+   const loop=add('EDGE_LOOP','('+es.map(e=>add('ORIENTED_EDGE','*,*,'+e+',.T.')).join(',')+')');
+   const bound=add('FACE_OUTER_BOUND',loop+',.T.');
+   const surface=add('B_SPLINE_SURFACE_WITH_KNOTS','1,1,(('+pts[grid[0]]+','+pts[grid[1]]+'),('+pts[grid[2]]+','+pts[grid[3]]+')),.UNSPECIFIED.,.F.,.F.,.F.,(2,2),(2,2),(0.,1.),(0.,1.),.UNSPECIFIED.');
+   return add('ADVANCED_FACE','('+bound+'),'+surface+',.T.');
+ };
+ const faces=[];
+ for(let i=0;i<6;i++){const j=(i+1)%6;faces.push(face([i,j,j+6,i+6],[i,i+6,j,j+6]));}
+ faces.push(face([0,1,4,5],[0,5,1,4]));
+ faces.push(face([1,2,3,4],[1,4,2,3]));
+ faces.push(face([6,7,8,9,10,11],[6,11,8,9]));
+ const shell=add('CLOSED_SHELL','('+faces.join(',')+')');add('MANIFOLD_SOLID_BREP',shell);
+ return 'ISO-10303-21;\nDATA;\n'+lines.join('\n')+'\nENDSEC;\nEND-ISO-10303-21;';
+}
+test('sloped end contour and final trim are generated from synthetic topology',()=>{
+ const step=slopedCapFixture(),m=new gen.Model(step,gen.identityRotation(),1,.1);
+ const shape=m.slopedEndContour();assert.equal(shape.contour.length,6);
+ const o=options({stock:[70,100,50],bottomZ:10,trim:true,trimAngle:90,retract:5});
+ const result=gen.buildProgram(step,'synthetic-bevel.stp',o),program=result.program;
+ assert.ok(program.indexOf('*** TRIM BLOCK')<program.indexOf('*** PROFILE:'));
+ assert.ok(program.indexOf('*** PROFILE:')<program.indexOf('*** FINAL BEVEL'));
+ assert.ok(result.warnings.some(w=>w.includes('деталь закреплена')));
+ assert.throws(()=>gen.buildProgram(step,'synthetic-bevel.stp',{...o,cutOrder:'B0_B90'}),/торцевание B90/);
+ const parsed=sim.parseGcode(program),report=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
+});
+
+test('kil2 joins all main faces across their different end planes',{skip:!process.env.KIL_STEP},()=>{
+ const step=fs.readFileSync(process.env.KIL_STEP,'utf8');
+ const model=new gen.Model(step,gen.identityRotation(),1,.6);
+ const found=model.slopedEndContour();
+ assert.equal(found.safeForGcode,false);assert.equal(found.contour.length,7);
+ assert.equal(found.axis,1);assert.equal(found.tipFace,862);
+ assert.ok(found.maxDeviation<.6);
+ const specs=[[381,1254,862],[790,1235,862],[895,1254,862],[913,1235,862],[1201,1254,862],[1271,1254,862],[1283,1235,862]];
+ const faces=specs.map(args=>model.ruledPatchBetweenCaps(...args));
+ assert.ok(faces.every(f=>f.maxDeviation<.6));
+ const face=faces.find(f=>f.source===790);assert.ok(face.maxDeviation>.1);
+ assert.ok(face.breaks.length>10,'preserves narrow spline sections as mandatory sampling stops');
+ const points=gen.sampleFace(face,0,1,.01,1);
+ for(const u of face.breaks){
+   const a=face.A(u),b=face.B(u);
+   assert.ok(points.some(pair=>Math.hypot(...pair[0].map((v,i)=>v-a[i]))<1e-7&&Math.hypot(...pair[1].map((v,i)=>v-b[i]))<1e-7));
+ }
+ const chain=gen.Model.chain(faces),distance=(a,b)=>Math.hypot(...a.map((v,i)=>v-b[i]));
+ for(let i=0;i<chain.length;i++){
+   const [f,forward]=chain[i],[g,nextForward]=chain[(i+1)%chain.length];
+   const end=forward?f.t1:f.t0,start=nextForward?g.t0:g.t1;
+   assert.ok(distance(f.A(end),g.A(start))<.01,'root joins');
+   assert.ok(distance(f.B(end),g.B(start))<.01,'tip joins');
+ }
+ const strict=new gen.Model(step,gen.identityRotation(),1,.1);
+ assert.throws(()=>strict.ruledPatchBetweenCaps(790,1235,862),/отклонение струны/);
+ assert.throws(()=>model.build(),/Грань #790/,'a matched contour does not by itself enable incomplete G-code');
+});
+
+test('kil2 shows its full diagnostic faces at the selected tolerance',{skip:!process.env.KIL_STEP},()=>{
  const step=fs.readFileSync(process.env.KIL_STEP,'utf8');
  const preview=gen.previewGeometry(step,gen.identityRotation(),1,.6);
- assert.equal(preview.diagnosticOnly,true);
- const bevel=preview.bevelCandidates.find(face=>face.face===1235);
+ assert.equal(preview.diagnosticOnly,false);assert.equal(preview.slopedPreview,true);
+ const bevel=new gen.Model(step).verticalBevels().find(face=>face.face===1235);
  assert.ok(bevel,'the root bevel is identified from its plane and boundary');
  assert.ok(Math.abs(bevel.angle-113.93)<.1,`unexpected bevel angle: ${bevel.angle}`);
- assert.ok(preview.edgeLines.length>0);
  assert.equal(preview.diagnosticFaces.length,10);
  assert.ok(preview.diagnosticFaces[1].patch,'curved rudder uses a surface patch');
  const patch=preview.diagnosticFaces[1].patch;
@@ -128,8 +198,23 @@ test('kil2 retains diagnostic STEP edges when safe generation is not established
    const axis=n.reduce((best,v,i)=>Math.abs(v)>Math.abs(n[best])?i:best,0),axes=[0,1,2].filter(k=>k!==axis);
    assert.ok(three.ShapeUtils.triangulateShape(boundary.map(p=>new three.Vector2(p[axes[0]],p[axes[1]])),[]).length>0);
  }
- assert.match(preview.previewError,/Грань #790/);
- assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({stock:[250,250,50],tolerance:.6})),/Грань #790/);
+ assert.equal(preview.previewError,null);
+ assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({stock:[235,290,55],tolerance:.1})),/отклонение струны/);
+});
+
+test('kil2 G-code trims, cuts the main contour, then removes the bevel',{skip:!process.env.KIL_STEP},()=>{
+ const step=fs.readFileSync(process.env.KIL_STEP,'utf8');
+ const o=options({stock:[235,290,55],tolerance:.6,trim:true,trimAngle:90,retract:5});
+ const result=gen.buildProgram(step,'kil2.stp',o),program=result.program;
+ const trim=program.indexOf('*** TRIM BLOCK'),profile=program.indexOf('*** PROFILE:'),bevel=program.indexOf('*** FINAL BEVEL');
+ assert.ok(trim>=0&&profile>trim&&bevel>profile);
+ assert.match(program.slice(bevel),/B113\.93/);
+ assert.ok(result.warnings.some(w=>w.includes('Допуск поверхности 0.60')));
+ assert.equal(result.smoothSurface,null,'a single-sweep model cannot depict a final bevel');
+ const parsed=sim.parseGcode(program),report=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
+ assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({...o,stock:[250,320,55]})),/не помещается между башнями/);
+ assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({...o,offset:[1,0,0]})),/без смещений/);
 });
 
 // Synthetic solid with a single closed outer skin and one seam vertex per cap.

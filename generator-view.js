@@ -557,7 +557,7 @@ const generatorPreview = (() => {
   }
   function rebuild(preserveDiagnostics = false) {
     document.getElementById('gnStockFromModel').disabled = !geometry || geometry.diagnosticOnly;
-    document.getElementById('gnAutoPlace').disabled = !geometry || geometry.diagnosticOnly;
+    document.getElementById('gnAutoPlace').disabled = !geometry || geometry.diagnosticOnly || geometry.slopedPreview;
     guideWire = null;guideStartMarker=null;
     if (preserveDiagnostics === true) clearStockCloud();
     else { stockCloud=null;resetStockSimulation(); }
@@ -611,7 +611,7 @@ const generatorPreview = (() => {
         const vertices=[],lines=[];
         const point=p=>p.map((v,k)=>copy.sign[k]*(v-geometry.center[k])+(k===2?copy.z+modelZOffset:0)+modelOffset[k]);
         const displayShell=geometry.closedShell||geometry.diagnosticShell;
-        const displayRails=displayShell?[displayShell.rail]:geometry.rails;
+        const displayRails=displayShell?[displayShell.rail]:geometry.slopedPreview?[]:geometry.rails;
         for (const rail of displayRails) {
           for(let i=1;i<rail.length;i++) {
             const [a,b]=rail[i-1].map(point),[c,d]=rail[i].map(point);
@@ -704,6 +704,8 @@ const generatorPreview = (() => {
             : geometry.diagnosticShell
             ? '. Показана приближённая оболочка STEP; автоматический подбор заготовки и размещения недоступен.'
             : '. Показаны упрощённые рёбра STEP; автоматический подбор заготовки и размещения недоступен.');
+      if(geometry.slopedPreview)
+        fit.textContent+=' Контур со скосом: доступна одна деталь без смещения. Авторазмещение пока недоступно; проверьте место для поворота на скос.';
       if(geometry.previewError && geometry.bevelCandidates?.length)
         fit.textContent+=' Возможные наклонные торцы: '+geometry.bevelCandidates.map(b=>'грань #'+b.face+' (B'+b.angle.toFixed(1)+'°)').join(', ')+'. Это анализ, не траектория реза.';
       if(!fits||unsupported||trimConflict||geometry.axis!==1||geometry.auxiliaryCurves?.length||geometry.previewError) fit.className='note crit';
@@ -856,7 +858,7 @@ const generatorPreview = (() => {
       fit.className='note crit';
       fit.textContent='Ошибка авторазмещения: '+e.message;
     }finally{
-      autoPlacementBusy=false;button.disabled=!geometry || geometry.diagnosticOnly;
+      autoPlacementBusy=false;button.disabled=!geometry || geometry.diagnosticOnly || geometry.slopedPreview;
       button.textContent='Авторазмещение: поворот + сдвиг';
       progress.hidden=true;
     }
@@ -941,7 +943,7 @@ const generatorPreview = (() => {
       fit.textContent='Не удалось подобрать заготовку: '+error.message;
       return;
     } finally {
-      progress.hidden=true;button.disabled=!geometry || geometry.diagnosticOnly;
+      progress.hidden=true;button.disabled=!geometry || geometry.diagnosticOnly || geometry.slopedPreview;
       button.textContent='По модели +10 мм с каждой стороны';
     }
     if(initialSignature!==generatorSignature()){
