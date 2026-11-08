@@ -611,7 +611,7 @@ const generatorPreview = (() => {
         const vertices=[],lines=[];
         const point=p=>p.map((v,k)=>copy.sign[k]*(v-geometry.center[k])+(k===2?copy.z+modelZOffset:0)+modelOffset[k]);
         const displayShell=geometry.closedShell||geometry.diagnosticShell;
-        const displayRails=displayShell?[displayShell.rail]:geometry.slopedPreview?[]:geometry.rails;
+        const displayRails=displayShell?[displayShell.rail]:geometry.slopedPreview?geometry.rails.slice(geometry.outerCount):geometry.rails;
         for (const rail of displayRails) {
           for(let i=1;i<rail.length;i++) {
             const [a,b]=rail[i-1].map(point),[c,d]=rail[i].map(point);
@@ -704,8 +704,10 @@ const generatorPreview = (() => {
             : geometry.diagnosticShell
             ? '. Показана приближённая оболочка STEP; автоматический подбор заготовки и размещения недоступен.'
             : '. Показаны упрощённые рёбра STEP; автоматический подбор заготовки и размещения недоступен.');
-      if(geometry.slopedPreview)
+      if(geometry.slopedPreview){
         fit.textContent+=' Контур со скосом: одна деталь; размещение проверяется также при повороте на скос.';
+        if(geometry.rails.length>geometry.outerCount)fit.textContent+=' Вход в отверстие: прорезь сверху профиля.';
+      }
       if(geometry.previewError && geometry.bevelCandidates?.length)
         fit.textContent+=' Возможные наклонные торцы: '+geometry.bevelCandidates.map(b=>'грань #'+b.face+' (B'+(document.getElementById('invB').checked?-b.angle:b.angle).toFixed(1)+'°)').join(', ')+'. Это анализ, не траектория реза.';
       if(!fits||unsupported||trimConflict||geometry.axis!==1||geometry.auxiliaryCurves?.length||geometry.previewError) fit.className='note crit';
@@ -918,7 +920,7 @@ const generatorPreview = (() => {
           let chosen=null;
           for(let l=length;l>=minLength-1e-7&&!chosen;l-=5){
             for(let w=width;w>=minWidth-1e-7;w-=5){
-              if(sweepAngles.some(a=>Gen.stockRotationEnvelope(l,w,modelOffset,a)>(machine.FieldWidth-2)/2+1e-7))continue;
+              if(sweepAngles.some(a=>Gen.stockAlongWireAtAngle(l,w,modelOffset,a)>(machine.FieldWidth-2)/2+1e-7))continue;
               const radius=Math.hypot(l/2+Math.abs(modelOffset[0]),w/2+Math.abs(modelOffset[1]));
               if(radius>machine.ParkX-2+1e-7)continue;
               if(document.getElementById('gnTrim').checked&&n('gnTrimAngle')===90&&w/2+Math.abs(modelOffset[1])>machine.FieldWidth/2+1e-7)continue;

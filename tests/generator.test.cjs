@@ -110,7 +110,7 @@ test('oblique vertical STEP faces produce advisory rotation candidates',()=>{
 
 // A small solid with flat and oblique root caps and six ruled side faces.
 // It is generated in the test so no private CAD file is needed in CI.
-function slopedCapFixture(){
+function slopedCapFixture(withHole=false,mergeSides=false){
  let id=1,lines=[],edges=new Map();
  const add=(type,args)=>{const ref='#'+id++;lines.push(ref+' = '+type+"('',"+args+');');return ref;};
  const point=p=>add('CARTESIAN_POINT','('+p.join(',')+')');
@@ -122,26 +122,52 @@ function slopedCapFixture(){
    const c=add('B_SPLINE_CURVE_WITH_KNOTS','1,('+pts[a]+','+pts[b]+'),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.');
    const e=add('EDGE_CURVE',vertices[a]+','+vertices[b]+','+c+',.T.');edges.set(key,e);return e;
  };
- const face=(nodes,grid)=>{
+ const face=(nodes,grid,extraBounds=[],rows=null)=>{
    const es=nodes.map((a,i)=>edge(a,nodes[(i+1)%nodes.length]));
    const loop=add('EDGE_LOOP','('+es.map(e=>add('ORIENTED_EDGE','*,*,'+e+',.T.')).join(',')+')');
    const bound=add('FACE_OUTER_BOUND',loop+',.T.');
-   const surface=add('B_SPLINE_SURFACE_WITH_KNOTS','1,1,(('+pts[grid[0]]+','+pts[grid[1]]+'),('+pts[grid[2]]+','+pts[grid[3]]+')),.UNSPECIFIED.,.F.,.F.,.F.,(2,2),(2,2),(0.,1.),(0.,1.),.UNSPECIFIED.');
-   return add('ADVANCED_FACE','('+bound+'),'+surface+',.T.');
+   const gridText=rows ? '('+rows.map(pair=>'('+pair.map(i=>pts[i]).join(',')+')').join(',')+')'
+     : '(('+pts[grid[0]]+','+pts[grid[1]]+'),('+pts[grid[2]]+','+pts[grid[3]]+'))';
+   const uMult=rows?'(2,1,2)':'(2,2)',uKnots=rows?'(0.,0.5,1.)':'(0.,1.)';
+   const surface=add('B_SPLINE_SURFACE_WITH_KNOTS','1,1,'+gridText+',.UNSPECIFIED.,.F.,.F.,.F.,'+uMult+',(2,2),'+uKnots+',(0.,1.),.UNSPECIFIED.');
+   return add('ADVANCED_FACE','('+[bound,...extraBounds].join(',')+'),'+surface+',.T.');
  };
  const faces=[];
- for(let i=0;i<6;i++){const j=(i+1)%6;faces.push(face([i,j,j+6,i+6],[i,i+6,j,j+6]));}
- faces.push(face([0,1,4,5],[0,5,1,4]));
+ if(mergeSides){
+   faces.push(face([0,1,2,8,7,6],null,[],[[0,6],[1,7],[2,8]]));
+   faces.push(face([2,3,9,8],[2,8,3,9]));
+   faces.push(face([3,4,5,11,10,9],null,[],[[3,9],[4,10],[5,11]]));
+   faces.push(face([5,0,6,11],[5,11,0,6]));
+ } else for(let i=0;i<6;i++){const j=(i+1)%6;faces.push(face([i,j,j+6,i+6],[i,i+6,j,j+6]));}
+ let rootInner=[],tipInner=[],holeFace=null;
+ if(withHole){
+   const profile=[[3,0],[3,1.7],[1.7,3],[0,3],[-1.7,3],[-3,1.7],[-3,0],[-3,-1.7],[-1.7,-3],[0,-3],[1.7,-3],[3,-1.7],[3,0]];
+   const rings=[0,60].map(y=>profile.map(([x,z])=>point([x-20,y,z])));
+   const curves=rings.map(r=>add('B_SPLINE_CURVE_WITH_KNOTS','3,('+r.join(',')+'),.UNSPECIFIED.,.T.,.F.,(4,3,3,3,4),(0.,0.25,0.5,0.75,1.),.UNSPECIFIED.'));
+   const verts=rings.map(r=>add('VERTEX_POINT',r[0]));
+   const closed=curves.map((c,k)=>add('EDGE_CURVE',verts[k]+','+verts[k]+','+c+',.T.'));
+   const seam=add('EDGE_CURVE',verts.join(',')+',$,.T.');
+   const bound=(ids,type)=>{
+     const loop=add('EDGE_LOOP','('+ids.map(e=>add('ORIENTED_EDGE','*,*,'+e+',.T.')).join(',')+')');
+     return add(type,loop+',.T.');
+   };
+   rootInner=[bound([closed[0]],'FACE_BOUND')];tipInner=[bound([closed[1]],'FACE_BOUND')];
+   const hb=bound([closed[0],seam,closed[1],seam],'FACE_OUTER_BOUND');
+   const surface=add('B_SPLINE_SURFACE_WITH_KNOTS','1,3,(('+rings[0].join(',')+'),('+rings[1].join(',')+')),.UNSPECIFIED.,.F.,.T.,.F.,(2,2),(4,3,3,3,4),(0.,1.),(0.,0.25,0.5,0.75,1.),.UNSPECIFIED.');
+   holeFace=add('ADVANCED_FACE','('+hb+'),'+surface+',.T.');
+ }
+ faces.push(face([0,1,4,5],[0,5,1,4],rootInner));
  faces.push(face([1,2,3,4],[1,4,2,3]));
- faces.push(face([6,7,8,9,10,11],[6,11,8,9]));
+ faces.push(face([6,7,8,9,10,11],[6,11,8,9],tipInner));
+ if(holeFace)faces.push(holeFace);
  const shell=add('CLOSED_SHELL','('+faces.join(',')+')');add('MANIFOLD_SOLID_BREP',shell);
  return 'ISO-10303-21;\nDATA;\n'+lines.join('\n')+'\nENDSEC;\nEND-ISO-10303-21;';
 }
-test('stock rotation envelope checks the whole turn and displacement',()=>{
+test('rotation projection is informational; clearance at cutting angle is checked separately',()=>{
  const angle=66.07,length=235,width=290,offset=[0,0,0],end=angle*Math.PI/180;
  const final=(length*Math.abs(Math.cos(end))+width*Math.abs(Math.sin(end)))/2;
  assert.ok(final<184,'the final orientation alone looks safe');
- assert.ok(gen.stockRotationEnvelope(length,width,offset,angle)>184,'intermediate rotation exceeds the tower clearance');
+ assert.ok(gen.stockRotationEnvelope(length,width,offset,angle)>184,'the projection exceeds the tower spacing during the parked turn');
  for(const shift of [[0,0,0],[-10,5,0],[15,-20,0]])for(const turn of [-90,30,66.07,90]){
    let dense=0;
    for(let i=0;i<=20000;i++){
@@ -206,6 +232,45 @@ test('sloped end contour and final trim are generated from synthetic topology',(
  const grounded=gen.buildProgram(step,'synthetic-bevel.stp',{...o,stock:lifted.stock,offset:lifted.offset,modelZOffset:lifted.modelZOffset});
  assert.match(grounded.program,/FINAL BEVEL/);
  assert.throws(()=>gen.autoPlace(step,'synthetic-bevel.stp',{...o,bottomZ:0,grounded:true}),/не ниже 5 мм/);
+});
+
+test('sloped end with an internal bore cuts its top slit before the main contour',()=>{
+ const step=slopedCapFixture(true),model=new gen.Model(step),shape=model.slopedEndContour();
+ assert.equal(shape.holes.length,1);assert.equal(shape.contour.length,6);
+ const r=gen.buildProgram(step,'sloped-bore.stp',options({stock:[70,100,50],trim:true,trimAngle:90,retract:5}));
+ const p=r.program,trim=p.indexOf('*** TRIM BLOCK'),hole=p.indexOf('*** HOLE:'),profile=p.indexOf('*** PROFILE:'),bevel=p.indexOf('*** FINAL BEVEL');
+ assert.ok(trim>=0&&hole>trim&&profile>hole&&bevel>profile);
+ assert.ok(r.warnings.some(w=>w.includes('прорезью сверху')));
+ const optionsBase=options({stock:[70,100,50],trim:true,trimAngle:90,retract:5});
+ const raised=gen.buildProgram(step,'sloped-bore.stp',{...optionsBase,offset:[-5,0,5]});
+ const grounded=gen.groundPlacement(step,'sloped-bore.stp',optionsBase,{offset:[-5,0,5],rotation:gen.identityRotation(),displacement:5});
+ const onTable=gen.buildProgram(step,'sloped-bore.stp',{...optionsBase,stock:grounded.stock,offset:grounded.offset,modelZOffset:grounded.modelZOffset});
+ const cuts=program=>program.slice(program.indexOf('*** HOLE:'),program.indexOf('*** FINAL BEVEL')).split(/\r?\n/).filter(line=>/^G01 /.test(line));
+ assert.deepEqual(cuts(raised.program),cuts(onTable.program),'hole and profile stay fixed when the stock is grounded');
+ const parsed=sim.parseGcode(p),check=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
+});
+
+test('an unmatched hole boundary cannot become a safe sloped-end contour',()=>{
+ const step=slopedCapFixture(true,true),bounds=[...step.matchAll(/(#\d+) = FACE_BOUND/g)].map(m=>m[1]);
+ assert.equal(bounds.length,2);
+ const broken=step.replace(','+bounds[1]+')',')');assert.notEqual(broken,step);
+ assert.throws(()=>new gen.Model(broken).slopedEndContour(),/сопоставить отверстия/);
+ assert.throws(()=>gen.buildProgram(broken,'broken-bore.stp',options({stock:[70,100,50],trim:true,retract:5})));
+});
+
+test('a side face spanning two root caps is reconstructed with a bore',()=>{
+ const step=slopedCapFixture(true,true),shape=new gen.Model(step).slopedEndContour();
+ assert.equal(shape.contour.length,4);assert.equal(shape.holes.length,1);
+ const splitFaces=shape.contour.map(([f])=>f).filter(f=>Array.isArray(f.capFaces[0])&&f.capFaces[0].length===2);
+ assert.equal(splitFaces.length,2);
+ for(const face of splitFaces)assert.ok(face.breaks.some(u=>Math.abs(face.A(u)[0])<.001&&Math.abs(face.A(u)[1])<.001),'root cap change is a mandatory section');
+ const r=gen.buildProgram(step,'split-cap-bore.stp',options({stock:[70,100,50],trim:true,trimAngle:90,retract:5}));
+ assert.equal(r.holes,1);
+ assert.ok(r.program.indexOf('*** HOLE:')<r.program.indexOf('*** PROFILE:'));
+ assert.ok(r.program.indexOf('*** PROFILE:')<r.program.indexOf('*** FINAL BEVEL'));
+ const p=sim.parseGcode(r.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
 });
 
 test('kil2 joins all main faces across their different end planes',{skip:!process.env.KIL_STEP},()=>{
@@ -295,10 +360,10 @@ test('kil2 G-code trims, cuts the main contour, then removes the bevel',{skip:!p
  const parsed=sim.parseGcode(program),report=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
  assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({...o,stock:[250,320,55]})),/не помещается между башнями/);
- assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({...o,stock:[235,290,55]})),/при повороте к скосу/i,
-   'the previously suggested size exceeds clearance midway through the turn');
- assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({...o,offset:[-5,0,5]})),/при повороте к скосу/i,
-   'a shifted blank must clear the towers throughout rotation');
+ const wider=gen.buildProgram(step,'kil2.stp',options({...o,stock:[235,290,55]}));
+ assert.match(wider.program,/FINAL BEVEL/,'parked rotation can exceed the tower span without side walls');
+ const shifted=gen.buildProgram(step,'kil2.stp',options({...o,offset:[-5,0,5]}));
+ assert.match(shifted.program,/FINAL BEVEL/);
 });
 
 // Synthetic solid with a single closed outer skin and one seam vertex per cap.
@@ -370,6 +435,71 @@ test('external kil3 builds an exterior profile and safe G-code',{skip:!process.e
    const p=sim.parseGcode(r.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
    assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
  }
+});
+
+test('W11 joins a split end, cuts the top slit and bore, profile, then bevel',{skip:!process.env.W11_STEP},()=>{
+ const step=fs.readFileSync(process.env.W11_STEP,'utf8'),m=new gen.Model(step,gen.identityRotation(),1,.1),shape=m.slopedEndContour();
+ assert.equal(shape.axis,1);assert.equal(shape.contour.length,3);assert.equal(shape.holes.length,1);
+ for(const id of [487,566]){
+   const face=shape.contour.find(([f])=>f.source===id)[0];
+   assert.ok(face.breaks.some(u=>Math.abs(face.A(u)[0]-172.914)<.02&&Math.abs(face.A(u)[1])<.02),'actual cap transition is retained');
+ }
+ assert.ok(shape.maxDeviation<.01,'the ruled main surfaces match their STEP faces');
+ const preview=gen.previewGeometry(step,gen.identityRotation(),1,.1);
+ assert.equal(preview.slopedPreview,true);assert.equal(preview.diagnosticOnly,false);
+ assert.equal(preview.rails.length-preview.outerCount,1,'the bore remains visible in the model view');
+ const o=options({stock:[310,250,50],bottomZ:10,tolerance:.1,trim:true,trimAngle:90,retract:5});
+ const r=gen.buildProgram(step,'W11.stp',o),p=r.program;
+ assert.ok(gen.stockRotationEnvelope(310,250,[0,0,0],90)>185,'the blank may project past tower spacing during the parked turn');
+ assert.ok(gen.stockAlongWireAtAngle(310,250,[0,0,0],preview.slopedBevelAngle)<184,'it fits at the bevel cut');
+ const trim=p.indexOf('*** TRIM BLOCK'),hole=p.indexOf('*** HOLE:'),profile=p.indexOf('*** PROFILE:'),bevel=p.indexOf('*** FINAL BEVEL');
+ assert.ok(trim>=0&&hole>trim&&profile>hole&&bevel>profile,'facing, hole with slit, profile, bevel');
+ assert.equal(r.holes,1);assert.ok(r.warnings.some(w=>w.includes('прорезью сверху')));
+ const count=+p.slice(hole).match(/HOLE: (\d+) points/)[1];
+ const lines=p.slice(hole,profile).split(/\r?\n/).filter(line=>/^G01 /.test(line));
+ const coord=line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?[\d.]+)/g)].map(m=>[m[1],+m[2]]));
+ const start=coord(lines[0]),finish=coord(lines[count-1]);
+ for(const axis of ['X','Y','Z','A'])assert.ok(Math.abs(start[axis]-finish[axis])<.03,'bore closes before returning through its slit');
+ const face=m.verticalBevels().find(x=>x.face===146),yc=(shape.planeA+shape.planeB)/2,xc=(r.part.x0+r.part.x1)/2;
+ const body=[...m.edges.values()].flat().map(q=>q.reduce((sum,v,i)=>sum+(v-face.point[i])*face.normal[i],0));
+ const kept=Math.max(...body)>.02?1:-1;
+ const verifyBevel=(program,offset,inverted)=>{
+   const block=program.slice(program.indexOf('*** FINAL BEVEL')),command=+block.match(/B=(-?[\d.]+)/)[1];
+   const cut=+block.split(/\r?\n/).find(line=>/^G01 /.test(line)).match(/X(-?[\d.]+)/)[1];
+   const t=command*Math.PI/180*(inverted?-1:1),c=Math.cos(t),sn=Math.sin(t);
+   for(const x of [-185,185]){
+     const localX=x*c+cut*sn,localY=-x*sn+cut*c,point=[localY+xc-offset[1],yc-localX+offset[0],0];
+     const d=point.reduce((sum,v,i)=>sum+(v-face.point[i])*face.normal[i],0);
+     assert.ok(Math.abs(d+kept*o.kerf/2)<.03,'bevel follows the STEP plane on the waste side');
+   }
+ };
+ verifyBevel(p,[0,0,0],false);
+ const inverted=gen.buildProgram(step,'W11.stp',{...o,invB:true});
+ verifyBevel(inverted.program,[0,0,0],true);
+ const ip=sim.parseGcode(inverted.program),ic=sim.analyse(ip,{...ip.stock,FW:370,HT:490,VT:250,angle:45,invB:true,laser:false});
+ assert.equal(ic.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(ic.warns));
+ const parsed=sim.parseGcode(p),check=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
+ const placed=gen.autoPlace(step,'W11.stp',{...o,grounded:true,keepHeight:true,preferNegativeX:true});
+ assert.ok(placed.offset[0]<=-5&&placed.offset.every(v=>v%5===0));
+ verifyBevel(placed.program,placed.offset,false);
+ const placedParsed=sim.parseGcode(placed.program),placedCheck=sim.analyse(placedParsed,{...placedParsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(placedCheck.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(placedCheck.warns));
+});
+
+test('W11 automatic stock preserves allowances with parked turning',{skip:!process.env.W11_STEP},async()=>{
+ const text=fs.readFileSync(process.env.W11_STEP,'utf8'),geometry=gen.previewGeometry(text,gen.identityRotation(),1,.1);
+ const source=fs.readFileSync(path.join(__dirname,'../generator-view.js'),'utf8');
+ const begin=source.indexOf('  async function autoStockOptions('),end=source.indexOf("  document.getElementById('gnStockFromModel').addEventListener",begin);
+ const state={Gen:{...gen,previewGeometry:()=>({...geometry,diagnosticOnly:true})},stepFile:{text},
+  modelRotation:gen.identityRotation(),modelOffset:[0,0,0],geometry,machine:gen.CONFIG,
+  document:{getElementById:id=>({checked:id==='gnTrim'})},
+  n:id=>({gnScale:100,gnKerf:1,gnZ:10,gnClear:20,gnLead:5,gnTolerance:.1,gnTrimAngle:90})[id],setTimeout};
+ const candidates=await vm.runInNewContext(source.slice(begin,end)+';autoStockOptions()',state);
+ assert.ok(candidates.length);const best=candidates[0];
+ assert.deepEqual([best.length,best.width,best.height],[310,250,50]);
+ assert.ok(best.length>=geometry.size[0]+10-1e-6&&best.width>=geometry.size[1]+20-1e-6);
+ assert.ok(gen.stockAlongWireAtAngle(best.length,best.width,[0,0,0],geometry.slopedBevelAngle)<=(gen.CONFIG.FieldWidth-2)/2);
 });
 
 test('pair checkbox controls Create G-code, not only the stock preview',()=>{
@@ -482,15 +612,15 @@ test('kil2 automatic stock and placement include the rotated bevel',{skip:!proce
  const best=choices[0],rad=geometry.slopedBevelAngle*Math.PI/180;
  assert.ok(best.width>=geometry.size[1]+1-1e-5);
  assert.ok(best.length>=geometry.size[0]+1-1e-5);
- assert.ok(gen.stockRotationEnvelope(best.length,best.width,[0,0,0],geometry.slopedBevelAngle)<=(gen.CONFIG.FieldWidth-2)/2+1e-6);
+ assert.ok(gen.stockAlongWireAtAngle(best.length,best.width,[0,0,0],geometry.slopedBevelAngle)<=(gen.CONFIG.FieldWidth-2)/2+1e-6);
  assert.ok(best.width<Math.ceil((geometry.size[1]+20)/5)*5,'reduce excess foam only as required for the rotation');
  const o=options({stock:[best.length,best.width,best.height],bottomZ:10,tolerance:.6,trim:true,trimAngle:90,retract:5,
-   grounded:true,keepHeight:true,preferNegativeX:false});
+   grounded:true,keepHeight:true,preferNegativeX:true});
  const placement=gen.autoPlace(text,'kil2.stp',o);
- assert.ok(placement.offset.every(v=>v%5===0));
+ assert.ok(placement.offset[0]<=-5&&placement.offset.every(v=>v%5===0));
  const [x,y,z]=placement.offset;
- const span=gen.stockRotationEnvelope(best.length,best.width,[x,y,z],geometry.slopedBevelAngle);
- assert.ok(span<=(gen.CONFIG.FieldWidth-2)/2+1e-6,'shifted stock clears both towers throughout rotation');
+ const span=gen.stockAlongWireAtAngle(best.length,best.width,[x,y,z],geometry.slopedBevelAngle);
+ assert.ok(span<=(gen.CONFIG.FieldWidth-2)/2+1e-6,'shifted stock fits between towers at the cutting angle');
  const grounded=gen.groundPlacement(text,'kil2.stp',o,placement);
  assert.deepEqual(Array.from(grounded.stock),o.stock);assert.equal(z,0);
  const parsed=sim.parseGcode(placement.program),report=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
