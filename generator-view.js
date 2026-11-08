@@ -557,7 +557,7 @@ const generatorPreview = (() => {
   }
   function rebuild(preserveDiagnostics = false) {
     document.getElementById('gnStockFromModel').disabled = !geometry || geometry.diagnosticOnly;
-    document.getElementById('gnAutoPlace').disabled = !geometry || geometry.diagnosticOnly || geometry.slopedPreview;
+    document.getElementById('gnAutoPlace').disabled = !geometry || geometry.diagnosticOnly;
     guideWire = null;guideStartMarker=null;
     if (preserveDiagnostics === true) clearStockCloud();
     else { stockCloud=null;resetStockSimulation(); }
@@ -705,7 +705,7 @@ const generatorPreview = (() => {
             ? '. Показана приближённая оболочка STEP; автоматический подбор заготовки и размещения недоступен.'
             : '. Показаны упрощённые рёбра STEP; автоматический подбор заготовки и размещения недоступен.');
       if(geometry.slopedPreview)
-        fit.textContent+=' Контур со скосом: доступна одна деталь без смещения. Авторазмещение пока недоступно; проверьте место для поворота на скос.';
+        fit.textContent+=' Контур со скосом: одна деталь; размещение проверяется также при повороте на скос.';
       if(geometry.previewError && geometry.bevelCandidates?.length)
         fit.textContent+=' Возможные наклонные торцы: '+geometry.bevelCandidates.map(b=>'грань #'+b.face+' (B'+b.angle.toFixed(1)+'°)').join(', ')+'. Это анализ, не траектория реза.';
       if(!fits||unsupported||trimConflict||geometry.axis!==1||geometry.auxiliaryCurves?.length||geometry.previewError) fit.className='note crit';
@@ -816,8 +816,8 @@ const generatorPreview = (() => {
         // Refresh the canvas and status between computational candidates.
         await new Promise(resolve=>setTimeout(resolve,0));
         try{
-          const g=Gen.previewGeometry(stepFile.text,item.matrix,config.scale,config.tolerance);
-          if(g.axis!==1||g.secondaryCount||g.wireframe||
+          const g=item.turns===0&&geometry ? geometry : Gen.previewGeometry(stepFile.text,item.matrix,config.scale,config.tolerance);
+          if(g.axis!==1||g.diagnosticOnly||g.secondaryCount||g.wireframe||
              g.size[0]>config.stock[0]+.001||g.size[1]>config.stock[1]+.001||
              g.size[2]>config.stock[2]+.001) continue;
           const options={...config,rotation:item.matrix,grounded:true,keepHeight:stage.keepHeight,preferNegativeX:stage.preferNegativeX};
@@ -858,7 +858,7 @@ const generatorPreview = (() => {
       fit.className='note crit';
       fit.textContent='Ошибка авторазмещения: '+e.message;
     }finally{
-      autoPlacementBusy=false;button.disabled=!geometry || geometry.diagnosticOnly || geometry.slopedPreview;
+      autoPlacementBusy=false;button.disabled=!geometry || geometry.diagnosticOnly;
       button.textContent='Авторазмещение: поворот + сдвиг';
       progress.hidden=true;
     }
@@ -904,14 +904,35 @@ const generatorPreview = (() => {
         // cutting allowance remains 10 mm per side.
         const minimumLength=g.size[0]+10;
         const sheet=[20,50,100].find(t=>t+1e-7>=minimumLength);
-        const length=sheet||round5(minimumLength);
-        const height=round5(minimumHeight),width=round5(g.size[1]+20);
+        let length=sheet||round5(minimumLength);
+        const height=round5(minimumHeight);
+        let width=round5(g.size[1]+20);
+        if(g.slopedPreview){
+          if(paired||!Number.isFinite(g.slopedBevelAngle))continue;
+          // Prefer the normal margins, then reduce excess only as necessary.
+          // Leave at least half the kerf on each side of the model.
+          const minLength=round5(g.size[0]+kerf),minWidth=round5(g.size[1]+kerf);
+          const sweepAngle=document.getElementById('gnTrim').checked&&n('gnTrimAngle')===90
+            ? Math.max(90,g.slopedBevelAngle) : g.slopedBevelAngle;
+          let chosen=null;
+          for(let l=length;l>=minLength-1e-7&&!chosen;l-=5){
+            for(let w=width;w>=minWidth-1e-7;w-=5){
+              if(Gen.stockRotationEnvelope(l,w,modelOffset,sweepAngle)>(machine.FieldWidth-2)/2+1e-7)continue;
+              const radius=Math.hypot(l/2+Math.abs(modelOffset[0]),w/2+Math.abs(modelOffset[1]));
+              if(radius>machine.ParkX-2+1e-7)continue;
+              if(document.getElementById('gnTrim').checked&&n('gnTrimAngle')===90&&w/2+Math.abs(modelOffset[1])>machine.FieldWidth/2+1e-7)continue;
+              chosen={length:l,width:w};break;
+            }
+          }
+          if(!chosen)continue;
+          length=chosen.length;width=chosen.width;
+        }
         if(length/2+Math.abs(modelOffset[0])>machine.FieldWidth/2+1e-7 ||
            width/2+Math.abs(modelOffset[1])>machine.HorizontalTravel/2+1e-7 ||
            width/2+Math.abs(modelOffset[1])+n('gnLead')>machine.ParkX+1e-7 ||
            bottom+modelOffset[2]<0 ||
            bottom+modelOffset[2]+height+clearance>machine.VerticalTravel+1e-7)continue;
-        results.push({rotation,geometry:g,length,width,height,standard:Boolean(sheet),turn,
+        results.push({rotation,geometry:g,length,width,height,standard:Boolean(sheet&&Math.abs(length-sheet)<1e-7),turn,
           description:rotations[turn].description,area:width*height,minimumHeight,minimumLength});
       }catch(e){/* A candidate may not form valid cutting geometry at this orientation. */}
     }
@@ -943,8 +964,8 @@ const generatorPreview = (() => {
       fit.textContent='Не удалось подобрать заготовку: '+error.message;
       return;
     } finally {
-      progress.hidden=true;button.disabled=!geometry || geometry.diagnosticOnly || geometry.slopedPreview;
-      button.textContent='По модели +10 мм с каждой стороны';
+      progress.hidden=true;button.disabled=!geometry || geometry.diagnosticOnly;
+      button.textContent='По модели с припуском';
     }
     if(initialSignature!==generatorSignature()){
       const fit=document.getElementById('gnFit');fit.className='note crit';
@@ -970,7 +991,9 @@ const generatorPreview = (() => {
     // explanation without hiding its own "fits" status.
     const info='Автоподбор: '+best.description+', толщина листа вдоль струны '+
       best.length+' мм ('+(best.standard?'стандартная':'нестандартная')+
-      '), заготовка '+best.length+' × '+best.width+' × '+best.height+' мм.';
+      '), заготовка '+best.length+' × '+best.width+' × '+best.height+' мм.'+
+      (best.geometry.slopedPreview&&(best.width<Math.ceil((best.geometry.size[1]+20-1e-7)/5)*5||best.length<Math.ceil((best.geometry.size[0]+10-1e-7)/5)*5)
+        ? ' Припуски уменьшены для поворота: вдоль струны '+((best.length-best.geometry.size[0])/2).toFixed(1)+' мм и поперёк '+((best.width-best.geometry.size[1])/2).toFixed(1)+' мм с каждой стороны.' : '');
     fit.textContent+=' '+info;
   });
   document.getElementById('gnScale').addEventListener('change',load);

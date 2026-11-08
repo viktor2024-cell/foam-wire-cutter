@@ -241,7 +241,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
   </section>
   <section class="box">
     <h2>Заготовка</h2>
-    <div class="row gn-auto"><button id="gnStockFromModel" disabled>По модели +10 мм с каждой стороны</button><button id="gnAutoPlace" type="button" disabled>Авторазмещение: поворот + сдвиг</button></div>
+    <div class="row gn-auto"><button id="gnStockFromModel" disabled>По модели с припуском</button><button id="gnAutoPlace" type="button" disabled>Авторазмещение: поворот + сдвиг</button></div>
     <div id="gnStockProgress" class="gn-auto" hidden role="status" aria-live="polite">
       <div id="gnStockProgressText">Подготовка расчёта заготовки…</div>
       <progress id="gnStockProgressBar" max="24" value="0" aria-label="Проверено вариантов заготовки"></progress>
@@ -2139,15 +2139,17 @@ const Gen = (() => {
     if (!Number.isFinite(scale) || scale <= 0) throw new Error("Масштаб должен быть положительным числом");
     const model = new Model(text, rotation, scale, tolerance);
     const auxiliaryCurves = model.wireframe ? [] : model.auxiliaryCurves();
-    let built, previewError = null,slopedPreview=false;
+    let built, previewError = null,slopedPreview=false,slopedBevelAngle=null;
     try { built = model.build(); }
     catch(e) {
       if (!model.edges.size && !auxiliaryCurves.length) throw e;
       if(!model.wireframe&&!auxiliaryCurves.length)try{
-        const found=model.slopedEndContour();
+        const found=model.cachedSlopedEndContour();
         built={outer:found.contour,holes:[],secondaryContours:[],axis:found.axis,planeA:found.planeA,planeB:found.planeB};
-        slopedPreview=true;
-      }catch(_) { /* keep diagnostic fallback */ }
+        const bevels=model.verticalBevels().filter(b=>found.rootFaces.includes(b.face));
+        if(bevels.length!==1)throw new StepError("Неоднозначный скос");
+        slopedBevelAngle=bevels[0].angle;slopedPreview=true;
+      }catch(_) { built=null; /* keep diagnostic fallback */ }
       if(!built)previewError=e.message;
     }
     const {outer=[], holes=[], secondaryContours=[], axis=1, wireframe=false} = built || {};
@@ -2188,7 +2190,7 @@ const Gen = (() => {
     const high=[0,1,2].map(k=>Math.max(...points.map(p=>p[k])));
     const closedShell=built&&outer.length===1&&outer[0][0].closed&&!holes.length
       ? {rail:rails[0],capAxis:axis===0?1:axis===1?0:2} : null;
-    return {rails,edgeLines,diagnosticShell,diagnosticFaces,closedShell,bevelCandidates,slopedPreview,previewError,diagnosticOnly:!!previewError,
+    return {rails,edgeLines,diagnosticShell,diagnosticFaces,closedShell,bevelCandidates,slopedPreview,slopedBevelAngle,previewError,diagnosticOnly:!!previewError,
       axis, sampled, wireframe:!!wireframe, auxiliaryCurves, guideAnalysis,
       guideKinematics, secondaryCount:secondaryContours.length,
       center:low.map((v,k)=>(v+high[k])/2),
@@ -2308,10 +2310,12 @@ const Gen = (() => {
   const isTyped = (e) => e !== null && typeof e === "object" && !Array.isArray(e) && e.name !== undefined;
   const sum2 = (d) => d[0] + d[1];
 
+  // Reuse verified geometry when placement probes vary only the stock offset.
+  const slopedContourCache=new Map();
   class Model {
     constructor(text, rotation = identityRotation(), scale = 1, tolerance = 0.1) {
       if(!Number.isFinite(tolerance)||tolerance<0) throw new StepError("Допуск отклонения должен быть неотрицательным числом");
-      this.rotation = rotation; this.scale = scale; this.tolerance=tolerance; this.maxCheckedDeviation=0; this.entities = parseStep(text); this.readGeometry();
+      this.sourceText=text; this.rotation = rotation; this.scale = scale; this.tolerance=tolerance; this.maxCheckedDeviation=0; this.entities = parseStep(text); this.readGeometry();
     }
     get(ref) { return this.entities.get(ref.id); }
     point(ref) {
@@ -2695,6 +2699,17 @@ const Gen = (() => {
       this.maxCheckedDeviation=Math.max(this.maxCheckedDeviation,maxDeviation);
       return {A:u=>at(0,u),B:u=>at(1,u),t0:0,t1:1,closed:false,breaks:uniqueBreaks,source:faceId,maxDeviation,capFaces:[capAId,capBId]};
     }
+    cachedSlopedEndContour() {
+      const key=this.sourceText+'\0'+JSON.stringify([this.rotation,this.scale,this.tolerance]);
+      let contour=slopedContourCache.get(key);
+      if(!contour){
+        contour=this.slopedEndContour();
+        if(slopedContourCache.size>=8)slopedContourCache.delete(slopedContourCache.keys().next().value);
+        slopedContourCache.set(key,contour);
+      }
+      this.maxCheckedDeviation=Math.max(this.maxCheckedDeviation,contour.maxDeviation);
+      return contour;
+    }
     // Reconstruct a contour split across one flat and one oblique root cap.
     // Diagnostic only until entry, kerf, final bevel and holding are planned.
     slopedEndContour() {
@@ -2709,6 +2724,7 @@ const Gen = (() => {
         return refs.length===1&&this.get(refs[0]).name==='FACE_OUTER_BOUND';
       }))throw new StepError("Внутренние границы пока не поддержаны");
       const [axis,planeA,planeB]=this.spanAxis(),span=planeB-planeA;
+      if(axis!==1)throw new StepError("Поверните модель: размах должен идти вдоль струны");
       const caps=this.facesRaw.filter(raw=>{
         const s=this.surface(raw.surf);
         if(s.pu!==1||s.pv!==1||s.nu!==1||s.nv!==1)return false;
@@ -4019,6 +4035,23 @@ const Gen = (() => {
     HomingX1: 249, HomingZ1: 238, HomingX2: 245, HomingZ2: 236, HomingR1: -7.3, ParkX: 240, ParkZ: 235, ParkR1: 0,
     TravelClearance: 20, FeedRateCut: 7, FeedRateMove: 14, FeedRateRotate: 30, WireMinPower: 500, WireMaxPower: 1000,
   };
+  // Largest absolute position along the wire during the entire turn.
+  // Evaluate every corner at the endpoints and its sinusoidal extrema.
+  function stockRotationEnvelope(length,width,offset,angle) {
+    if(![length,width,...offset,angle].every(Number.isFinite)||length<=0||width<=0)
+      throw new StepError("Некорректные размеры для проверки поворота");
+    const end=angle*Math.PI/180,lo=Math.min(0,end),hi=Math.max(0,end);
+    let max=0;
+    for(const sx of [-1,1])for(const sy of [-1,1]){
+      const x=offset[0]+sx*length/2,y=offset[1]+sy*width/2;
+      const values=[lo,hi],phase=Math.atan2(y,x);
+      for(let k=-2;k<=2;k++){
+        const t=phase+k*Math.PI;if(t>lo&&t<hi)values.push(t);
+      }
+      for(const t of values)max=Math.max(max,Math.abs(x*Math.cos(t)+y*Math.sin(t)));
+    }
+    return max;
+  }
   function buildProgram(text, fileName, o) {
     const cfg = { ...CONFIG, TravelClearance: o.clearance, FeedRateCut: o.feed, WireMinPower: o.minS, WireMaxPower: o.maxS,
       PlacementProbe: placementProbeDepth>0 };
@@ -4080,7 +4113,7 @@ const Gen = (() => {
     catch(originalError) {
       try {
         model.maxCheckedDeviation=0;
-        slopedEnd=model.slopedEndContour();
+        slopedEnd=model.cachedSlopedEndContour();
         shape={outer:slopedEnd.contour,holes:[],secondaryContours:[],axis:slopedEnd.axis,planeA:slopedEnd.planeA,planeB:slopedEnd.planeB};
       } catch(e) {
         if(/отклонение струны/.test(e.message))throw e;
@@ -4107,8 +4140,8 @@ const Gen = (() => {
     const offset=o.offset===undefined?[0,0,0]:o.offset;
     if(!Array.isArray(offset)||offset.length!==3||!offset.every(Number.isFinite)) throw new Error("Недопустимое смещение модели");
     const shifted=offset.some(v=>Math.abs(v)>1e-9);
-    if(slopedEnd&&(o.pair||o.mirror||o.sideEntry||shifted||Math.abs(modelZOffset)>1e-9))
-      throw new StepError("Контур со скосом пока поддерживает одну деталь без смещений, зеркала и бокового входа");
+    if(slopedEnd&&(o.pair||o.mirror||o.sideEntry))
+      throw new StepError("Контур со скосом пока поддерживает одну деталь без зеркала и бокового входа");
     if(slopedEnd&&o.trim!==false&&(trimAngle!==90||cutOrder!=='B90_B0'))
       throw new StepError("Для детали со скосом выберите торцевание B90 до основного контура B0");
     if(shifted && (o.pair || model.wireframe || secondaryContours.length))
@@ -4286,13 +4319,20 @@ const Gen = (() => {
       } else for (const hole of holes) addHole(hole, layout, null, false);
       addProfile(layout, o.side);
     }
+    let bevelPlacement=null;
     if(slopedEnd){
       const candidates=model.verticalBevels().filter(b=>slopedEnd.rootFaces.includes(b.face));
       if(candidates.length!==1)throw new StepError("Не удалось однозначно определить завершающий скос");
       const bevel=candidates[0],radians=bevel.angle*Math.PI/180,cs=Math.cos(radians),sn=Math.sin(radians);
       const along=stockWidth*Math.abs(sn)+stockLength*Math.abs(cs);
-      if(along>cfg.FieldWidth-2)throw new StepError("При резе скоса заготовка вдоль струны "+along.toFixed(1)+" мм не помещается между башнями");
-      if(cfg.ParkX-radius<RadialMargin)throw new StepError("Нет безопасного места для поворота заготовки к скосу");
+      // If the earlier facing turn is larger, it controls the swept envelope.
+      const sweepAngle=hasTrim&&trimAngle===90?Math.max(90,bevel.angle):bevel.angle;
+      bevelPlacement={angle:sweepAngle,along};
+      const cornerRadius=Math.hypot(stockLength/2+Math.abs(offset[0]),stockWidth/2+Math.abs(offset[1]));
+      if(!cfg.PlacementProbe && stockRotationEnvelope(stockLength,stockWidth,offset,sweepAngle)>(cfg.FieldWidth-2)/2+1e-7)
+        throw new StepError("При повороте к скосу смещённая заготовка не помещается между башнями");
+      if(!cfg.PlacementProbe && cfg.ParkX-cornerRadius<RadialMargin)
+        throw new StepError("Нет безопасного места для поворота смещённой заготовки к скосу");
       const signed=p=>p.reduce((sum,v,i)=>sum+(v-bevel.point[i])*bevel.normal[i],0);
       const values=[];
       for(const [face] of outer)for(let i=0;i<=128;i++){
@@ -4305,14 +4345,14 @@ const Gen = (() => {
       if(!kept)throw new StepError("Не определена сторона материала относительно скоса");
       const projection=cs*bevel.normal[0]+sn*bevel.normal[1],waste=-Math.sign(projection*kept);
       if(!waste)throw new StepError("Не определена сторона отхода скоса");
-      const cut=(bevel.point[0]-xc)*cs+(bevel.point[1]-yc)*sn+waste*kerf/2;
+      const cut=(bevel.point[0]-xc)*cs+(bevel.point[1]-yc)*sn+offset[1]*cs-offset[0]*sn+waste*kerf/2;
       const exit=cut+waste*o.retract;
       warnings.push("Перед поворотом для реза скоса убедитесь, что деталь закреплена после основного контура");
       program+=";"+EOL+"; *** FINAL BEVEL: STEP face #"+bevel.face+" B="+fix2(bevel.angle)+" ***"+EOL;
       program+=prog.travel("move",cfg.ParkX,safe,cfg.ParkX,safe)+rotate(cfg,bevel.angle);
       program+=prog.travel("move",cut,safe,cut,safe);
-      program+=prog.travel("cut",cut,o.bottomZ,cut,o.bottomZ);
-      program+=prog.travel("cut",exit,o.bottomZ,exit,o.bottomZ);
+      program+=prog.travel("cut",cut,stockBottom,cut,stockBottom);
+      program+=prog.travel("cut",exit,stockBottom,exit,stockBottom);
       program+=prog.travel("cut",exit,safe,exit,safe);
       program+=prog.travel("move",cfg.ParkX,safe,cfg.ParkX,safe)+rotate(cfg,0);
     }
@@ -4334,7 +4374,7 @@ const Gen = (() => {
       } : null,
       holes: holes.length+secondaryContours.length, secondary: secondaryContours.length,
       power: [prog.minPower, prog.maxPower, prog.changes],
-      ...(cfg.PlacementProbe?{probeTargets:prog.probeTargets}: {}) };
+      ...(cfg.PlacementProbe?{probeTargets:prog.probeTargets,bevelPlacement}: {}) };
   }
 
   // Find a common machine-frame translation of the STEP model AND stock.
@@ -4348,12 +4388,14 @@ const Gen = (() => {
     if(o.manualGuidePairs?.length)
       throw new StepError("Авторазмещение ручных пар F4 пока не поддерживается");
     const step=1,base={...o,offset:[0,0,0]};
-    const probes=[];
+    const probes=[];let bevelPlacement=null;
     for(let k=0;k<4;k++){
       const offset=k===0?[0,0,0]:[0,0,0].map((v,i)=>i===k-1?step:v);
       placementProbeDepth++;
-      try{probes.push(buildProgram(text,fileName,{...base,offset}).probeTargets);}
-      finally{placementProbeDepth--;}
+      try{
+        const result=buildProgram(text,fileName,{...base,offset});
+        probes.push(result.probeTargets);if(k===0)bevelPlacement=result.bevelPlacement;
+      } finally{placementProbeDepth--;}
     }
     const n=probes[0].length;
     if(!n||probes.some(p=>p.length!==n))
@@ -4396,6 +4438,25 @@ const Gen = (() => {
       const yr=CONFIG.FieldWidth/2-W/2;
       add([1,0,0],xr);add([-1,0,0],xr);
       add([0,1,0],yr);add([0,-1,0],yr);
+    }
+    if(bevelPlacement){
+      if(o.grounded&&bottom<5-1e-7)
+        throw new StepError("Для реза скоса с запасом по Z установите низ заготовки не ниже 5 мм");
+      const angle=bevelPlacement.angle*Math.PI/180,count=Math.max(1,Math.ceil(Math.abs(angle)/(Math.PI/36)));
+      const fieldHalf=(CONFIG.FieldWidth-2)/2*Math.cos(Math.abs(angle)/(2*count));
+      // The safety factor covers the extrema between sampled turn angles.
+      for(let i=0;i<=count;i++){
+        const t=angle*i/count,cs=Math.cos(t),sn=Math.sin(t);
+        const room=fieldHalf-(L*Math.abs(cs)+W*Math.abs(sn))/2;
+        add([cs,sn,0],room);add([-cs,-sn,0],room);
+      }
+      // A conservative inscribed polygon guarantees every stock corner
+      // stays clear of the parked wire during the table rotation.
+      const radius=(CONFIG.ParkX-2)*Math.cos(Math.PI/32);
+      for(let i=0;i<32;i++){
+        const a=2*Math.PI*i/32,x=Math.cos(a),y=Math.sin(a);
+        add([x,y,0],radius-Math.abs(x)*L/2-Math.abs(y)*W/2);
+      }
     }
     // Dykstra projections locate a feasible continuous offset.
     const correction=new Float64Array(constraints.length);
@@ -5040,7 +5101,7 @@ const Gen = (() => {
       warnings:['F4 review only: machine output, copy and export disabled',
         'Start and exit cutting leads, kerf side, safe B rotation and preserved STEP solid are NOT validated']};
   }
-  return { buildProgram, autoPlace, groundPlacement, buildF4Program, buildF4VisualPreview, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, resolveGuideStart, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
+  return { buildProgram, autoPlace, groundPlacement, stockRotationEnvelope, buildF4Program, buildF4VisualPreview, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, resolveGuideStart, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
 })();
 
 // ---------------------------------------------------------------------------------------------

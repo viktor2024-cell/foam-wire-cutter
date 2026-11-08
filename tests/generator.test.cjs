@@ -137,6 +137,22 @@ function slopedCapFixture(){
  const shell=add('CLOSED_SHELL','('+faces.join(',')+')');add('MANIFOLD_SOLID_BREP',shell);
  return 'ISO-10303-21;\nDATA;\n'+lines.join('\n')+'\nENDSEC;\nEND-ISO-10303-21;';
 }
+test('stock rotation envelope checks the whole turn and displacement',()=>{
+ const angle=113.93,length=235,width=290,offset=[0,0,0],end=angle*Math.PI/180;
+ const final=(length*Math.abs(Math.cos(end))+width*Math.abs(Math.sin(end)))/2;
+ assert.ok(final<184,'the final orientation alone looks safe');
+ assert.ok(gen.stockRotationEnvelope(length,width,offset,angle)>184,'intermediate rotation exceeds the tower clearance');
+ for(const shift of [[0,0,0],[-10,5,0],[15,-20,0]])for(const turn of [30,90,113.93]){
+   let dense=0;
+   for(let i=0;i<=20000;i++){
+     const t=turn*Math.PI/180*i/20000;
+     for(const x of [-1,1])for(const y of [-1,1])
+       dense=Math.max(dense,Math.abs((shift[0]+x*length/2)*Math.cos(t)+(shift[1]+y*width/2)*Math.sin(t)));
+   }
+   assert.ok(Math.abs(gen.stockRotationEnvelope(length,width,shift,turn)-dense)<.0001);
+ }
+});
+
 test('sloped end contour and final trim are generated from synthetic topology',()=>{
  const step=slopedCapFixture(),m=new gen.Model(step,gen.identityRotation(),1,.1);
  const shape=m.slopedEndContour();assert.equal(shape.contour.length,6);
@@ -148,6 +164,25 @@ test('sloped end contour and final trim are generated from synthetic topology',(
  assert.throws(()=>gen.buildProgram(step,'synthetic-bevel.stp',{...o,cutOrder:'B0_B90'}),/торцевание B90/);
  const parsed=sim.parseGcode(program),report=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
+ const moved=gen.buildProgram(step,'synthetic-bevel.stp',{...o,offset:[-5,5,5]});
+ const bevelMove=p=>{
+   const block=p.split('*** FINAL BEVEL')[1],angle=+block.match(/B=([\d.]+)/)[1];
+   const cut=block.split(/\r?\n/).find(line=>/^G01 /.test(line));
+   return {angle,x:+cut.match(/X(-?[\d.]+)/)[1],z:+cut.match(/Y(-?[\d.]+)/)[1]};
+ };
+ const base=bevelMove(program),shifted=bevelMove(moved.program),radians=base.angle*Math.PI/180;
+ assert.ok(Math.abs((shifted.x-base.x)-(5*Math.sin(radians)+5*Math.cos(radians)))<.03);
+ assert.ok(Math.abs((shifted.z-base.z)-5)<.02);
+ const placed=gen.autoPlace(step,'synthetic-bevel.stp',{...o,grounded:true,keepHeight:true,preferNegativeX:true});
+ assert.ok(placed.offset[0]<=-5&&placed.offset.every(v=>v%5===0));
+ for(const candidate of [moved.program,placed.program]){
+   const p=sim.parseGcode(candidate),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+   assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
+ }
+ const lifted=gen.groundPlacement(step,'synthetic-bevel.stp',o,{...placed,offset:[placed.offset[0],placed.offset[1],5],displacement:5});
+ const grounded=gen.buildProgram(step,'synthetic-bevel.stp',{...o,stock:lifted.stock,offset:lifted.offset,modelZOffset:lifted.modelZOffset});
+ assert.match(grounded.program,/FINAL BEVEL/);
+ assert.throws(()=>gen.autoPlace(step,'synthetic-bevel.stp',{...o,bottomZ:0,grounded:true}),/не ниже 5 мм/);
 });
 
 test('kil2 joins all main faces across their different end planes',{skip:!process.env.KIL_STEP},()=>{
@@ -199,12 +234,12 @@ test('kil2 shows its full diagnostic faces at the selected tolerance',{skip:!pro
    assert.ok(three.ShapeUtils.triangulateShape(boundary.map(p=>new three.Vector2(p[axes[0]],p[axes[1]])),[]).length>0);
  }
  assert.equal(preview.previewError,null);
- assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({stock:[235,290,55],tolerance:.1})),/отклонение струны/);
+ assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({stock:[230,285,55],tolerance:.1})),/отклонение струны/);
 });
 
 test('kil2 G-code trims, cuts the main contour, then removes the bevel',{skip:!process.env.KIL_STEP},()=>{
  const step=fs.readFileSync(process.env.KIL_STEP,'utf8');
- const o=options({stock:[235,290,55],tolerance:.6,trim:true,trimAngle:90,retract:5});
+ const o=options({stock:[230,285,55],tolerance:.6,trim:true,trimAngle:90,retract:5});
  const result=gen.buildProgram(step,'kil2.stp',o),program=result.program;
  const trim=program.indexOf('*** TRIM BLOCK'),profile=program.indexOf('*** PROFILE:'),bevel=program.indexOf('*** FINAL BEVEL');
  assert.ok(trim>=0&&profile>trim&&bevel>profile);
@@ -214,7 +249,10 @@ test('kil2 G-code trims, cuts the main contour, then removes the bevel',{skip:!p
  const parsed=sim.parseGcode(program),report=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
  assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({...o,stock:[250,320,55]})),/не помещается между башнями/);
- assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({...o,offset:[1,0,0]})),/без смещений/);
+ assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({...o,stock:[235,290,55]})),/при повороте к скосу/i,
+   'the previously suggested size exceeds clearance midway through the turn');
+ assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({...o,offset:[-5,0,5]})),/при повороте к скосу/i,
+   'a shifted blank must clear the towers throughout rotation');
 });
 
 // Synthetic solid with a single closed outer skin and one seam vertex per cap.
@@ -384,6 +422,36 @@ test('auto stock takes standard sheet thickness along wire, not vertical Z',asyn
  const unavailable=await vm.runInNewContext(source.slice(begin,end)+';autoStockOptions()',state);
  assert.equal(unavailable.length,0);
 });
+test('kil2 automatic stock and placement include the rotated bevel',{skip:!process.env.KIL_STEP},async()=>{
+ const text=fs.readFileSync(process.env.KIL_STEP,'utf8'),geometry=gen.previewGeometry(text,gen.identityRotation(),1,.6);
+ assert.equal(geometry.slopedPreview,true);assert.ok(Number.isFinite(geometry.slopedBevelAngle));
+ const source=fs.readFileSync(path.join(__dirname,'../generator-view.js'),'utf8');
+ const begin=source.indexOf('  async function autoStockOptions('),end=source.indexOf("  document.getElementById('gnStockFromModel').addEventListener",begin);
+ const state={Gen:{...gen,previewGeometry:()=>({...geometry,diagnosticOnly:true})},
+  stepFile:{text},modelRotation:gen.identityRotation(),modelOffset:[0,0,0],geometry,machine:gen.CONFIG,
+  document:{getElementById:id=>({checked:id==='gnTrim'})},
+  n:id=>({gnScale:100,gnKerf:1,gnZ:10,gnClear:20,gnLead:5,gnTolerance:.6,gnTrimAngle:90})[id],setTimeout};
+ const choices=await vm.runInNewContext(source.slice(begin,end)+';autoStockOptions()',state);
+ assert.ok(choices.length,'a stock size fits the actual bevel angle');
+ const best=choices[0],rad=geometry.slopedBevelAngle*Math.PI/180;
+ assert.ok(best.width>=geometry.size[1]+1-1e-5);
+ assert.ok(best.length>=geometry.size[0]+1-1e-5);
+ assert.ok(gen.stockRotationEnvelope(best.length,best.width,[0,0,0],geometry.slopedBevelAngle)<=(gen.CONFIG.FieldWidth-2)/2+1e-6);
+ assert.ok(best.width<Math.ceil((geometry.size[1]+20)/5)*5,'reduce excess foam only as required for the rotation');
+ const o=options({stock:[best.length,best.width,best.height],bottomZ:10,tolerance:.6,trim:true,trimAngle:90,retract:5,
+   grounded:true,keepHeight:true,preferNegativeX:false});
+ const placement=gen.autoPlace(text,'kil2.stp',o);
+ assert.ok(placement.offset.every(v=>v%5===0));
+ const [x,y,z]=placement.offset;
+ const span=gen.stockRotationEnvelope(best.length,best.width,[x,y,z],geometry.slopedBevelAngle);
+ assert.ok(span<=(gen.CONFIG.FieldWidth-2)/2+1e-6,'shifted stock clears both towers throughout rotation');
+ const grounded=gen.groundPlacement(text,'kil2.stp',o,placement);
+ assert.deepEqual(Array.from(grounded.stock),o.stock);assert.equal(z,0);
+ const parsed=sim.parseGcode(placement.program),report=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
+ assert.ok(parsed.moves.every(m=>Math.min(m.to.Y,m.to.A)>=5-1e-6),'5 mm vertical travel reserve');
+});
+
 test('wireframe U-arch uses one safe waste corridor to both openings',()=>{
  const step=fs.readFileSync(path.join(__dirname,'fixtures/wireframe-two-holes.stp'),'utf8');
  const opts=options({stock:[50,165,165],bottomZ:10,clearance:20,trim:false});
