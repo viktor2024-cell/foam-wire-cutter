@@ -1508,7 +1508,7 @@ function requireMachinableProgram() {
   return true;
 }
 function generatorSignature() {
-  return JSON.stringify([generatorMode, stepFile?.text, modelRotation, modelOffset, modelZOffset, generatorPreview.getGuidePairs(),generatorPreview.getGuideStarts(), [...document.querySelectorAll('#panelGen input, #panelGen select')].map(e=>[e.id,e.type==='checkbox'?e.checked:e.value])]);
+  return JSON.stringify([$("invB").checked,generatorMode, stepFile?.text, modelRotation, modelOffset, modelZOffset, generatorPreview.getGuidePairs(),generatorPreview.getGuideStarts(), [...document.querySelectorAll('#panelGen input, #panelGen select')].map(e=>[e.id,e.type==='checkbox'?e.checked:e.value])]);
 }
 function requireCurrentProgram() {
   if (generationStamp !== null && generationStamp !== generatorSignature()) {
@@ -2548,7 +2548,7 @@ const Gen = (() => {
         const z=vertices.map(q=>q[2]);
         if(Math.max(...z)-Math.min(...z)<1)continue;
         const direction=[normal[1],-normal[0]];
-        let angle=Math.atan2(direction[0],-direction[1])*180/Math.PI;
+        let angle=Math.atan2(-direction[0],-direction[1])*180/Math.PI;
         angle=((angle%180)+180)%180;
         result.push({face:raw.fid,angle,normal,point:p,edges:raw.edgeIds.slice()});
       }
@@ -4044,11 +4044,11 @@ const Gen = (() => {
     let max=0;
     for(const sx of [-1,1])for(const sy of [-1,1]){
       const x=offset[0]+sx*length/2,y=offset[1]+sy*width/2;
-      const values=[lo,hi],phase=Math.atan2(y,x);
+      const values=[lo,hi],phase=Math.atan2(-y,x);
       for(let k=-2;k<=2;k++){
         const t=phase+k*Math.PI;if(t>lo&&t<hi)values.push(t);
       }
-      for(const t of values)max=Math.max(max,Math.abs(x*Math.cos(t)+y*Math.sin(t)));
+      for(const t of values)max=Math.max(max,Math.abs(x*Math.cos(t)-y*Math.sin(t)));
     }
     return max;
   }
@@ -4176,7 +4176,7 @@ const Gen = (() => {
     const trim = { Length: trimDimension, Width: trimAngle===90?stockWidth:stockLength,
       Height: stockHeight, TrimEnds: (trimDimension-finishedDimension)/2-kerf/2,
       BottomZ:o.bottomZ+offset[2], RetractOffset:o.retract, Angle:trimAngle,
-      CenterOffset:trimAngle===90?offset[0]:offset[1] };
+      CenterOffset:trimAngle===90?(o.invB?-offset[0]:offset[0]):offset[1] };
     const hasTrim = o.trim !== false && trim.TrimEnds > 0;
     // The selected angle swaps which stock dimension lies along the wire.
     // Reject stock too long for the tower spacing even if transverse/Z travel fits.
@@ -4236,8 +4236,8 @@ const Gen = (() => {
       throw new StepError("Порядок B0 → B90 не подтверждён: наружный профиль B0 может освободить деталь до реза B90. Выберите B90 → B0 или проверьте сохранность детали после B0.");
     // Cross-direction operations run BEFORE the outer profile releases the
     // part. B rotates the original (X,Y) stock frame, not the foam geometry.
-    // For a rotation theta, along-wire = X*sin(theta)-Y*cos(theta),
-    // and the toolpath chord = X*cos(theta)+Y*sin(theta).
+    // The simulator rotates machine coordinates by +B. Model coordinates
+    // are mapped as machine X=-model Y, machine Y=model X at B0.
     if(secondaryContours.length) {
       const radius90=Math.hypot(stockWidth,stockLength)/2;
       if(cfg.ParkX-radius90<RadialMargin)
@@ -4247,7 +4247,7 @@ const Gen = (() => {
       const zMid=o.bottomZ+stockHeight/2+offset[2];
       for(const op of secondaryContours) {
         const [dx,dy]=op.dir;
-        let angle=Math.atan2(dx,-dy)*180/Math.PI;
+        let angle=Math.atan2(-dx,-dy)*180/Math.PI;
         // A straight hot wire has no preferred direction along its span.
         // Keep table angles in [0,180) and transform points consistently.
         if(angle<0)angle+=180;
@@ -4255,7 +4255,7 @@ const Gen = (() => {
         const radians=angle*Math.PI/180, cs=Math.cos(radians),sn=Math.sin(radians);
         const remap=p=>{
           const x=p[0]-xc,y=p[1]-yc;
-          return [x*cs+y*sn,x*sn-y*cs,p[2]];
+          return [x*cs-y*sn,-x*sn-y*cs,p[2]];
         };
         const faces=op.contour.map(([face,forward])=>[{
           ...face,A:t=>remap(face.A(t)),B:t=>remap(face.B(t))
@@ -4269,9 +4269,12 @@ const Gen = (() => {
         }
         const layout={machine:p=>[p[1],p[0],p[2]-zc+zMid],
           towers:makeLayout(-1,1,1,zMid).towers};
+        const commandAngle=o.invB?-angle:angle;
+        if(!cfg.PlacementProbe&&stockRotationEnvelope(stockLength,stockWidth,offset,angle)>(cfg.FieldWidth-2)/2+1e-7)
+          throw new StepError("При повороте к дополнительному резу заготовка не помещается между башнями");
         program+=";"+EOL+"; *** SECONDARY CUT: STEP faces #"+op.faces.join(", #")+
-          " B="+angle.toFixed(3)+" before outer profile ***"+EOL;
-        program+=prog.travel("move",cfg.ParkX,safe,cfg.ParkX,safe)+rotate(cfg,angle);
+          " B="+commandAngle.toFixed(3)+" before outer profile ***"+EOL;
+        program+=prog.travel("move",cfg.ParkX,safe,cfg.ParkX,safe)+rotate(cfg,commandAngle);
         const [block,towers]=holeBlock(safe,prog,faces,layout,1,kerf,warnings,sag,maxStep);
         program+=block;allTowers.push(...towers);
         program+=prog.travel("move",cfg.ParkX,safe,cfg.ParkX,safe)+rotate(cfg,0);
@@ -4325,11 +4328,13 @@ const Gen = (() => {
       if(candidates.length!==1)throw new StepError("Не удалось однозначно определить завершающий скос");
       const bevel=candidates[0],radians=bevel.angle*Math.PI/180,cs=Math.cos(radians),sn=Math.sin(radians);
       const along=stockWidth*Math.abs(sn)+stockLength*Math.abs(cs);
-      // If the earlier facing turn is larger, it controls the swept envelope.
-      const sweepAngle=hasTrim&&trimAngle===90?Math.max(90,bevel.angle):bevel.angle;
-      bevelPlacement={angle:sweepAngle,along};
+      // Angle is physical rotation in the simulator; the controller command
+      // depends on the configured direction of positive B.
+      const physicalAngles=[bevel.angle,...(hasTrim&&trimAngle===90?[o.invB?-90:90]:[])];
+      const commandedAngle=o.invB?-bevel.angle:bevel.angle;
+      bevelPlacement={angles:physicalAngles,along};
       const cornerRadius=Math.hypot(stockLength/2+Math.abs(offset[0]),stockWidth/2+Math.abs(offset[1]));
-      if(!cfg.PlacementProbe && stockRotationEnvelope(stockLength,stockWidth,offset,sweepAngle)>(cfg.FieldWidth-2)/2+1e-7)
+      if(!cfg.PlacementProbe && physicalAngles.some(angle=>stockRotationEnvelope(stockLength,stockWidth,offset,angle)>(cfg.FieldWidth-2)/2+1e-7))
         throw new StepError("При повороте к скосу смещённая заготовка не помещается между башнями");
       if(!cfg.PlacementProbe && cfg.ParkX-cornerRadius<RadialMargin)
         throw new StepError("Нет безопасного места для поворота смещённой заготовки к скосу");
@@ -4343,13 +4348,13 @@ const Gen = (() => {
       if(low<-.02&&high>.02)throw new StepError("Плоскость скоса пересекает сохраняемую деталь");
       const kept=high>.02?1:low<-.02?-1:0;
       if(!kept)throw new StepError("Не определена сторона материала относительно скоса");
-      const projection=cs*bevel.normal[0]+sn*bevel.normal[1],waste=-Math.sign(projection*kept);
+      const projection=cs*bevel.normal[0]-sn*bevel.normal[1],waste=-Math.sign(projection*kept);
       if(!waste)throw new StepError("Не определена сторона отхода скоса");
-      const cut=(bevel.point[0]-xc)*cs+(bevel.point[1]-yc)*sn+offset[1]*cs-offset[0]*sn+waste*kerf/2;
+      const cut=(bevel.point[0]-xc)*cs-(bevel.point[1]-yc)*sn+offset[1]*cs+offset[0]*sn+waste*kerf/2;
       const exit=cut+waste*o.retract;
       warnings.push("Перед поворотом для реза скоса убедитесь, что деталь закреплена после основного контура");
-      program+=";"+EOL+"; *** FINAL BEVEL: STEP face #"+bevel.face+" B="+fix2(bevel.angle)+" ***"+EOL;
-      program+=prog.travel("move",cfg.ParkX,safe,cfg.ParkX,safe)+rotate(cfg,bevel.angle);
+      program+=";"+EOL+"; *** FINAL BEVEL: STEP face #"+bevel.face+" B="+fix2(commandedAngle)+" ***"+EOL;
+      program+=prog.travel("move",cfg.ParkX,safe,cfg.ParkX,safe)+rotate(cfg,commandedAngle);
       program+=prog.travel("move",cut,safe,cut,safe);
       program+=prog.travel("cut",cut,stockBottom,cut,stockBottom);
       program+=prog.travel("cut",exit,stockBottom,exit,stockBottom);
@@ -4442,13 +4447,15 @@ const Gen = (() => {
     if(bevelPlacement){
       if(o.grounded&&bottom<5-1e-7)
         throw new StepError("Для реза скоса с запасом по Z установите низ заготовки не ниже 5 мм");
-      const angle=bevelPlacement.angle*Math.PI/180,count=Math.max(1,Math.ceil(Math.abs(angle)/(Math.PI/36)));
-      const fieldHalf=(CONFIG.FieldWidth-2)/2*Math.cos(Math.abs(angle)/(2*count));
-      // The safety factor covers the extrema between sampled turn angles.
-      for(let i=0;i<=count;i++){
-        const t=angle*i/count,cs=Math.cos(t),sn=Math.sin(t);
-        const room=fieldHalf-(L*Math.abs(cs)+W*Math.abs(sn))/2;
-        add([cs,sn,0],room);add([-cs,-sn,0],room);
+      for(const physicalAngle of bevelPlacement.angles){
+        const angle=physicalAngle*Math.PI/180,count=Math.max(1,Math.ceil(Math.abs(angle)/(Math.PI/36)));
+        const fieldHalf=(CONFIG.FieldWidth-2)/2*Math.cos(Math.abs(angle)/(2*count));
+        // The safety factor covers extrema between sampled turn angles.
+        for(let i=0;i<=count;i++){
+          const t=angle*i/count,cs=Math.cos(t),sn=Math.sin(t);
+          const room=fieldHalf-(L*Math.abs(cs)+W*Math.abs(sn))/2;
+          add([cs,-sn,0],room);add([-cs,sn,0],room);
+        }
       }
       // A conservative inscribed polygon guarantees every stock corner
       // stays clear of the parked wire during the table rotation.
@@ -5168,7 +5175,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
       rotation: modelRotation, offset: [...modelOffset], modelZOffset, scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
       clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked,
-      trimAngle:n("gnTrimAngle"), cutOrder:$("gnCutOrder").value, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair"
+      trimAngle:n("gnTrimAngle"), cutOrder:$("gnCutOrder").value, invB:$("invB").checked, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair"
   };
   try {
     if (generatorMode === "manual") {

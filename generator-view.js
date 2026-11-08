@@ -707,7 +707,7 @@ const generatorPreview = (() => {
       if(geometry.slopedPreview)
         fit.textContent+=' Контур со скосом: одна деталь; размещение проверяется также при повороте на скос.';
       if(geometry.previewError && geometry.bevelCandidates?.length)
-        fit.textContent+=' Возможные наклонные торцы: '+geometry.bevelCandidates.map(b=>'грань #'+b.face+' (B'+b.angle.toFixed(1)+'°)').join(', ')+'. Это анализ, не траектория реза.';
+        fit.textContent+=' Возможные наклонные торцы: '+geometry.bevelCandidates.map(b=>'грань #'+b.face+' (B'+(document.getElementById('invB').checked?-b.angle:b.angle).toFixed(1)+'°)').join(', ')+'. Это анализ, не траектория реза.';
       if(!fits||unsupported||trimConflict||geometry.axis!==1||geometry.auxiliaryCurves?.length||geometry.previewError) fit.className='note crit';
     } else {
       fit.textContent = error || 'Откройте STEP для проверки размещения.';
@@ -770,7 +770,7 @@ const generatorPreview = (() => {
       clearance:n('gnClear'),retract:n('gnRetract'),leadMargin:n('gnLead'),
       trim:document.getElementById('gnTrim').checked,
       trimAngle:n('gnTrimAngle'),cutOrder:document.getElementById('gnCutOrder').value,
-      sideEntry:document.getElementById('gnSideEntry').checked,
+      invB:document.getElementById('invB').checked,sideEntry:document.getElementById('gnSideEntry').checked,
       side:document.getElementById('gnSide').value==='-'?-1:1,
       powerComp:document.getElementById('gnComp').checked,
       pair:document.getElementById('gnStockPair').checked,
@@ -912,12 +912,13 @@ const generatorPreview = (() => {
           // Prefer the normal margins, then reduce excess only as necessary.
           // Leave at least half the kerf on each side of the model.
           const minLength=round5(g.size[0]+kerf),minWidth=round5(g.size[1]+kerf);
-          const sweepAngle=document.getElementById('gnTrim').checked&&n('gnTrimAngle')===90
-            ? Math.max(90,g.slopedBevelAngle) : g.slopedBevelAngle;
+          const sweepAngles=[g.slopedBevelAngle];
+          if(document.getElementById('gnTrim').checked&&n('gnTrimAngle')===90)
+            sweepAngles.push(document.getElementById('invB').checked?-90:90);
           let chosen=null;
           for(let l=length;l>=minLength-1e-7&&!chosen;l-=5){
             for(let w=width;w>=minWidth-1e-7;w-=5){
-              if(Gen.stockRotationEnvelope(l,w,modelOffset,sweepAngle)>(machine.FieldWidth-2)/2+1e-7)continue;
+              if(sweepAngles.some(a=>Gen.stockRotationEnvelope(l,w,modelOffset,a)>(machine.FieldWidth-2)/2+1e-7))continue;
               const radius=Math.hypot(l/2+Math.abs(modelOffset[0]),w/2+Math.abs(modelOffset[1]));
               if(radius>machine.ParkX-2+1e-7)continue;
               if(document.getElementById('gnTrim').checked&&n('gnTrimAngle')===90&&w/2+Math.abs(modelOffset[1])>machine.FieldWidth/2+1e-7)continue;

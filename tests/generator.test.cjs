@@ -104,7 +104,7 @@ test('oblique vertical STEP faces produce advisory rotation candidates',()=>{
    assert.ok(Math.abs(face.normal[2])<1e-6);
    assert.ok(face.angle>=0&&face.angle<180);
    const t=face.angle*Math.PI/180;
-   assert.ok(Math.abs(Math.sin(t)*face.normal[0]-Math.cos(t)*face.normal[1])<1e-6);
+   assert.ok(Math.abs(Math.sin(t)*face.normal[0]+Math.cos(t)*face.normal[1])<1e-6);
  }
 });
 
@@ -138,16 +138,16 @@ function slopedCapFixture(){
  return 'ISO-10303-21;\nDATA;\n'+lines.join('\n')+'\nENDSEC;\nEND-ISO-10303-21;';
 }
 test('stock rotation envelope checks the whole turn and displacement',()=>{
- const angle=113.93,length=235,width=290,offset=[0,0,0],end=angle*Math.PI/180;
+ const angle=66.07,length=235,width=290,offset=[0,0,0],end=angle*Math.PI/180;
  const final=(length*Math.abs(Math.cos(end))+width*Math.abs(Math.sin(end)))/2;
  assert.ok(final<184,'the final orientation alone looks safe');
  assert.ok(gen.stockRotationEnvelope(length,width,offset,angle)>184,'intermediate rotation exceeds the tower clearance');
- for(const shift of [[0,0,0],[-10,5,0],[15,-20,0]])for(const turn of [30,90,113.93]){
+ for(const shift of [[0,0,0],[-10,5,0],[15,-20,0]])for(const turn of [-90,30,66.07,90]){
    let dense=0;
    for(let i=0;i<=20000;i++){
      const t=turn*Math.PI/180*i/20000;
      for(const x of [-1,1])for(const y of [-1,1])
-       dense=Math.max(dense,Math.abs((shift[0]+x*length/2)*Math.cos(t)+(shift[1]+y*width/2)*Math.sin(t)));
+       dense=Math.max(dense,Math.abs((shift[0]+x*length/2)*Math.cos(t)-(shift[1]+y*width/2)*Math.sin(t)));
    }
    assert.ok(Math.abs(gen.stockRotationEnvelope(length,width,shift,turn)-dense)<.0001);
  }
@@ -166,17 +166,40 @@ test('sloped end contour and final trim are generated from synthetic topology',(
  assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
  const moved=gen.buildProgram(step,'synthetic-bevel.stp',{...o,offset:[-5,5,5]});
  const bevelMove=p=>{
-   const block=p.split('*** FINAL BEVEL')[1],angle=+block.match(/B=([\d.]+)/)[1];
+   const block=p.split('*** FINAL BEVEL')[1],angle=+block.match(/B=(-?[\d.]+)/)[1];
    const cut=block.split(/\r?\n/).find(line=>/^G01 /.test(line));
    return {angle,x:+cut.match(/X(-?[\d.]+)/)[1],z:+cut.match(/Y(-?[\d.]+)/)[1]};
  };
  const base=bevelMove(program),shifted=bevelMove(moved.program),radians=base.angle*Math.PI/180;
- assert.ok(Math.abs((shifted.x-base.x)-(5*Math.sin(radians)+5*Math.cos(radians)))<.03);
+ assert.ok(Math.abs((shifted.x-base.x)-(-5*Math.sin(radians)+5*Math.cos(radians)))<.03);
  assert.ok(Math.abs((shifted.z-base.z)-5)<.02);
+ const reversed=gen.buildProgram(step,'synthetic-bevel.stp',{...o,offset:[-5,5,5],invB:true});
+ const trimStart=p=>{
+   const block=p.split('*** TRIM BLOCK')[1];
+   return +block.split(/\r?\n/).find(l=>/^G01 /.test(l)).match(/X(-?[\d.]+)/)[1];
+ };
+ assert.ok(Math.abs(trimStart(reversed.program)-trimStart(moved.program)-10)<.03,'B90 trim follows inverted table direction and stock offset');
+ const bevelFace=m.verticalBevels().find(b=>shape.rootFaces.includes(b.face));
+ const yc=(shape.planeA+shape.planeB)/2,xc=(result.part.x0+result.part.x1)/2;
+ const values=shape.contour.flatMap(([face])=>Array.from({length:17},(_,i)=>[face.A(i/16),face.B(i/16)]).flat());
+ const signed=p=>(p[0]-bevelFace.point[0])*bevelFace.normal[0]+(p[1]-bevelFace.point[1])*bevelFace.normal[1];
+ const low=Math.min(...values.map(signed)),high=Math.max(...values.map(signed)),kept=high>.02?1:-1;
+ assert.ok(!(low<-.02&&high>.02));
+ for(const [r,inverted] of [[moved,false],[reversed,true]]){
+   const bm=bevelMove(r.program),angle=bm.angle*Math.PI/180*(inverted?-1:1),c=Math.cos(angle),sn=Math.sin(angle);
+   for(const wireX of [-185,185]){
+     const localX=wireX*c+bm.x*sn,localY=-wireX*sn+bm.x*c;
+     const d=signed([localY+xc-5,yc-localX-5,0]);
+     assert.ok(Math.abs(d+kept*o.kerf/2)<.03,'shifted bevel is on the correct STEP plane and waste side');
+   }
+ }
  const placed=gen.autoPlace(step,'synthetic-bevel.stp',{...o,grounded:true,keepHeight:true,preferNegativeX:true});
  assert.ok(placed.offset[0]<=-5&&placed.offset.every(v=>v%5===0));
- for(const candidate of [moved.program,placed.program]){
-   const p=sim.parseGcode(candidate),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ const invertedPlacement=gen.autoPlace(step,'synthetic-bevel.stp',{...o,invB:true,grounded:true,keepHeight:true,preferNegativeX:true});
+ assert.ok(invertedPlacement.offset[0]<=-5);
+ assert.match(invertedPlacement.program.split('*** FINAL BEVEL')[1],/B-/);
+ for(const [candidate,invB] of [[moved.program,false],[reversed.program,true],[placed.program,false],[invertedPlacement.program,true]]){
+   const p=sim.parseGcode(candidate),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB,laser:false});
    assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
  }
  const lifted=gen.groundPlacement(step,'synthetic-bevel.stp',o,{...placed,offset:[placed.offset[0],placed.offset[1],5],displacement:5});
@@ -220,7 +243,7 @@ test('kil2 shows its full diagnostic faces at the selected tolerance',{skip:!pro
  assert.equal(preview.diagnosticOnly,false);assert.equal(preview.slopedPreview,true);
  const bevel=new gen.Model(step).verticalBevels().find(face=>face.face===1235);
  assert.ok(bevel,'the root bevel is identified from its plane and boundary');
- assert.ok(Math.abs(bevel.angle-113.93)<.1,`unexpected bevel angle: ${bevel.angle}`);
+ assert.ok(Math.abs(bevel.angle-66.07)<.1,`unexpected bevel angle: ${bevel.angle}`);
  assert.equal(preview.diagnosticFaces.length,10);
  assert.ok(preview.diagnosticFaces[1].patch,'curved rudder uses a surface patch');
  const patch=preview.diagnosticFaces[1].patch;
@@ -243,7 +266,30 @@ test('kil2 G-code trims, cuts the main contour, then removes the bevel',{skip:!p
  const result=gen.buildProgram(step,'kil2.stp',o),program=result.program;
  const trim=program.indexOf('*** TRIM BLOCK'),profile=program.indexOf('*** PROFILE:'),bevel=program.indexOf('*** FINAL BEVEL');
  assert.ok(trim>=0&&profile>trim&&bevel>profile);
- assert.match(program.slice(bevel),/B113\.93/);
+ assert.match(program.slice(bevel),/B66\.07/);
+ // Compare the final wire plane against the STEP bevel in the simulator's
+ // coordinate convention, independently of the generator's angle formula.
+ const model=new gen.Model(step,gen.identityRotation(),1,.6),face=model.verticalBevels().find(f=>f.face===1235);
+ const [,y0,y1]=model.spanAxis(),yc=(y0+y1)/2,xc=(result.part.x0+result.part.x1)/2;
+ const verifyPlane=(r,inverted)=>{
+   const block=r.program.split('*** FINAL BEVEL')[1],command=+block.match(/B=(-?[\d.]+)/)[1];
+   const line=block.split(/\r?\n/).find(l=>/^G01 /.test(l));
+   const chord=+line.match(/X(-?[\d.]+)/)[1],angle=command*Math.PI/180*(inverted?-1:1);
+   const c=Math.cos(angle),sn=Math.sin(angle),distances=[];
+   for(const wireX of [-185,185]){
+     const localX=wireX*c+chord*sn,localY=-wireX*sn+chord*c;
+     const x=localY+xc,y=yc-localX;
+     distances.push((x-face.point[0])*face.normal[0]+(y-face.point[1])*face.normal[1]);
+   }
+   assert.ok(Math.abs(distances[0]-distances[1])<.03,'wire is parallel to the actual STEP bevel');
+   assert.ok(distances.every(d=>Math.abs(d-.5)<.03),'kerf is on the waste side of the STEP plane');
+ };
+ verifyPlane(result,false);
+ const inverse=gen.buildProgram(step,'kil2.stp',{...o,invB:true});
+ assert.match(inverse.program.split('*** FINAL BEVEL')[1],/B-66\.07/);
+ verifyPlane(inverse,true);
+ const reverseParsed=sim.parseGcode(inverse.program),reverseReport=sim.analyse(reverseParsed,{...reverseParsed.stock,FW:370,HT:490,VT:250,angle:45,invB:true,laser:false});
+ assert.equal(reverseReport.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(reverseReport.warns));
  assert.ok(result.warnings.some(w=>w.includes('Допуск поверхности 0.60')));
  assert.equal(result.smoothSurface,null,'a single-sweep model cannot depict a final bevel');
  const parsed=sim.parseGcode(program),report=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
@@ -683,7 +729,16 @@ test('transverse straight generators support non-right-angle table rotations',()
  const r=gen.buildProgram(text,'diagonal.stp',options());
  const match=r.program.match(/SECONDARY CUT:.*B=(\d+\.\d+)/);
  assert.ok(match,r.program);
- assert.ok(+match[1]>90 && +match[1]<95);
+ const angle=+match[1];assert.ok(angle>85&&angle<90);
+ const op=new gen.Model(text).build().secondaryContours[0],rad=angle*Math.PI/180;
+ // Inverse-rotate a machine wire to the STEP frame and compare its direction.
+ const wire=[-Math.sin(rad),-Math.cos(rad)],cross=wire[0]*op.dir[1]-wire[1]*op.dir[0];
+ assert.ok(Math.abs(cross)<.0001,'wire direction matches the ruled face in simulator coordinates');
+ const inverse=gen.buildProgram(text,'diagonal-inverted.stp',options({invB:true}));
+ const inverseAngle=+inverse.program.match(/SECONDARY CUT:.*B=(-?\d+\.\d+)/)[1];
+ assert.ok(Math.abs(inverseAngle+angle)<.001);
+ const p=sim.parseGcode(inverse.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:true,laser:false});
+ assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
 });
 test('sloping secondary end face: intersect actual STEP face, not X constant',()=>{
  let text=transverseFixture();
