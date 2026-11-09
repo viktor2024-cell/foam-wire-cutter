@@ -208,9 +208,9 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
     <h2>Заготовка</h2>
     <div class="row"><button id="gnStockFromModel" disabled>По модели +10 мм с каждой стороны</button></div>
     <div class="fields">
-      <label>Вдоль струны<input id="gnL" type="number" step="0.01" value="340"></label>
-      <label>Поперёк струны<input id="gnW" type="number" step="0.01" value="230"></label>
-      <label>Высота<input id="gnH" type="number" step="0.01" value="50"></label>
+      <label>Вдоль струны<input id="gnL" type="number" min="0" step="10" value="340"></label>
+      <label>Поперёк струны<input id="gnW" type="number" min="0" step="10" value="230"></label>
+      <label>Высота<input id="gnH" type="number" min="0" step="10" value="50"></label>
       <label>Низ Z<input id="gnZ" type="number" step="1" value="10"></label>
     </div>
     <label class="check"><input type="checkbox" id="gnSideEntry"> Вход и выход справа без подъёма над заготовкой (одна деталь, без отверстий и торцевания)</label>
@@ -3536,7 +3536,12 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
       clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair",
     });
-    const outName = stepFile.name.replace(/\.(stp|step)$/i, "") + (mode === "normal" ? "" : "_" + mode) + "_auto.gcode";
+    const stem = stepFile.name.replace(/\.(stp|step)$/i, "");
+    // - заготовка x-y-z (вдоль струны, поперёк, высота): в имени округляется вверх до 10 мм
+    const sizes = [n("gnL"), n("gnW"), n("gnH")];
+    const dims = sizes.map((v) => String(Math.ceil(v / 10 - 1e-9) * 10)).join("-");
+    const exact = sizes.map((v) => String(+v.toFixed(2))).join("-");
+    const outName = stem + (stem.includes(dims) || stem.includes(exact) ? "" : "_" + dims) + (mode === "normal" ? "" : "_" + mode) + "_auto.gcode";
     $("gnOut").textContent = outName;
     loadProgram(r.program, outName, {generationStamp:generatorSignature()});
     if (prog.check.warns.some((w) => w.level === "crit")) throw new Error("Траектория не прошла проверку симулятора: " + prog.check.warns.find((w) => w.level === "crit").text);
