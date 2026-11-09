@@ -4648,8 +4648,26 @@ const Gen = (() => {
       const commandedAngle=o.invB?-bevel.angle:bevel.angle;
       bevelPlacement={angles:physicalAngles,along};
       const cornerRadius=Math.hypot(stockLength/2+Math.abs(offset[0]),stockWidth/2+Math.abs(offset[1]));
-      if(!cfg.PlacementProbe && physicalAngles.some(angle=>stockAlongWireAtAngle(stockLength,stockWidth,offset,angle)>(cfg.FieldWidth-2)/2+1e-7))
-        throw new StepError("При резе скоса смещённая заготовка не помещается между башнями");
+      // Check stock projection ALONG the wire at every real B angle. Report
+      // measured excess rather than implying that an offset caused it.
+      const failedAngle=!cfg.PlacementProbe?physicalAngles.find(angle=>
+        stockAlongWireAtAngle(stockLength,stockWidth,offset,angle)>(cfg.FieldWidth-2)/2+1e-7):undefined;
+      if(failedAngle!==undefined) {
+        const angleRad=failedAngle*Math.PI/180,cs=Math.cos(angleRad),sn=Math.sin(angleRad),
+          projected=2*stockAlongWireAtAngle(stockLength,stockWidth,offset,failedAngle),
+          available=cfg.FieldWidth-2,
+          move=Math.abs(offset[0]*cs-offset[1]*sn);
+        const maxWidth=Math.abs(sn)>1e-6?
+          (available-stockLength*Math.abs(cs)-2*move)/Math.abs(sn):Infinity;
+        const roundedWidth=Math.floor((maxWidth-1e-5)/5)*5;
+        const suggestion=Number.isFinite(maxWidth)&&maxWidth>=part.x1-part.x0+kerf?
+          " При той же длине уменьшите ширину W до "+maxWidth.toFixed(1)+
+          " мм или меньше"+(roundedWidth>0?" (например "+roundedWidth+" мм)":"")+".":"";
+        throw new StepError("При B"+failedAngle.toFixed(2)+"° проекция заготовки вдоль струны "+
+          projected.toFixed(1)+" мм превышает доступные "+available.toFixed(1)+" мм на "+
+          (projected-available).toFixed(1)+" мм."+suggestion+
+          " Либо используйте «По модели с припуском» для подбора размеров.");
+      }
       if(!cfg.PlacementProbe && cfg.ParkX-cornerRadius<RadialMargin)
         throw new StepError("Нет безопасного места для поворота смещённой заготовки к скосу");
       const signed=p=>p.reduce((sum,v,i)=>sum+(v-bevel.point[i])*bevel.normal[i],0);
