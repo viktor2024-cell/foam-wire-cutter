@@ -4663,7 +4663,7 @@ const Gen = (() => {
         const suggestion=Number.isFinite(maxWidth)&&maxWidth>=part.x1-part.x0+kerf?
           " При той же длине уменьшите ширину W до "+maxWidth.toFixed(1)+
           " мм или меньше"+(roundedWidth>0?" (например "+roundedWidth+" мм)":"")+".":"";
-        throw new StepError("При B"+failedAngle.toFixed(2)+"° проекция заготовки вдоль струны "+
+        throw new StepError("При резе скоса заготовка не помещается между башнями: B"+failedAngle.toFixed(2)+"° проекция заготовки вдоль струны "+
           projected.toFixed(1)+" мм превышает доступные "+available.toFixed(1)+" мм на "+
           (projected-available).toFixed(1)+" мм."+suggestion+
           " Либо используйте «По модели с припуском» для подбора размеров.");
