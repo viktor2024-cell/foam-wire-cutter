@@ -251,9 +251,9 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
       <progress id="gnPlacementProgressBar" max="24" value="0" aria-label="Проверено вариантов поворота"></progress>
     </div>
     <div class="fields">
-      <label>Вдоль струны<input id="gnL" type="number" step="0.01" value="340"></label>
-      <label>Поперёк струны<input id="gnW" type="number" step="0.01" value="230"></label>
-      <label>Высота<input id="gnH" type="number" step="0.01" value="50"></label>
+      <label>Вдоль струны<input id="gnL" type="number" min="0" step="10" value="340"></label>
+      <label>Поперёк струны<input id="gnW" type="number" min="0" step="10" value="230"></label>
+      <label>Высота<input id="gnH" type="number" min="0" step="10" value="50"></label>
       <label>Низ Z<input id="gnZ" type="number" step="1" value="10"></label>
     </div>
     <div class="note">Размеры заданы при столе 0°. Для листа 340×230×50 мм на ребре введите 50, 340, 230 мм соответственно. При отключении торцевания профиль режется при столе 0°.</div>
@@ -2945,20 +2945,47 @@ const Gen = (() => {
       const exterior=this.closedExterior();
       if(exterior)return exterior;
       const [axis, planeA, planeB] = this.spanAxis();
-      const outer = [], holes = [], handled = new Set();
-      for (const raw of this.facesRaw) {
-        // A cross-cut surface may be ruled along a different axis.  Do not
-        // interpret its partial-span edges as rails of the main profile.
-        const hasEndEdge = (plane) => raw.edgeIds.some(id => {
-          const pair = this.edges.get(id);
-          return pair && pair.every(p => Math.abs(p[axis] - plane) < 0.001);
-        });
-        if (!hasEndEdge(planeA) || !hasEndEdge(planeB)) continue;
-        const face = this.ruledFace(this.surface(raw.surf), axis, planeA, planeB, raw.edgeIds, raw.fid);
-        if(face !== null) {
-          (face.closed ? holes : outer).push(face);
-          handled.add(raw.fid);
-        }
+      const outer=[],holes=[],handled=new Set();
+      const hasCap=(r,p)=>r.edgeIds.some(id=>this.edges.get(id)?.every(q=>Math.abs(q[axis]-p)<.001));
+      const groups=[];
+      const sameSurface=(a,b)=>{
+        if(a.pu!==b.pu||a.pv!==b.pv)return false;
+        if(['udomain','vdomain'].some(n=>a[n].some((x,i)=>Math.abs(x-b[n][i])>1e-8)))return false;
+        for(let k=0;k<=3;k++)for(let j=0;j<=3;j++){
+          const u=a.udomain[0]+(a.udomain[1]-a.udomain[0])*k/3,v=a.vdomain[0]+(a.vdomain[1]-a.vdomain[0])*j/3;
+          if(dist(a.at(u,v),b.at(u,v))>.01)return false;
+        }return true;
+      };
+      // Overlapping cap-edge PARAMETER RANGES distinguish patches trimmed
+      // from the same underlying surface but belonging to different contours.
+      const capIntervals=(r,surf)=>{
+        const us=surf.pu===1,sd=us?surf.udomain:surf.vdomain,td=us?surf.vdomain:surf.udomain,
+          at=(s,t)=>us?surf.at(s,t):surf.at(t,s),mid=sum2(td)/2,p0=at(sd[0],mid),p1=at(sd[1],mid),
+          delta=p1[axis]-p0[axis],out=[];
+        if(Math.abs(delta)<1e-6)return out;
+        for(const plane of [planeA,planeB]){
+          const s=sd[0]+(plane-p0[axis])*(sd[1]-sd[0])/delta;
+          for(const id of r.edgeIds){
+            const ends=this.edges.get(id);
+            if(!ends?.every(p=>Math.abs(p[axis]-plane)<.001))continue;
+            try{
+              const ts=ends.map(p=>Model.project(t=>at(s,t),td,p));
+              if(Math.abs(ts[0]-ts[1])>1e-4)out.push([Math.min(...ts),Math.max(...ts)]);
+            }catch(e){}
+          }
+        }return out;
+      };
+      for(const r of this.facesRaw.filter(r=>hasCap(r,planeA)||hasCap(r,planeB))){
+        const surf=this.surface(r.surf),parts=capIntervals(r,surf);
+        const g=groups.find(g=>sameSurface(g.surf,surf)&&parts.some(a=>g.parts.some(b=>
+          Math.min(a[1],b[1])-Math.max(a[0],b[0])>1e-4)));
+        if(g){g.raws.push(r);g.parts.push(...parts);}else groups.push({surf,raws:[r],parts});
+      }
+      for(const g of groups){
+        const edges=[...new Set(g.raws.flatMap(r=>r.edgeIds))];
+        if(![planeA,planeB].every(p=>edges.some(id=>this.edges.get(id)?.every(q=>Math.abs(q[axis]-p)<.001))))continue;
+        const face=this.ruledFace(g.surf,axis,planeA,planeB,edges,g.raws[0].fid,g.raws.length>1);
+        if(face){(face.closed?holes:outer).push(face);g.raws.forEach(r=>handled.add(r.fid));}
       }
       // Classify using STEP topology, NOT the span of four surface corners:
       // that shortcut can miss curved cross-direction faces, including open
@@ -2968,18 +2995,48 @@ const Gen = (() => {
         return vertices.length>0&&[planeA,planeB].some(plane=>
           vertices.every(p=>Math.abs(p[axis]-plane)<.01));
       };
-      const secondary=this.facesRaw.filter(raw=>!handled.has(raw.fid)&&!onEndCap(raw));
-      const secondaryContours=[];
-      if(secondary.length) {
-        const byFid=new Map(secondary.map(raw=>[raw.fid,this.secondaryRuledFace(raw)]));
-        const ids=new Set(byFid.keys());
-        // Connected components by shared STEP edges; each component must
-        // close in both end profiles or the machine must not emit G-code.
-        for(const group of this.cuttingGroups()) {
+      const secondary=this.facesRaw.filter(r=>!handled.has(r.fid)&&!onEndCap(r));
+      const secondaryContours=[],usedSlots=new Set(),slots=[];
+      // An open-bottom notch requires a U-shaped cut, not the ring/entry
+      // slit used for a closed through-hole. Identify two planar walls and
+      // their connected roof, all extruded along the table B90 axis.
+      if(axis===1) {
+        const planar=secondary.map(r=>{
+          const s=this.surface(r.surf);
+          if(s.pu!==1||s.pv!==1)return null;
+          const points=[s.at(s.udomain[0],s.vdomain[0]),s.at(s.udomain[0],s.vdomain[1]),
+            s.at(s.udomain[1],s.vdomain[0]),s.at(s.udomain[1],s.vdomain[1])],
+            low=[0,1,2].map(i=>Math.min(...points.map(p=>p[i]))),
+            high=[0,1,2].map(i=>Math.max(...points.map(p=>p[i])));
+          if(high[0]-low[0]<20)return null;
+          const role=high[1]-low[1]<.01&&high[2]-low[2]>3?'wall':
+            high[2]-low[2]<.01&&high[1]-low[1]>3?'roof':null;
+          return role?{r,role,low,high}:null;
+        }).filter(Boolean);
+        for(const roof of planar.filter(v=>v.role==='roof')){
+          if(usedSlots.has(roof.r.fid))continue;
+          const walls=planar.filter(v=>v.role==='wall'&&!usedSlots.has(v.r.fid)&&
+            Math.abs(v.low[0]-roof.low[0])<.02&&Math.abs(v.high[0]-roof.high[0])<.02&&
+            Math.abs(v.high[2]-roof.low[2])<.02 &&
+            (Math.abs(v.low[1]-roof.low[1])<.02||Math.abs(v.low[1]-roof.high[1])<.02) &&
+            v.r.edgeIds.some(id=>roof.r.edgeIds.includes(id)));
+          const lowWall=walls.find(w=>Math.abs(w.low[1]-roof.low[1])<.02),
+            highWall=walls.find(w=>Math.abs(w.low[1]-roof.high[1])<.02);
+          if(!lowWall||!highWall||lowWall===highWall)continue;
+          for(const w of [roof,lowWall,highWall])usedSlots.add(w.r.fid);
+          slots.push({kind:'openBottomSlot',dir:[1,0],
+            yLo:roof.low[1],yHi:roof.high[1],zRoof:roof.low[2],
+            faces:[roof.r.fid,lowWall.r.fid,highWall.r.fid]});
+        }
+      }
+      const remaining=secondary.filter(r=>!usedSlots.has(r.fid));
+      if(remaining.length){
+        const byFid=new Map(remaining.map(r=>[r.fid,this.secondaryRuledFace(r)])),
+          ids=new Set(byFid.keys());
+        for(const group of this.cuttingGroups()){
           const found=group.faces.filter(fid=>ids.has(fid));
           if(!found.length)continue;
-          const faces=found.map(fid=>byFid.get(fid));
-          const dir=faces[0].dir;
+          const faces=found.map(fid=>byFid.get(fid)),dir=faces[0].dir;
           if(faces.some(f=>Math.abs(f.dir[0]*dir[1]-f.dir[1]*dir[0])>.0001))
             throw new StepError("Дополнительные грани имеют несовместимые направления резки");
           secondaryContours.push({dir,contour:Model.chain(faces),faces:found});
@@ -2987,13 +3044,14 @@ const Gen = (() => {
         }
         if(ids.size)throw new StepError("Не восстановлены дополнительные грани #"+[...ids].join(", #"));
       }
+      secondaryContours.push(...slots);
       // Multiple connected ruled patches can form a single internal contour.
       // A closed face is a contour by itself; open patches are chained by
       // matching both endpoint rails rather than treated as separate holes.
       const innerContours = holes.map(h=>[[h,true]]);
       return { outer: Model.chain(outer), holes: innerContours, secondaryContours, axis, planeA, planeB };
     }
-    ruledFace(surf, axis, planeA, planeB, edgeIds, faceId) {
+    ruledFace(surf, axis, planeA, planeB, edgeIds, faceId, splitSpan=false) {
       // - Параметр размаха: степень 1 и координата по оси размаха меняется вдоль него
       const uMid = sum2(surf.udomain) / 2, vMid = sum2(surf.vdomain) / 2;
       // Compare normalized alignment, not a tiny absolute coordinate drift.
@@ -3105,15 +3163,31 @@ const Gen = (() => {
         const sideEdges = [];
         for (const eid of edgeIds) {
           const [v1, v2] = this.edges.get(eid);
-          if (Math.abs(v1[axis] - planeA) < .01 && Math.abs(v2[axis] - planeB) < .01) sideEdges.push([v1, v2]);
-          else if (Math.abs(v2[axis] - planeA) < .01 && Math.abs(v1[axis] - planeB) < .01) sideEdges.push([v2, v1]);
+          if (Math.abs(v1[axis] - planeA) < 1e-3 && Math.abs(v2[axis] - planeB) < 1e-3) sideEdges.push([v1, v2]);
+          else if (Math.abs(v2[axis] - planeA) < 1e-3 && Math.abs(v1[axis] - planeB) < 1e-3) sideEdges.push([v2, v1]);
         }
         const cornersA = t0 <= t1 ? [endsA[0], endsA[1]] : [endsA[1], endsA[0]];
         const cornersB = u0 <= u1 ? [endsB[0], endsB[1]] : [endsB[1], endsB[0]];
-        for (const k of [0, 1]) {
-          if (!sideEdges.some(([sa, sb]) => dist(cornersA[k], sa) < 0.01 && dist(cornersB[k], sb) < 0.01)) {
-            throw new StepError("Грань #"+faceId+": углы в плоскостях профилей не соединены боковым ребром: соответствие направляющих неоднозначно");
-          }
+        const sideLinks=edgeIds.map(id=>this.edges.get(id)).filter(([a,b])=>
+          ![planeA,planeB].some(p=>Math.abs(a[axis]-p)<.01&&Math.abs(b[axis]-p)<.01));
+        const sideConnected=(from,to)=>{
+          const todo=[from],seen=[];
+          while(todo.length){
+            const p=todo.pop();
+            if(dist(p,to)<.01)return true;
+            if(seen.some(q=>dist(p,q)<.01))continue;
+            seen.push(p);
+            for(const [a,b] of sideLinks){if(dist(p,a)<.01)todo.push(b);if(dist(p,b)<.01)todo.push(a);}
+          }return false;
+        };
+        for(const k of [0,1]){
+          const aligned=sideConnected(cornersA[k],cornersB[k]),
+            crossed=sideConnected(cornersA[k],cornersB[1-k]);
+          // A STEP slot can split a side edge into multiple collinear
+          // fragments. Its parent surface supplies the missing correspondence.
+          // Never accept an explicit reversed/crossed edge connection.
+          if(crossed||(!aligned&&!splitSpan))
+            throw new StepError("Грань #"+faceId+": неоднозначное соответствие торцевых направляющих");
         }
         if (skew > 1e-6) {
           const baseB = railB, knots=spanIsU?surf.V:surf.U;
@@ -4337,6 +4411,34 @@ const Gen = (() => {
         throw new StepError("Ширина заготовки "+stockWidth+" мм не помещается между башнями после поворота стола");
       const zMid=o.bottomZ+stockHeight/2+offset[2];
       for(const op of secondaryContours) {
+        if(op.kind==='openBottomSlot'){
+          // This cut enters via the lower sacrificial stock and follows the
+          // two side walls with a roof crossing. It never closes diagonally.
+          const zMid=o.bottomZ+stockHeight/2,
+            zPartBottom=part.z0-zc+zMid,
+            zFloor=Math.max(o.bottomZ+1,zPartBottom-Math.max(2,kerf+1)),
+            zRoof=op.zRoof-zc+zMid-kerf/2,
+            yLo=op.yLo-yc+kerf/2,yHi=op.yHi-yc-kerf/2,
+            outside=stockLength/2+o.leadMargin;
+          if(yHi<=yLo||zRoof<=zFloor+.5||zFloor>=zPartBottom-.25)
+            throw new StepError("П-образный паз: нет места для входа снизу или ширина меньше пропила");
+          if(outside>cfg.HorizontalTravel/2)
+            throw new StepError("П-образный паз: боковой вход выходит за ход кареток");
+          const path=[[-outside,zFloor],[yLo,zFloor],[yLo,zRoof],[yHi,zRoof],
+            [yHi,zFloor],[outside,zFloor]];
+          program+=";"+EOL+"; *** OPEN BOTTOM SLOT B90: U-PATH, NO CROSSED CLOSING EDGE ***"+EOL;
+          program+=prog.travel("move",cfg.ParkX,safe,cfg.ParkX,safe)+rotate(cfg,90);
+          program+=prog.travel("move",-outside,safe,-outside,safe);
+          for(const [y,z] of path){
+            const kind=y===-outside&&z===zFloor?'move':'cut';
+            program+=prog.travel(kind,y,z,y,z);
+            allTowers.push([[y,z],[y,z]]);
+          }
+          program+=prog.travel("move",outside,safe,outside,safe);
+          program+=prog.travel("move",cfg.ParkX,safe,cfg.ParkX,safe)+rotate(cfg,0);
+          warnings.push("П-образный паз B90: боковые подводы идут через нижний отход, проверьте запас материала и крепление");
+          continue;
+        }
         const [dx,dy]=op.dir;
         let angle=Math.atan2(-dx,-dy)*180/Math.PI;
         // A straight hot wire has no preferred direction along its span.
@@ -5263,12 +5365,17 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
       clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked,
       trimAngle:n("gnTrimAngle"), cutOrder:$("gnCutOrder").value, invB:$("invB").checked, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair"
   };
+  // Keep PR #16 stock dimensions in automatic and F4 filenames.
+  const stem=stepFile.name.replace(/\.(stp|step)$/i,"");
+  const dims=config.stock.map(v=>String(Math.ceil(v/10-1e-9)*10)).join("-");
+  const exact=config.stock.map(v=>String(+v.toFixed(2))).join("-");
+  const outputStem=stem+(stem.includes(dims)||stem.includes(exact)?"":"_"+dims);
   try {
     if (generatorMode === "manual") {
       if(modelZOffset!==0)throw new Error("Для ручных направляющих сначала нажмите «По центру».");
       if (!config.manualGuidePairs.length || !generatorPreview.hasAuxiliaryCurves()) throw new Error("Выберите и подтвердите пары направляющих в 3D.");
       const result=Gen.buildF4Program(stepFile.text,config.manualGuidePairs,config);
-      const outName=stepFile.name.replace(/\.(stp|step)$/i,"")+"_F4_auto.gcode";
+      const outName=outputStem+"_F4_auto.gcode";
       $("gnOut").textContent=outName;
       loadProgram(result.program,outName,{generationStamp:generatorSignature(),previewOnly:false,operatorDirected:true});
       setCamera("3d");
@@ -5292,7 +5399,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
     const r = Gen.buildProgram(stepFile.text, stepFile.name, {
       ...config
     });
-    const outName = stepFile.name.replace(/\.(stp|step)$/i, "") + (mode === "normal" ? "" : "_" + mode) + "_auto.gcode";
+    const outName=outputStem+(mode==="normal"?"":"_"+mode)+"_auto.gcode";
     $("gnOut").textContent = outName;
     loadProgram(r.program, outName, {generationStamp:generatorSignature(),smoothSurface:r.smoothSurface});
     if (prog.check.warns.some((w) => w.level === "crit")) throw new Error("Траектория не прошла проверку симулятора: " + prog.check.warns.find((w) => w.level === "crit").text);
