@@ -601,7 +601,15 @@ const generatorPreview = (() => {
         stock[1]/2+Math.abs(modelOffset[1])<=machine.HorizontalTravel/2+.001 &&
         bottom+modelOffset[2]>=0 &&
         bottom+modelOffset[2]+stock[2]<=machine.VerticalTravel+.001;
-      const fits=stockFits&&stockInMachine;
+      // A blank may fit at B0 but exceed the 370 mm tower spacing at
+      // the STEP bevel angle. Use the same physical projection as G-code.
+      const bevelAngle=geometry.slopedPreview&&Number.isFinite(geometry.slopedBevelAngle)?
+        geometry.slopedBevelAngle:null;
+      const bevelProjection=bevelAngle===null?null:
+        2*Gen.stockAlongWireAtAngle(stock[0],stock[1],modelOffset,bevelAngle);
+      const bevelRoom=machine.FieldWidth-2;
+      const bevelFits=bevelProjection===null||bevelProjection<=bevelRoom+1e-6;
+      const fits=stockFits&&stockInMachine&&bevelFits;
       const shifted=modelOffset.some(v=>v!==0);
       const manualGuides=geometry.auxiliaryCurves?.length>0;
       const unsupported=shifted && !manualGuides && (paired || geometry.secondaryCount>0 || geometry.wireframe);
@@ -691,7 +699,7 @@ const generatorPreview = (() => {
         }
       }
       fit.textContent=(paired?'Пара: ':'Модель: ')+geometry.size.map(v=>v.toFixed(2)).join(' × ')+
-        ' мм. '+(unsupported?'Смещение этой комбинации операций пока не поддерживается. ':fits?'Помещается. ':!stockFits?'Модель не помещается в заготовку. ':'Смещённая заготовка выходит за ход станка. ')+(paired?'Минимальная высота: '+requiredZ.toFixed(1)+' мм. ':'')+
+        ' мм. '+(unsupported?'Смещение этой комбинации операций пока не поддерживается. ':fits?'Помещается. ':!stockFits?'Модель не помещается в заготовку. ':!stockInMachine?'Заготовка выходит за ход станка в B0. ':'Заготовка не помещается между башнями при скосе. ')+(paired?'Минимальная высота: '+requiredZ.toFixed(1)+' мм. ':'')+
         (geometry.diagnosticOnly?'Направление реза не подтверждено.':geometry.axis===1?'Размах вдоль струны.':'Для генерации поверните размах вдоль струны.')+
         (geometry.auxiliaryCurves?.length?' Найдены '+geometry.auxiliaryCurves.length+
           ' вспомогательные кривые (розовые), пар направляющих: '+
@@ -699,6 +707,10 @@ const generatorPreview = (() => {
           '. Предварительные углы стола: '+
           (geometry.guideKinematics?.operations.map(op=>'B'+op.angle).join(', ')||'нет')+
           '. Траектории диагностические, резка запрещена до проверки объёма.':'');
+      if(!bevelFits)fit.textContent+=' При B'+bevelAngle.toFixed(2)+
+        '° проекция '+bevelProjection.toFixed(1)+' мм, доступно '+bevelRoom.toFixed(1)+
+        ' мм (превышение '+(bevelProjection-bevelRoom).toFixed(1)+
+        ' мм). Нажмите «По модели с припуском» или уменьшите размеры заготовки L/W.';
       if (geometry.previewError) fit.textContent += ' Траектория не определена: ' +
         geometry.previewError + (geometry.auxiliaryCurves?.length
           ? '. Для ручной привязки выберите две кривые и нажмите Enter.'
