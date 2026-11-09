@@ -1577,8 +1577,11 @@ test('external F2 open-bottom slot is cut as U, never diagonally closed',{skip:!
  assert.equal(result.secondary,2,'one closed through-hole and one open-bottom slot');
  const g=result.program,mark='*** OPEN BOTTOM SLOT B90: U-PATH, NO CROSSED CLOSING EDGE ***';
  assert.ok(g.includes(mark),'open slot must not be mistaken for a closed ring');
- assert.ok(g.indexOf(mark)<g.indexOf('*** PROFILE:'),'cut slots before releasing outer profile');
- const section=g.split(mark)[1].split('*** PROFILE:')[0];
+ assert.ok(g.indexOf('*** SECONDARY CUT:')<g.indexOf('*** PROFILE:'),'closed B90 bore must be first');
+ assert.ok(g.indexOf('*** PROFILE:')<g.indexOf('*** FINAL OPEN-BOTTOM NOTCH:')&&
+   g.indexOf('*** FINAL OPEN-BOTTOM NOTCH:')<g.indexOf(mark),
+   'open U-slot must be the final machining pass, after the B0 outer profile');
+ const section=g.split(mark)[1].split('*** END BLOCK ***')[0];
  const rows=section.split(/\r?\n/).filter(line=>/^G01 /.test(line));
  const parse=line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?\d+(?:\.\d+)?)/g)].map(m=>[m[1],+m[2]]));
  const points=rows.map(parse);
@@ -1601,6 +1604,8 @@ test('integrated frontend keeps F4 controls and main stock naming',()=>{
  assert.match(html,/id="gnH" type="number" min="0" step="10"/);
  assert.match(html,/const outputStem=stem\+/);
  assert.match(html,/outputStem\+"_F4_auto.gcode"/);
+ // F2's final open groove is deliberately deferred until the main profile.
+ assert.match(html,/FINAL OPEN-BOTTOM NOTCH: AFTER B0 OUTER PROFILE/);
 });
 
 test('external F2: placement preview renders closed channel and open-bottom groove',{skip:!process.env.F2_SLOT_STEP},()=>{
