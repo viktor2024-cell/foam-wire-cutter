@@ -573,3 +573,28 @@ test('external F1-1 offset toward tower fixes travel limits',{skip:!process.env.
  const p=sim.parseGcode(result.program),check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
 });
+
+
+test('external F2 open-bottom slot is cut as U, never diagonally closed',{skip:!process.env.F2_SLOT_STEP},()=>{
+ const step=fs.readFileSync(process.env.F2_SLOT_STEP,'utf8');
+ const o=options({stock:[50,325,240],bottomZ:0,clearance:10,trim:false,powerComp:false});
+ const result=gen.buildProgram(step,'F2-open-slot.stp',o);
+ assert.equal(result.secondary,2,'one closed through-hole and one open-bottom slot');
+ const g=result.program,mark='*** OPEN BOTTOM SLOT B90: U-PATH, NO CROSSED CLOSING EDGE ***';
+ assert.ok(g.includes(mark),'open slot must not be mistaken for a closed ring');
+ assert.ok(g.indexOf(mark)<g.indexOf('*** PROFILE:'),'cut slots before releasing outer profile');
+ const section=g.split(mark)[1].split('*** PROFILE:')[0];
+ const rows=section.split(/\\r?\\n/).filter(line=>/^G01 /.test(line));
+ const parse=line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?\\d+(?:\\.\\d+)?)/g)].map(m=>[m[1],+m[2]]));
+ const points=rows.map(parse);
+ assert.equal(points.length,5,'one entry, two walls, a roof, one exit, no closing diagonal');
+ assert.ok(points.every(p=>Math.abs(p.X-p.Z)<.02&&Math.abs(p.Y-p.A)<.02),
+   'both wire endpoints must follow the same U path');
+ const xy=points.map(p=>[p.X,p.Y]);
+ assert.ok(xy[0][0]<xy[1][0] && Math.abs(xy[0][1]-xy[1][1])<.02);
+ assert.ok(xy[2][0]>xy[1][0] && Math.abs(xy[2][1]-xy[1][1])<.02);
+ assert.ok(xy[3][1]<xy[2][1] && xy[4][0]>xy[3][0]);
+ const parsed=sim.parseGcode(g),report=sim.analyse(parsed,
+   {...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
+});
