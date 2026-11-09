@@ -584,8 +584,8 @@ test('external F2 open-bottom slot is cut as U, never diagonally closed',{skip:!
  assert.ok(g.includes(mark),'open slot must not be mistaken for a closed ring');
  assert.ok(g.indexOf(mark)<g.indexOf('*** PROFILE:'),'cut slots before releasing outer profile');
  const section=g.split(mark)[1].split('*** PROFILE:')[0];
- const rows=section.split(/\\r?\\n/).filter(line=>/^G01 /.test(line));
- const parse=line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?\\d+(?:\\.\\d+)?)/g)].map(m=>[m[1],+m[2]]));
+ const rows=section.split(/\r?\n/).filter(line=>/^G01 /.test(line));
+ const parse=line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?\d+(?:\.\d+)?)/g)].map(m=>[m[1],+m[2]]));
  const points=rows.map(parse);
  assert.equal(points.length,5,'one entry, two walls, a roof, one exit, no closing diagonal');
  assert.ok(points.every(p=>Math.abs(p.X-p.Z)<.02&&Math.abs(p.Y-p.A)<.02),
