@@ -1667,3 +1667,35 @@ test('external F1 multi-face rectangular opening: preview and G-code',{skip:!pro
    {...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
 });
+
+
+test('external F1 rectangular bore: right side in/out even at full machine height',{skip:!process.env.F1_MULTIFACE_STEP},()=>{
+ const step=fs.readFileSync(process.env.F1_MULTIFACE_STEP,'utf8');
+ const o=options({stock:[50,400,240],bottomZ:10,clearance:10,
+   sideEntry:true,side:1,trim:false,powerComp:false});
+ const r=gen.buildProgram(step,'F1(1).stp',o),g=r.program;
+ assert.equal(r.holes,1);
+ assert.equal(r.secondary,0);
+ assert.match(g,/\*\*\* RIGHT-SIDE HOLE ENTRY AND RETURN VIA THE SAME SLIT \*\*\*/);
+ assert.ok(g.indexOf('RIGHT-SIDE HOLE ENTRY')<g.indexOf('*** PROFILE:'));
+ assert.doesNotMatch(g,/TRIM BLOCK|Rotation B90|^G00 B90/m);
+ const section=g.split('RIGHT-SIDE HOLE ENTRY AND RETURN VIA THE SAME SLIT')[1]
+   .split('*** PROFILE:')[0];
+ const coordinates=line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?\d+(?:\.\d+)?)/g)]
+   .map(m=>[m[1],+m[2]]));
+ const rapids=section.split(/\r?\n/).filter(line=>/^G00 X/.test(line));
+ const cuts=section.split(/\r?\n/).filter(line=>/^G01 X/.test(line));
+ assert.equal(rapids.length,1,'approach to the hole from right exterior');
+ assert.ok(cuts.length>100);
+ const origin=coordinates(rapids[0]),returned=coordinates(cuts.at(-1));
+ assert.ok([origin.X,origin.Z,returned.X,returned.Z].every(x=>Math.abs(x-205)<.01));
+ assert.ok(Math.abs(origin.Y-returned.Y)<.01 && Math.abs(origin.A-returned.A)<.01,
+   'hole exit must retrace the same right-hand slit');
+ const parsed=sim.parseGcode(g),report=sim.analyse(parsed,
+   {...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
+ assert.ok(parsed.moves.filter(m=>m.type==='G0'&&m.from.B===0&&m.to.B===0)
+   .every(m=>Math.min(m.from.X,m.to.X,m.from.Z,m.to.Z)>200),
+   'no G00 crosses the 400 mm wide stock even with Z top at 250');
+ assert.match(html,/максимум одно отверстие через правую технологическую прорезь/);
+});
