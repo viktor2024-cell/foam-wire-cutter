@@ -1626,3 +1626,44 @@ test('ordinary STEP preview keeps its ruled rails with no open slot',()=>{
  assert.equal(preview.openSlotCount,0);
  assert.ok(preview.rails.length>=4);
 });
+
+
+test('partitionChains separates external and internal multi-face loops',()=>{
+ const edge=(a,b)=>({t0:0,t1:1,
+   A:t=>[a[0]+(b[0]-a[0])*t,0,a[1]+(b[1]-a[1])*t],
+   B:t=>[a[0]+(b[0]-a[0])*t,50,a[1]+(b[1]-a[1])*t]});
+ const square=(x,z,w,h)=>{
+   const p=[[x,z],[x+w,z],[x+w,z+h],[x,z+h]];
+   return p.map((a,i)=>edge(a,p[(i+1)%4]));
+ };
+ const components=gen.Model.partitionChains([...square(0,0,100,100),...square(20,20,30,30)]);
+ assert.equal(components.length,2);
+ assert.equal(components[0].length,4);
+ assert.equal(components[1].length,4);
+ assert.ok(components.every(c=>c.every(([f,forward])=>forward&&f.t0===0)));
+});
+
+test('external F1 multi-face rectangular opening: preview and G-code',{skip:!process.env.F1_MULTIFACE_STEP},()=>{
+ // Separate from legacy F1_STEP: F1(1) has five outer faces and a
+ // four-face internal rectangular bore, not a single outer loop.
+ const step=fs.readFileSync(process.env.F1_MULTIFACE_STEP,'utf8');
+ const b=new gen.Model(step).build();
+ assert.equal(b.axis,1);
+ assert.equal(b.outer.length,5,'five sections of the outer F1 profile');
+ assert.equal(b.holes.length,1,'four-face rectangle is an internal hole');
+ assert.equal(b.holes[0].length,4);
+ const view=gen.previewGeometry(step);
+ assert.equal(view.diagnosticOnly,false);
+ assert.equal(view.previewError,null);
+ assert.equal(view.outerCount,5);
+ assert.equal(view.rails.length,9);
+ const result=gen.buildProgram(step,'F1(1).stp',
+   options({stock:[50,400,240],bottomZ:0,clearance:10,trim:false,powerComp:false}));
+ assert.equal(result.holes,1);
+ assert.equal(result.secondary,0);
+ assert.ok(result.program.indexOf('*** HOLE:')<result.program.indexOf('*** PROFILE:'),
+   'internal rectangular opening must be cut before outer profile');
+ const parsed=sim.parseGcode(result.program),report=sim.analyse(parsed,
+   {...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
+});
