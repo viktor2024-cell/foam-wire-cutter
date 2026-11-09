@@ -196,10 +196,13 @@ const generatorPreview = (() => {
     const mixed=!!geometry?.auxiliaryCurves?.length;
     const blocked=geometry?.secondaryCount>0&&
       document.getElementById('gnCutOrder').value==='B0_B90';
+    const finalOpenSlot=geometry?.openSlotCount>0&&!blocked&&!mixed;
     document.getElementById('gnOrderExplanation').textContent=
-      'План: '+trimming+orderLabel+'. '+
-      (mixed?'Для вспомогательных кривых это только диагностическая последовательность, G-code F4 до проверки сохранности детали заблокирован.':
+      'План: '+trimming+(finalOpenSlot?
+        'B90 замкнутое отверстие → B0 основной профиль → B90 нижний паз (последний)':orderLabel)+'. '+
+      (mixed?'Для вспомогательных кривых это диагностическая последовательность; проверьте G-code F4 отдельно.':
         blocked?'ВНИМАНИЕ: B0 первым может освободить деталь; этот порядок до дополнительной проверки заблокирован.':
+        finalOpenSlot?'Перед завершающим пазом проверьте фиксацию детали после основного профиля.':
         'При поддерживаемой геометрии генератор сформирует G-code с указанными параметрами.');
   }
   guideOp.addEventListener('change',updateGuideMotion);
