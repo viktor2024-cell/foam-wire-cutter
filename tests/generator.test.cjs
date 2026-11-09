@@ -804,7 +804,9 @@ test('right-side entry stays outside stock on rapids and needs no overhead heigh
  // Approach and return are on the right, all rapid destinations outside the stock width.
  assert.ok(p.moves.filter(m=>m.type==='G0').every(m=>m.to.X>70&&m.to.Z>70));
  assert.throws(()=>build({sideEntry:true,side:-1}),/Боковой вход/);
- assert.throws(()=>build({sideEntry:true,trim:true}),/Боковой вход/);
+ const noActualTrim=build({sideEntry:true,trim:true});
+ assert.doesNotMatch(noActualTrim.program,/TRIM BLOCK/,
+   'checked trim must not block right entry when no trim allowance exists');
  assert.throws(()=>build({sideEntry:true,pair:true}),/Боковой вход/);
  assert.throws(()=>build({sideEntry:true,stock:[50,480,60]}),/коридора/);
  assert.throws(()=>build({sideEntry:true,stock:[50,140,250],bottomZ:10}),/Верх заготовки/);
@@ -1674,6 +1676,9 @@ test('external F1 rectangular bore: right side in/out even at full machine heigh
  const o=options({stock:[50,400,240],bottomZ:10,clearance:10,
    sideEntry:true,side:1,trim:false,powerComp:false});
  const r=gen.buildProgram(step,'F1(1).stp',o),g=r.program;
+ const checked=gen.buildProgram(step,'F1(1).stp',{...o,trim:true});
+ assert.doesNotMatch(checked.program,/TRIM BLOCK/,'no positive F1 trim allowance');
+ assert.match(checked.program,/RIGHT-SIDE HOLE ENTRY/);
  assert.equal(r.holes,1);
  assert.equal(r.secondary,0);
  assert.match(g,/\*\*\* RIGHT-SIDE HOLE ENTRY AND RETURN VIA THE SAME SLIT \*\*\*/);
