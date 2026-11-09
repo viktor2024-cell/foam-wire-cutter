@@ -3536,7 +3536,9 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
       clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair",
     });
-    const outName = stepFile.name.replace(/\.(stp|step)$/i, "") + (mode === "normal" ? "" : "_" + mode) + "_auto.gcode";
+    const stem = stepFile.name.replace(/\.(stp|step)$/i, "");
+    const dims = [n("gnL"), n("gnW"), n("gnH")].map((v) => String(+v.toFixed(2))).join("-");   // - заготовка x-y-z: вдоль струны, поперёк, высота
+    const outName = stem + (stem.includes(dims) ? "" : "_" + dims) + (mode === "normal" ? "" : "_" + mode) + "_auto.gcode";
     $("gnOut").textContent = outName;
     loadProgram(r.program, outName, {generationStamp:generatorSignature()});
     if (prog.check.warns.some((w) => w.level === "crit")) throw new Error("Траектория не прошла проверку симулятора: " + prog.check.warns.find((w) => w.level === "crit").text);
