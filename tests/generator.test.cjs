@@ -1602,3 +1602,22 @@ test('integrated frontend keeps F4 controls and main stock naming',()=>{
  assert.match(html,/const outputStem=stem\+/);
  assert.match(html,/outputStem\+"_F4_auto.gcode"/);
 });
+
+test('external F2: placement preview renders closed channel and open-bottom groove',{skip:!process.env.F2_SLOT_STEP},()=>{
+ const text=fs.readFileSync(process.env.F2_SLOT_STEP,'utf8');
+ const preview=gen.previewGeometry(text);
+ assert.equal(preview.diagnosticOnly,false,'F2 should not fall back to an empty diagnostic');
+ assert.equal(preview.previewError,null);
+ assert.equal(preview.openSlotCount,1,'U-shaped notch must be recognized in preview');
+ assert.equal(preview.secondaryCount,2,'keep both cross-direction operations');
+ assert.ok(preview.rails.length>=11,'render outer shell and closed channel');
+ assert.ok(preview.edgeLines.length>=10,'show actual trimmed STEP edges of the open notch');
+ assert.ok(preview.rails.every(rail=>rail.length>=2));
+ assert.ok(preview.size.every(v=>v>0&&Number.isFinite(v)));
+});
+test('ordinary STEP preview keeps its ruled rails with no open slot',()=>{
+ const preview=gen.previewGeometry(fixture);
+ assert.equal(preview.diagnosticOnly,false);
+ assert.equal(preview.openSlotCount,0);
+ assert.ok(preview.rails.length>=4);
+});
