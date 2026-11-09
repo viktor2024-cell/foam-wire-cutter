@@ -4469,7 +4469,7 @@ const Gen = (() => {
       throw new StepError("Для STEP только с кривыми пока поддержана одна обычная деталь; пара, зеркало и боковой вход заблокированы до проверки соответствия щелей");
     if (secondaryContours.length && (o.pair || o.mirror || sideEntry)) throw new StepError("Дополнительные направления: режим пары, зеркала и бокового входа ещё не поддержан; G-code заблокирован");
     if (sideEntry && shifted) throw new StepError("Боковой вход со смещённой заготовкой пока не поддерживается");
-    if (sideEntry && (o.trim !== false || o.pair || holes.length > 1 || o.side !== 1)) throw new Error("Боковой вход справа поддерживает одну деталь, не более одного внутреннего отверстия, без торцевания и входа слева");
+    if (sideEntry && (hasTrim || o.pair || holes.length > 1 || o.side !== 1)) throw new Error("Боковой вход справа поддерживает одну деталь, не более одного внутреннего отверстия, без фактического торцевания и входа слева");
     if (sideEntry && (stockWidth / 2 + o.leadMargin > cfg.ParkX || o.leadMargin <= 0)) throw new Error("Нет внешнего коридора между правым краем заготовки и парковкой");
     const errors = cfg.PlacementProbe ? [] : checkTrim(cfg, hasTrim ? trim : { ...trim, TrimEnds: 0 }, !sideEntry);
     if (errors.length) throw new Error(errors.join("; "));
