@@ -2164,7 +2164,11 @@ const Gen = (() => {
       if (!previewError) previewError = e.message;
     }
     const sampled = outer.map(([face]) => sampleFace(face, face.t0, face.t1, 0.05, 5));
-    const rails = [...outer, ...holes.flat(), ...secondaryContours.flatMap(g=>g.contour)].map(([face]) =>
+    // Closed secondary cuts have a chain of ruled faces. An open-bottom
+    // U-groove is a machining operation without .contour; its original STEP
+    // edges are rendered separately rather than aborting the whole preview.
+    const drawableSecondary=secondaryContours.flatMap(op=>Array.isArray(op.contour)?op.contour:[]);
+    const rails = [...outer, ...holes.flat(), ...drawableSecondary].map(([face]) =>
       sampleFace(face, face.t0, face.t1, 0.01, 2)
         .map(pair => pair.map(p => [-p[1],p[0],p[2]])));
     let diagnosticShell=null;
@@ -2173,8 +2177,15 @@ const Gen = (() => {
     let bevelCandidates=[];
     if(!built&&!model.wireframe)try{bevelCandidates=model.verticalBevels();}catch(e){/* advisory only */}
     const edgeLines = [];
-    if (!built) for (const ends of model.edges.values()) {
-      if (ends.length===2 && ends.every(p=>p.every(Number.isFinite)))
+    const slotFaceIds=new Set(secondaryContours.filter(op=>op.kind==='openBottomSlot')
+      .flatMap(op=>op.faces||[]));
+    const slotEdgeIds=new Set(model.facesRaw.filter(face=>slotFaceIds.has(face.fid))
+      .flatMap(face=>face.edgeIds));
+    const visibleEdges=built
+      ? [...slotEdgeIds].map(id=>model.edges.get(id))
+      : [...model.edges.values()];
+    for (const ends of visibleEdges) {
+      if (ends?.length===2 && ends.every(p=>p.every(Number.isFinite)))
         edgeLines.push(ends.map(p=>[-p[1],p[0],p[2]]));
     }
     // Stock placement uses the BREP boundary where available; for the manual
@@ -2190,7 +2201,8 @@ const Gen = (() => {
     const high=[0,1,2].map(k=>Math.max(...points.map(p=>p[k])));
     const closedShell=built&&outer.length===1&&outer[0][0].closed&&!holes.length
       ? {rail:rails[0],capAxis:axis===0?1:axis===1?0:2} : null;
-    return {rails,edgeLines,diagnosticShell,diagnosticFaces,closedShell,bevelCandidates,slopedPreview,slopedBevelAngle,outerCount:outer.length,previewError,diagnosticOnly:!!previewError,
+    return {rails,edgeLines,openSlotCount:slotFaceIds.size?secondaryContours.filter(op=>op.kind==='openBottomSlot').length:0,
+      diagnosticShell,diagnosticFaces,closedShell,bevelCandidates,slopedPreview,slopedBevelAngle,outerCount:outer.length,previewError,diagnosticOnly:!!previewError,
       axis, sampled, wireframe:!!wireframe, auxiliaryCurves, guideAnalysis,
       guideKinematics, secondaryCount:secondaryContours.length,
       center:low.map((v,k)=>(v+high[k])/2),
