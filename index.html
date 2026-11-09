@@ -280,7 +280,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
   </section>
   <section class="box gn-result">
     <h2>G-code</h2>
-    <label class="check gn-auto"><input type="checkbox" id="gnSideEntry"> Вход и выход справа без подъёма над заготовкой (одна деталь, без отверстий и торцевания)</label>
+    <label class="check gn-auto"><input type="checkbox" id="gnSideEntry"> Вход и выход справа (одна деталь, максимум одно отверстие через правую технологическую прорезь, без торцевания)</label>
     <label class="check"><input type="checkbox" id="gnTrim" checked> Торцевать заготовку</label>
     <div class="fields">
       <label>Угол торцевания
@@ -4146,6 +4146,35 @@ const Gen = (() => {
     g += prog.travel("cut", yl, levelL, yr, levelR);       // - обратно по той же щели
     return [g, towers];
   }
+  // For one closed hole, enter from the right stock edge through a single
+  // intentional slit in the retained foam, retracing exactly the same slit
+  // after the hole. All G00 destinations stay outside the right stock edge.
+  function rightSideHoleBlock(prog, contour, layout, axis, kerf, notes, sag, maxStep, stockWidth, margin, stockCenter=0) {
+    const segments=prepareContour(contour.map(([face,forward])=>faceSegment(face,forward)),axis,kerf,false,notes);
+    const yOut=stockCenter+stockWidth/2+margin;
+    let best=null;
+    for(let k=0;k<segments.length;k++)for(let j=0;j<=512;j++){
+      const u=j/512,seg=segments[k],a=layout.machine(seg.A(u)),b=layout.machine(seg.B(u));
+      // Optimize for the rightmost point of the complete wire, not just
+      // one face or one tower. Break ties toward the upper corner.
+      const right=Math.min(a[1],b[1]),height=(a[2]+b[2])/2;
+      if(!best||right>best.right+.001||
+        (Math.abs(right-best.right)<=.001&&height>best.height))
+        best={k,u,right,height};
+    }
+    const towers=sampleSequence(startSequence(segments,best.k,best.u),sag,maxStep)
+      .map(([a,b])=>layout.towers(a,b));
+    const [[yl,zl],[yr,zr]]=towers[0];
+    if(Math.max(yl,yr)>=yOut-.1)
+      throw new StepError("Правый вход к отверстию: нет внешнего коридора");
+    let g=";"+EOL+"; *** RIGHT-SIDE HOLE ENTRY AND RETURN VIA THE SAME SLIT ***"+EOL;
+    g+="; TECHNICAL SLIT THROUGH RETAINED MATERIAL: CHECK ITS POSITION IN 3D"+EOL;
+    g+=prog.travel("move",yOut,zl,yOut,zr);
+    g+=prog.travel("cut",yl,zl,yr,zr);
+    for(const [[y1,z1],[y2,z2]] of towers.slice(1))g+=prog.travel("cut",y1,z1,y2,z2);
+    g+=prog.travel("cut",yOut,zl,yOut,zr);
+    return [g,towers];
+  }
   function profileBlock(safe, prog, contour, layout, axis, kerf, notes, side, stockWidth, margin, sag, maxStep, sideEntry = false, stockCenter = 0, preferTop = false) {
     let segments = prepareContour(contour.map(([f, fw]) => faceSegment(f, fw)), axis, kerf, true, notes);
     const smoothExterior=contour.length===1&&contour[0][0].closed;
@@ -4440,7 +4469,7 @@ const Gen = (() => {
       throw new StepError("Для STEP только с кривыми пока поддержана одна обычная деталь; пара, зеркало и боковой вход заблокированы до проверки соответствия щелей");
     if (secondaryContours.length && (o.pair || o.mirror || sideEntry)) throw new StepError("Дополнительные направления: режим пары, зеркала и бокового входа ещё не поддержан; G-code заблокирован");
     if (sideEntry && shifted) throw new StepError("Боковой вход со смещённой заготовкой пока не поддерживается");
-    if (sideEntry && (o.trim !== false || o.pair || holes.length || o.side !== 1)) throw new Error("Боковой вход справа требует одну деталь без отверстий, торцевания и входа слева");
+    if (sideEntry && (o.trim !== false || o.pair || holes.length > 1 || o.side !== 1)) throw new Error("Боковой вход справа поддерживает одну деталь, не более одного внутреннего отверстия, без торцевания и входа слева");
     if (sideEntry && (stockWidth / 2 + o.leadMargin > cfg.ParkX || o.leadMargin <= 0)) throw new Error("Нет внешнего коридора между правым краем заготовки и парковкой");
     const errors = cfg.PlacementProbe ? [] : checkTrim(cfg, hasTrim ? trim : { ...trim, TrimEnds: 0 }, !sideEntry);
     if (errors.length) throw new Error(errors.join("; "));
@@ -4563,7 +4592,8 @@ const Gen = (() => {
       const [block,towers] = model.wireframe && hole.entry
         ? wireframeSlitHoleBlock(safe,prog,hole,layout,axis,kerf,warnings,sag,maxStep,
                                  stockWidth,o.leadMargin,o.bottomZ,o.side)
-        : holeBlock(safe,prog,hole,layout,axis,kerf,warnings,sag,maxStep,gap,fromBelow);
+        : sideEntry ? rightSideHoleBlock(prog,hole,layout,axis,kerf,warnings,sag,maxStep,stockWidth,o.leadMargin,offset[1])
+          : holeBlock(safe,prog,hole,layout,axis,kerf,warnings,sag,maxStep,gap,fromBelow);
       program += block; allTowers.push(...towers);
     };
     const addProfile = (layout, side) => {
@@ -4599,6 +4629,7 @@ const Gen = (() => {
           stockWidth,o.leadMargin,o.bottomZ,o.side);
         program+=block;allTowers.push(...towers);
       } else for (const hole of holes) addHole(hole, layout, null, false);
+      if(sideEntry&&holes.length)warnings.push("Отверстие: правая технологическая прорезь от кромки заготовки через сохраняемую деталь; возврат по той же прорези. Проверьте положение в 3D.");
       addProfile(layout, o.side);
     }
     if(deferredOpenSlots.length){
