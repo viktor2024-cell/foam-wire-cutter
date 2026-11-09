@@ -1704,3 +1704,31 @@ test('external F1 rectangular bore: right side in/out even at full machine heigh
    'no G00 crosses the 400 mm wide stock even with Z top at 250');
  assert.match(html,/максимум одно отверстие через правую технологическую прорезь/);
 });
+
+
+test('bevel clearance uses projected full stock width at B66',()=>{
+ const angle=66.06812522731144;
+ const wide=2*gen.stockAlongWireAtAngle(240,300,[0,0,0],angle);
+ const fit=2*gen.stockAlongWireAtAngle(240,295,[0,0,0],angle);
+ assert.ok(wide>368&&fit<368);
+ assert.ok(Math.abs(wide-371.56)<.08);
+ assert.ok(Math.abs(fit-366.99)<.08);
+});
+
+test('external kil STEP: measured bevel overrun gives feasible stock suggestion',{skip:!process.env.KIL_BEVEL_STEP},()=>{
+ const step=fs.readFileSync(process.env.KIL_BEVEL_STEP,'utf8');
+ const option=options({stock:[240,300,40],bottomZ:10,clearance:20,
+   tolerance:.3,trim:false,sideEntry:false,powerComp:false});
+ const view=gen.previewGeometry(step,gen.identityRotation(),1,.3);
+ assert.equal(view.diagnosticOnly,false);
+ assert.equal(view.slopedPreview,true);
+ assert.ok(Math.abs(view.slopedBevelAngle-66.0681)<.05);
+ assert.throws(()=>gen.buildProgram(step,'kil.stp',option),
+   /B66\.07°.*371\.6 мм.*368\.0 мм.*3\.6 мм.*295 мм/);
+ const rightSize={...option,stock:[240,295,40]};
+ const result=gen.buildProgram(step,'kil.stp',rightSize);
+ assert.match(result.program,/FINAL BEVEL: STEP face/);
+ const parsed=sim.parseGcode(result.program),report=sim.analyse(parsed,
+   {...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
+});
