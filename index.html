@@ -4406,24 +4406,11 @@ const Gen = (() => {
       // - После торцевания возвращаем стол в 0°: основной профиль всегда режется в этой позиции
       program += ";" + EOL + "; - Return table to B0 after trimming" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe) + rotate(cfg, 0);
     }
-    // The existing solid-only secondary CAM can safely cut cross-sections
-    // before releasing the outer profile. Cutting the outer first may drop
-    // the part, so B0-first is rejected until material removal is simulated.
-    if(secondaryContours.length && cutOrder==='B0_B90')
-      throw new StepError("Порядок B0 → B90 не подтверждён: наружный профиль B0 может освободить деталь до реза B90. Выберите B90 → B0 или проверьте сохранность детали после B0.");
-    // Cross-direction operations run BEFORE the outer profile releases the
-    // part. B rotates the original (X,Y) stock frame, not the foam geometry.
-    // The simulator rotates machine coordinates by +B. Model coordinates
-    // are mapped as machine X=-model Y, machine Y=model X at B0.
-    if(secondaryContours.length) {
-      const radius90=Math.hypot(stockWidth,stockLength)/2;
-      if(cfg.ParkX-radius90<RadialMargin)
-        throw new StepError("При повороте для второго реза заготовка задевает парковочный коридор (радиус "+radius90.toFixed(1)+" мм)");
-      if(stockWidth>cfg.FieldWidth-2)
-        throw new StepError("Ширина заготовки "+stockWidth+" мм не помещается между башнями после поворота стола");
-      const zMid=o.bottomZ+stockHeight/2+offset[2];
-      for(const op of secondaryContours) {
-        if(op.kind==='openBottomSlot'){
+    const deferredOpenSlots=secondaryContours.filter(op=>op.kind==='openBottomSlot');
+    const emitOpenBottomSlot=(op)=>{
+      // Finishing U cut: it can sever the foam bridge that held the piece.
+      // Preserve the closed B90 bore first, do the B0 skin next, then this slot.
+
           // This cut enters via the lower sacrificial stock and follows the
           // two side walls with a roof crossing. It never closes diagonally.
           const zMid=o.bottomZ+stockHeight/2,
@@ -4448,9 +4435,26 @@ const Gen = (() => {
           }
           program+=prog.travel("move",outside,safe,outside,safe);
           program+=prog.travel("move",cfg.ParkX,safe,cfg.ParkX,safe)+rotate(cfg,0);
-          warnings.push("П-образный паз B90: боковые подводы идут через нижний отход, проверьте запас материала и крепление");
-          continue;
-        }
+          warnings.push("П-образный паз B90 выполняется после наружного профиля; проверьте фиксацию детали перед повторным поворотом и подвод через нижний отход.");
+    };
+    // The existing solid-only secondary CAM can safely cut cross-sections
+    // before releasing the outer profile. Cutting the outer first may drop
+    // the part, so B0-first is rejected until material removal is simulated.
+    if(secondaryContours.length && cutOrder==='B0_B90')
+      throw new StepError("Порядок B0 → B90 не подтверждён: наружный профиль B0 может освободить деталь до реза B90. Выберите B90 → B0 или проверьте сохранность детали после B0.");
+    // Cross-direction operations run BEFORE the outer profile releases the
+    // part. B rotates the original (X,Y) stock frame, not the foam geometry.
+    // The simulator rotates machine coordinates by +B. Model coordinates
+    // are mapped as machine X=-model Y, machine Y=model X at B0.
+    if(secondaryContours.length) {
+      const radius90=Math.hypot(stockWidth,stockLength)/2;
+      if(cfg.ParkX-radius90<RadialMargin)
+        throw new StepError("При повороте для второго реза заготовка задевает парковочный коридор (радиус "+radius90.toFixed(1)+" мм)");
+      if(stockWidth>cfg.FieldWidth-2)
+        throw new StepError("Ширина заготовки "+stockWidth+" мм не помещается между башнями после поворота стола");
+      const zMid=o.bottomZ+stockHeight/2+offset[2];
+      for(const op of secondaryContours) {
+        if(op.kind==='openBottomSlot')continue; // final pass, after the outer profile
         const [dx,dy]=op.dir;
         let angle=Math.atan2(-dx,-dy)*180/Math.PI;
         // A straight hot wire has no preferred direction along its span.
@@ -4526,6 +4530,10 @@ const Gen = (() => {
         program+=block;allTowers.push(...towers);
       } else for (const hole of holes) addHole(hole, layout, null, false);
       addProfile(layout, o.side);
+    }
+    if(deferredOpenSlots.length){
+      program+=";"+EOL+"; *** FINAL OPEN-BOTTOM NOTCH: AFTER B0 OUTER PROFILE ***"+EOL;
+      for(const op of deferredOpenSlots)emitOpenBottomSlot(op);
     }
     let bevelPlacement=null;
     if(slopedEnd){
