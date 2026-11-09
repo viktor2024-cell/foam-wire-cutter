@@ -2997,7 +2997,7 @@ const Gen = (() => {
         const edges=[...new Set(g.raws.flatMap(r=>r.edgeIds))];
         if(![planeA,planeB].every(p=>edges.some(id=>this.edges.get(id)?.every(q=>Math.abs(q[axis]-p)<.001))))continue;
         const face=this.ruledFace(g.surf,axis,planeA,planeB,edges,g.raws[0].fid,g.raws.length>1);
-        if(face){(face.closed?holes:outer).push(face);g.raws.forEach(r=>handled.add(r.fid));}
+        if(face){face.boundaryEdgeIds=edges;(face.closed?holes:outer).push(face);g.raws.forEach(r=>handled.add(r.fid));}
       }
       // Classify using STEP topology, NOT the span of four surface corners:
       // that shortcut can miss curved cross-direction faces, including open
@@ -3061,7 +3061,54 @@ const Gen = (() => {
       // A closed face is a contour by itself; open patches are chained by
       // matching both endpoint rails rather than treated as separate holes.
       const innerContours = holes.map(h=>[[h,true]]);
-      return { outer: Model.chain(outer), holes: innerContours, secondaryContours, axis, planeA, planeB };
+      const components=Model.partitionChains(outer);
+      let outerChain;
+      if(components.length===1)outerChain=components[0];
+      else {
+        // End-cap topology explicitly distinguishes the outside wire from
+        // holes whose walls consist of multiple ruled STEP patches.
+        const capRoles=new Map();
+        for(const cap of this.facesRaw.filter(onEndCap)){
+          const raw=this.entities.get(cap.fid);
+          for(const boundRef of raw.args[1]){
+            const bound=this.get(boundRef);
+            if(!['FACE_OUTER_BOUND','FACE_BOUND'].includes(bound.name))continue;
+            const loop=this.get(bound.args[1]);
+            for(const edgeRef of loop.args[1]){
+              const id=this.get(edgeRef).args[3].id,previous=capRoles.get(id);
+              if(previous&&previous!==bound.name)throw new StepError('STEP: противоречивые границы отверстия');
+              capRoles.set(id,bound.name);
+            }
+          }
+        }
+        const role=chain=>{
+          const kinds=new Set(chain.flatMap(([face])=>(face.boundaryEdgeIds||[])
+            .filter(id=>this.edges.get(id)?.every(p=>Math.abs(p[axis]-planeA)<.001))
+            .map(id=>capRoles.get(id)||'UNKNOWN')));
+          if(kinds.size!==1)throw new StepError('STEP: неоднозначная принадлежность контура к наружной границе/отверстию');
+          return [...kinds][0];
+        };
+        const ranked=components.map(chain=>({chain,kind:role(chain)}));
+        const external=ranked.filter(item=>item.kind==='FACE_OUTER_BOUND');
+        const internal=ranked.filter(item=>item.kind==='FACE_BOUND');
+        if(external.length!==1||internal.length!==ranked.length-1)
+          throw new StepError('STEP: несколько несвязанных наружных контуров или неразмеченные отверстия');
+        outerChain=external[0].chain;
+        // Do not accept a separate body or a hole crossing the external
+        // boundary as a machinable internal opening.
+        const polygon=chain=>chain.flatMap(([face,fw])=>
+          Array.from({length:65},(_,i)=>{const u=i/65,t=(fw?face.t0:face.t1)+(fw?face.t1-face.t0:face.t0-face.t1)*u,p=face.A(t);return [p[0],p[2]]}));
+        const outline=polygon(outerChain);
+        const inside=p=>{let hit=false;for(let i=0,j=outline.length-1;i<outline.length;j=i++){
+          const a=outline[i],b=outline[j];
+          if((a[1]>p[1])!==(b[1]>p[1])&&p[0]<(b[0]-a[0])*(p[1]-a[1])/(b[1]-a[1])+a[0])hit=!hit;
+        }return hit;};
+        for(const {chain} of internal){
+          if(!polygon(chain).every(inside))throw new StepError('STEP: внутренний контур выходит за наружный профиль');
+          innerContours.push(chain);
+        }
+      }
+      return { outer: outerChain, holes: innerContours, secondaryContours, axis, planeA, planeB };
     }
     ruledFace(surf, axis, planeA, planeB, edgeIds, faceId, splitSpan=false) {
       // - Параметр размаха: степень 1 и координата по оси размаха меняется вдоль него
@@ -3261,6 +3308,29 @@ const Gen = (() => {
       return t;
     }
     // --- Замыкает грани в цепочку по совпадающим концам направляющей A
+    // STEP end caps may contain several independently closed contours.
+    // Do not join unrelated ruled faces just because they share a solid.
+    static partitionChains(faces) {
+      if(!faces.length)throw new StepError('Нет линейчатых граней');
+      const rest=faces.slice(),components=[];
+      while(rest.length){
+        const first=rest.shift(),start=first.A(first.t0),part=[first];
+        let current=first.A(first.t1);
+        while(dist(current,start)>.01){
+          const matches=[];
+          for(let i=0;i<rest.length;i++){
+            const face=rest[i],a=face.A(face.t0),b=face.A(face.t1);
+            if(dist(current,a)<.01||dist(current,b)<.01)matches.push(i);
+          }
+          if(matches.length!==1)throw new StepError('Профиль: разрыв либо неоднозначная развилка граней');
+          const face=rest.splice(matches[0],1)[0];
+          current=dist(current,face.A(face.t0))<.01?face.A(face.t1):face.A(face.t0);
+          part.push(face);
+        }
+        components.push(Model.chain(part));
+      }
+      return components;
+    }
     static chain(faces) {
       if (faces.length === 0) throw new StepError("Нет линейчатых граней");
       const ends = (f) => [f.A(f.t0), f.A(f.t1)];
