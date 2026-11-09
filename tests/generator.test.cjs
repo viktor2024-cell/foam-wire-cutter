@@ -591,7 +591,7 @@ test('external F2 open-bottom slot is cut as U, never diagonally closed',{skip:!
  assert.ok(points.every(p=>Math.abs(p.X-p.Z)<.02&&Math.abs(p.Y-p.A)<.02),
    'both wire endpoints must follow the same U path');
  const xy=points.map(p=>[p.X,p.Y]);
- assert.ok(xy[0][0]<xy[1][0] && Math.abs(xy[0][1]-xy[1][1])<.02);
+ assert.ok(Math.abs(xy[0][0]-xy[1][0])<.02 && xy[1][1]>xy[0][1]);
  assert.ok(xy[2][0]>xy[1][0] && Math.abs(xy[2][1]-xy[1][1])<.02);
  assert.ok(xy[3][1]<xy[2][1] && xy[4][0]>xy[3][0]);
  const parsed=sim.parseGcode(g),report=sim.analyse(parsed,
