@@ -187,11 +187,11 @@ test('upper apex avoids an overhanging side corner; failed approach re-selects a
  });
  const layout={machine:p=>[p[1],p[0],p[2]],towers:(a,b)=>[[a[0],a[2]],[b[0],b[2]]]};
  const notes=[],program=new gen.Program(gen.CONFIG,false,5);
- // The topmost roof point, rather than the old side corner, permits the lead-in.
+ // The crown lies above a side corner. An exposed chord-end corner
+ // allows a COMPLETE upper-before-lower cut from above.
  const [top]=gen.profileBlock(40,program,contour,layout,1,0,notes,1,80,5,.01,1,false,0,true);
- assert.match(top,/top apex entry/);
- assert.match(top,/UPPER-FIRST CHECK: NOT VERIFIED/,
-   'a roof apex must not be mistaken for a verified full upper-first pass');
+ assert.match(top,/top corner entry, upper first/);
+ assert.match(top,/UPPER-FIRST CHECK: both wire ends agree/);
  assert.match(top,/ENTRY FROM ABOVE; EXIT THROUGH THE SAME SLIT/);
  // With insufficient vertical clearance the rejected apex is NOT a valid
  // side-entry target: the actual side-facing corner must be selected again.
@@ -288,7 +288,7 @@ test('thin tapered stab nose still cuts upper before lower regardless of STEP fa
  }
 });
 
-test('a mid-chord top apex is not mislabeled as fully upper-first',()=>{
+test('mid-chord crown relocates the top entry to a chord-end corner',()=>{
  // An airfoil crown at x=0 divides the upper skin into two arcs. A
  // single closed traverse cannot cover both arcs before touching the bottom.
  const root=[[12,5],[0,16],[-12,5],[-12,1],[12,1]];
@@ -302,10 +302,26 @@ test('a mid-chord top apex is not mislabeled as fully upper-first',()=>{
  const notes=[];
  const [code]=gen.profileBlock(35,new gen.Program(gen.CONFIG,false,5),contour,
    layout,1,0,notes,1,340,5,.01,1,false,0,true);
- assert.match(code,/top apex entry, upper\/lower order unverified/);
- assert.match(code,/UPPER-FIRST CHECK: NOT VERIFIED/);
+ assert.match(code,/top corner entry, upper first/);
+ assert.match(code,/UPPER-FIRST CHECK: both wire ends agree/);
  assert.match(code,/ENTRY FROM ABOVE/);
- assert.ok(notes.some(n=>n.includes('возможен старт посередине хорды')));
+ assert.ok(!notes.some(n=>n.includes('не подтверждён')));
+ const cuts=code.split(/\r?\n/).filter(line=>/^G01 X/.test(line))
+   .map(line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?\d+(?:\.\d+)?)/g)]
+     .map(m=>[m[1],+m[2]])));
+ for(const [axis,height] of [['X','Y'],['Z','A']]){
+   const hits=[];
+   for(let i=1;i<cuts.length;i++){
+     const a=cuts[i-1],b=cuts[i],dx=b[axis]-a[axis];
+     if(Math.abs(dx)<1e-7)continue;
+     const t=(0-a[axis])/dx;
+     if(t< -1e-7||t>1+1e-7)continue;
+     const h=a[height]+t*(b[height]-a[height]);
+     if(!hits.length||Math.abs(h-hits.at(-1))>.02)hits.push(h);
+   }
+   assert.ok(hits.length>=2&&hits[0]>hits[1]+5,
+     'top must precede bottom at the middle chord on '+axis);
+ }
 });
 
 test('twisted end caps warn about conflicting upper-first directions',()=>{
@@ -1933,7 +1949,8 @@ test('external stab: top entry at highest profile point and same-slit exit',
    kerf:1,trim:false,powerComp:false,topEntry:true});
  const result=gen.buildProgram(text,'stab.stp',o),g=result.program;
  assert.equal(result.holes,0);
- assert.match(g,/\*\*\* PROFILE: .*top apex entry/);
+ assert.match(g,/\*\*\* PROFILE: .*top corner entry, upper first/,
+   'stab must enter at chord-end corner before cutting upper then lower');
  assert.match(g,/ENTRY FROM ABOVE; EXIT THROUGH THE SAME SLIT/);
  assert.match(g,/UPPER-FIRST CHECK: both wire ends agree/,
    'original stab must support one consistent upper-first direction on both wire ends');
