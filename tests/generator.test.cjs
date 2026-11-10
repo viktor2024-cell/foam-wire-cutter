@@ -1988,6 +1988,33 @@ test('external stab: top entry at highest profile point and same-slit exit',
        'stab lower skin was visited before upper on '+axis+' at '+fraction);
    }
  }
+ // Every sampled hot-wire position is a straight line between towers.
+ // Sweep the full span, not just the root and tip faces: 21 x 39 stations.
+ let verifiedStations=0;
+ for(let spanIndex=0;spanIndex<=20;spanIndex++){
+   const f=spanIndex/20,wireSection=positions.map(p=>({
+     x:p.X*(1-f)+p.Z*f,z:p.Y*(1-f)+p.A*f
+   }));
+   const xs=wireSection.map(p=>p.x),low=Math.min(...xs),high=Math.max(...xs),
+     entry=wireSection[0].x,far=entry-low<high-entry?high:low;
+   for(let chordIndex=1;chordIndex<=39;chordIndex++){
+     const x=entry+(far-entry)*chordIndex/40,heights=[];
+     for(let i=1;i<wireSection.length;i++){
+       const a=wireSection[i-1],b=wireSection[i],dx=b.x-a.x;
+       if(Math.abs(dx)<1e-7)continue;
+       const t=(x-a.x)/dx;
+       if(t< -1e-7||t>1+1e-7)continue;
+       const z=a.z+t*(b.z-a.z);
+       if(!heights.length||Math.abs(z-heights.at(-1))>.015)heights.push(z);
+     }
+     assert.ok(heights.length>=2,
+       'stab lacks two boundary passes at span '+f+' / chord '+chordIndex);
+     assert.ok(heights[0]>heights[1]+.05,
+       'stab lower skin cut before upper at span '+f+' / chord '+chordIndex);
+     verifiedStations++;
+   }
+ }
+ assert.equal(verifiedStations,819);
  assert.equal(p0.Y,65);
  assert.equal(p0.A,65);
  assert.ok(p1.Y<p0.Y&&p1.A<p0.A);
