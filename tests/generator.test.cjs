@@ -225,7 +225,11 @@ test('upper-first G-code cuts the upper skin before the lower on both towers',()
      if((a.X-chord)*(b.X-chord)>0||Math.abs(a.X-b.X)<1e-6)continue;
      const t=(chord-a.X)/(b.X-a.X);
      if(t < -1e-5 || t > 1+1e-5)continue;
-     crossing.push([a.Y+t*(b.Y-a.Y),a.A+t*(b.A-a.A)]);
+     const hit=[a.Y+t*(b.Y-a.Y),a.A+t*(b.A-a.A)];
+     // A point exactly on the station can occur at the end of one line
+     // and the start of the next. Count that as ONE crossing, not two.
+     if(!crossing.length||Math.max(...hit.map((v,k)=>Math.abs(v-crossing.at(-1)[k])))>.02)
+       crossing.push(hit);
    }
    assert.ok(crossing.length>=2,'both skins cross chord '+chord);
    assert.ok(crossing[0][0]>crossing[1][0]+10 &&
