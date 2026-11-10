@@ -1756,3 +1756,57 @@ test('external stab: closed periodic STEP patches stay separate on each cap',{sk
    {...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
 });
+
+
+test('plain closed STEP profile supports an explicit overhead apex entry',()=>{
+ const o=options({stock:[50,140,80],bottomZ:10,clearance:20,topEntry:true,trim:false});
+ const result=gen.buildProgram(fixture,'split-profile.stp',o);
+ const path=result.program.slice(result.program.indexOf('*** PROFILE:'));
+ assert.match(path,/top apex entry/);
+ assert.match(path,/ENTRY FROM ABOVE; EXIT THROUGH THE SAME SLIT/);
+ assert.doesNotMatch(path,/exit Z\+5 mm/);
+ const cutLines=path.split(/\r?\n/),movement=cutLines.filter(s=>/^G0[01] X/.test(s));
+ const rapid=movement.find(s=>/^G00 X/.test(s));
+ const cutting=movement.filter(s=>/^G01 X/.test(s));
+ const xyz=line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?\d+(?:\.\d+)?)/g)]
+    .map(m=>[m[1],+m[2]]));
+ const start=xyz(rapid),end=xyz(cutting.at(-1)),contact=xyz(cutting[0]);
+ for(const k of ['X','Y','Z','A'])assert.ok(Math.abs(start[k]-end[k])<.02,
+   'exit should retrace the top entry slit at '+k);
+ assert.ok(contact.Y<start.Y&&contact.A<start.A,'first G01 descends from above');
+ const side=gen.buildProgram(fixture,'split-profile.stp',{...o,topEntry:false});
+ assert.doesNotMatch(side.program,/ENTRY FROM ABOVE/,'side entry remains selectable');
+});
+
+test('top-entry UI is independent from side-entry and included in G-code configuration',()=>{
+ assert.match(html,/id="gnTopEntry"/);
+ assert.match(html,/topEntry: \$\("gnTopEntry"\)\.checked/);
+ assert.match(html,/if\(\$\("gnTopEntry"\)\.checked\)\$\("gnSideEntry"\)\.checked=false/);
+ assert.match(html,/shape\.secondaryCount===0/);
+});
+
+test('external stab: top entry at highest profile point and same-slit exit',
+ {skip:!process.env.STAB_STEP},()=>{
+ const text=fs.readFileSync(process.env.STAB_STEP,'utf8');
+ const o=options({stock:[305,220,40],bottomZ:10,clearance:15,
+   kerf:1,trim:false,powerComp:false,topEntry:true});
+ const result=gen.buildProgram(text,'stab.stp',o),g=result.program;
+ assert.equal(result.holes,0);
+ assert.match(g,/\*\*\* PROFILE: .*top apex entry/);
+ assert.match(g,/ENTRY FROM ABOVE; EXIT THROUGH THE SAME SLIT/);
+ const start=g.indexOf('*** PROFILE:'),end=g.indexOf('*** END BLOCK ***',start);
+ const section=g.slice(start,end);
+ const all=section.split(/\r?\n/),rapid=all.find(line=>/^G00 X/.test(line)),
+   cuts=all.filter(line=>/^G01 X/.test(line));
+ assert.ok(cuts.length>600);
+ const parse=line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?\d+(?:\.\d+)?)/g)]
+   .map(m=>[m[1],+m[2]]));
+ const p0=parse(rapid),p1=parse(cuts[0]),pEnd=parse(cuts.at(-1));
+ assert.equal(p0.Y,65);
+ assert.equal(p0.A,65);
+ assert.ok(p1.Y<p0.Y&&p1.A<p0.A);
+ for(const key of ['X','Y','Z','A'])assert.ok(Math.abs(p0[key]-pEnd[key])<.02);
+ const p=sim.parseGcode(g),report=sim.analyse(p,
+   {...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
+});
