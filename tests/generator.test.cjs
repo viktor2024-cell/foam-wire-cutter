@@ -179,7 +179,7 @@ test('rotation projection is informational; clearance at cutting angle is checke
  }
 });
 
-test('top entry falls back to the side when the profile lies above the corner',()=>{
+test('upper apex avoids an overhanging side corner; failed approach re-selects a lateral corner',()=>{
  const left=[[10,5],[15,15],[-10,15],[-10,0],[10,0]],right=[[30,5],[5,15],[-10,15],[-10,0],[30,0]];
  const contour=left.map((p,i)=>{
    const j=(i+1)%left.length,at=(a,b,u)=>[a[0]+u*(b[0]-a[0]),0,a[1]+u*(b[1]-a[1])];
@@ -187,9 +187,51 @@ test('top entry falls back to the side when the profile lies above the corner',(
  });
  const layout={machine:p=>[p[1],p[0],p[2]],towers:(a,b)=>[[a[0],a[2]],[b[0],b[2]]]};
  const notes=[],program=new gen.Program(gen.CONFIG,false,5);
- const [code]=gen.profileBlock(40,program,contour,layout,1,0,notes,1,80,5,.01,1,false,0,true);
- assert.doesNotMatch(code,/ENTRY FROM ABOVE/);
- assert.ok(notes.some(note=>note.includes('Вход сверху пересекает контур')));
+ // The topmost roof point, rather than the old side corner, permits the lead-in.
+ const [top]=gen.profileBlock(40,program,contour,layout,1,0,notes,1,80,5,.01,1,false,0,true);
+ assert.match(top,/top apex entry.*upper first/);
+ assert.match(top,/ENTRY FROM ABOVE; EXIT THROUGH THE SAME SLIT/);
+ // With insufficient vertical clearance the rejected apex is NOT a valid
+ // side-entry target: the actual side-facing corner must be selected again.
+ const fallbackNotes=[];
+ const [fallback]=gen.profileBlock(10,new gen.Program(gen.CONFIG,false,5),contour,layout,
+   1,0,fallbackNotes,1,80,5,.01,1,false,0,true);
+ assert.doesNotMatch(fallback,/ENTRY FROM ABOVE/);
+ assert.match(fallback,/corner entry, upper first/);
+ assert.doesNotMatch(fallback,/top apex entry/);
+ assert.ok(fallbackNotes.some(note=>note.includes('боковой угол выбран заново')));
+});
+
+test('upper-first G-code cuts the upper skin before the lower on both towers',()=>{
+ // A simple closed STAB-like slab with distinct upper and lower edges.
+ // Assertions inspect actual 4-axis motion rather than the G-code comment.
+ const vertices=[[12,15],[-12,15],[-12,1],[12,1]];
+ const contour=vertices.map((a,i)=>{
+   const b=vertices[(i+1)%vertices.length];
+   const point=u=>[a[0]+(b[0]-a[0])*u,0,a[1]+(b[1]-a[1])*u];
+   return [{A:point,B:point,t0:0,t1:1},true];
+ });
+ const layout={machine:p=>[p[1],p[0],p[2]],towers:(a,b)=>[[a[0],a[2]],[b[0],b[2]]]};
+ const [g]=gen.profileBlock(35,new gen.Program(gen.CONFIG,false,5),contour,layout,
+   1,0,[],1,40,5,.01,1,false,0,true);
+ assert.match(g,/ENTRY FROM ABOVE/);
+ const cuts=g.split(/\r?\n/).filter(line=>/^G01 X/.test(line))
+   .map(line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?\d+(?:\.\d+)?)/g)]
+     .map(m=>[m[1],+m[2]])));
+ for(const chord of [-6,0,6]){
+   const crossing=[];
+   for(let i=1;i<cuts.length;i++){
+     const a=cuts[i-1],b=cuts[i];
+     if((a.X-chord)*(b.X-chord)>0||Math.abs(a.X-b.X)<1e-6)continue;
+     const t=(chord-a.X)/(b.X-a.X);
+     if(t < -1e-5 || t > 1+1e-5)continue;
+     crossing.push([a.Y+t*(b.Y-a.Y),a.A+t*(b.A-a.A)]);
+   }
+   assert.ok(crossing.length>=2,'both skins cross chord '+chord);
+   assert.ok(crossing[0][0]>crossing[1][0]+10 &&
+             crossing[0][1]>crossing[1][1]+10,
+     'both towers must cut upper skin before lower skin at chord '+chord);
+ }
 });
 
 test('sloped end contour and final trim are generated from synthetic topology',()=>{
@@ -531,7 +573,7 @@ test('W11 automatic stock preserves allowances with parked turning',{skip:!proce
 test('pair checkbox controls Create G-code, not only the stock preview',()=>{
  // Exercise the actual UI mode dispatch and event handlers with minimal DOM stubs.
  const clickHandlers=new Map();
- const nodes=Object.fromEntries(['gnGo','gnMirror','gnPair','gnStockPair','gnDone','gnOut','gnStatus']
+ const nodes=Object.fromEntries(['gnGo','gnMirror','gnPair','gnStockPair','gnTopEntry','gnSideEntry','gnDone','gnOut','gnStatus']
   .map(id=>[id,{checked:false,hidden:false,textContent:'',addEventListener(type,fn){clickHandlers.set(id+':'+type,fn);}}]));
  const get=id=>nodes[id],modes=[];
  // Use only the production dispatch wiring; do not silently substitute another implementation.
@@ -550,6 +592,13 @@ test('pair checkbox controls Create G-code, not only the stock preview',()=>{
  clickHandlers.get('gnPair:click')();
  assert.equal(modes.at(-1),'pair');
  assert.equal(get('gnStockPair').checked,true);
+ get('gnTopEntry').checked=true;
+ get('gnSideEntry').checked=true;
+ clickHandlers.get('gnTopEntry:change')();
+ assert.equal(get('gnSideEntry').checked,false,'top and side entries are mutually exclusive');
+ get('gnSideEntry').checked=true;
+ clickHandlers.get('gnSideEntry:change')();
+ assert.equal(get('gnTopEntry').checked,false,'side entry clears top entry');
 });
 test('pair G-code explicitly contains two profiles and a two-piece mode header',()=>{
  const r=build(options({pair:true,stock:[50,140,89]}));
