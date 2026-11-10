@@ -189,7 +189,9 @@ test('upper apex avoids an overhanging side corner; failed approach re-selects a
  const notes=[],program=new gen.Program(gen.CONFIG,false,5);
  // The topmost roof point, rather than the old side corner, permits the lead-in.
  const [top]=gen.profileBlock(40,program,contour,layout,1,0,notes,1,80,5,.01,1,false,0,true);
- assert.match(top,/top apex entry.*upper first/);
+ assert.match(top,/top apex entry/);
+ assert.match(top,/UPPER-FIRST CHECK: NOT VERIFIED/,
+   'a roof apex must not be mistaken for a verified full upper-first pass');
  assert.match(top,/ENTRY FROM ABOVE; EXIT THROUGH THE SAME SLIT/);
  // With insufficient vertical clearance the rejected apex is NOT a valid
  // side-entry target: the actual side-facing corner must be selected again.
