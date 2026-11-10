@@ -1732,3 +1732,27 @@ test('external kil STEP: measured bevel overrun gives feasible stock suggestion'
    {...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
 });
+
+
+test('external stab: closed periodic STEP patches stay separate on each cap',{skip:!process.env.STAB_STEP},()=>{
+ const text=fs.readFileSync(process.env.STAB_STEP,'utf8');
+ const built=new gen.Model(text).build();
+ assert.equal(built.axis,1);
+ assert.equal(built.outer.length,7,'three disjoint periodic arcs must not be merged');
+ assert.equal(built.holes.length,0);
+ assert.equal(built.secondaryContours.length,0);
+ const preview=gen.previewGeometry(text);
+ assert.equal(preview.diagnosticOnly,false);
+ assert.equal(preview.previewError,null);
+ assert.equal(preview.outerCount,7);
+ assert.equal(preview.rails.length,7);
+ const o=options({stock:[305,220,40],bottomZ:10,clearance:15,
+   kerf:1,trim:false,powerComp:false,tolerance:.1});
+ const result=gen.buildProgram(text,'stab.stp',o);
+ assert.equal(result.holes,0);
+ assert.equal(result.secondary,0);
+ assert.match(result.program,/\*\*\* PROFILE:/);
+ const parsed=sim.parseGcode(result.program),report=sim.analyse(parsed,
+   {...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
+});
