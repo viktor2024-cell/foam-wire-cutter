@@ -2982,15 +2982,41 @@ const Gen = (() => {
             if(!ends?.every(p=>Math.abs(p[axis]-plane)<.001))continue;
             try{
               const ts=ends.map(p=>Model.project(t=>at(s,t),td,p));
-              if(Math.abs(ts[0]-ts[1])>1e-4)out.push([Math.min(...ts),Math.max(...ts)]);
+              if(Math.abs(ts[0]-ts[1])>1e-4){
+                // On a closed STEP spline the two ends of the parameter
+                // domain coincide geometrically. Projection can confuse
+                // 0 with 1, falsely expanding one trimmed patch across
+                // several adjacent faces (stab.stp). Prefer the edge's
+                // native knot interval only when its actual endpoints
+                // match the parent surface rail at those parameters.
+                const edge=this.entities.get(id),curve=edge&&this.get(edge.args[3]),
+                  knots=isTyped(curve)&&curve.name==='B_SPLINE_CURVE_WITH_KNOTS'?curve.args[7]:[],
+                  t0=knots[0],t1=knots.at(-1);
+                const native=knots.length>1&&t0>=td[0]-1e-6&&t1<=td[1]+1e-6&&t1>t0+1e-5&&
+                  ((dist(at(s,t0),ends[0])<.01&&dist(at(s,t1),ends[1])<.01)||
+                   (dist(at(s,t0),ends[1])<.01&&dist(at(s,t1),ends[0])<.01));
+                const lo=native?t0:Math.min(...ts),hi=native?t1:Math.max(...ts);
+                out.push({plane,lo,hi});
+              }
             }catch(e){}
           }
         }return out;
       };
       for(const r of this.facesRaw.filter(r=>hasCap(r,planeA)||hasCap(r,planeB))){
         const surf=this.surface(r.surf),parts=capIntervals(r,surf);
-        const g=groups.find(g=>sameSurface(g.surf,surf)&&parts.some(a=>g.parts.some(b=>
-          Math.min(a[1],b[1])-Math.max(a[0],b[0])>1e-4)));
+        const g=groups.find(g=>{
+          if(!sameSurface(g.surf,surf)||!parts.length||!g.parts.length)return false;
+          const overlap=(a,b)=>Math.min(a.hi,b.hi)-Math.max(a.lo,b.lo)>1e-4;
+          // Distinct FULL-SPAN sections can have overlapping parameter
+          // numbers across opposite end caps. Match only same-cap ranges.
+          if(parts.some(a=>g.parts.some(b=>a.plane===b.plane&&overlap(a,b))))return true;
+          // F2 splits one ruled patch along the wire: one half has ONLY
+          // cap A edges and the other ONLY cap B edges. These complementary
+          // patches must still be joined when their intervals overlap.
+          const capA=new Set(parts.map(p=>p.plane)),capB=new Set(g.parts.map(p=>p.plane));
+          return capA.size===1&&capB.size===1&&!capB.has(parts[0].plane)&&
+            parts.some(a=>g.parts.some(b=>overlap(a,b)));
+        });
         if(g){g.raws.push(r);g.parts.push(...parts);}else groups.push({surf,raws:[r],parts});
       }
       for(const g of groups){
