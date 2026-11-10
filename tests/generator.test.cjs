@@ -286,6 +286,44 @@ test('thin tapered stab nose still cuts upper before lower regardless of STEP fa
  }
 });
 
+test('a mid-chord top apex is not mislabeled as fully upper-first',()=>{
+ // An airfoil crown at x=0 divides the upper skin into two arcs. A
+ // single closed traverse cannot cover both arcs before touching the bottom.
+ const root=[[12,5],[0,16],[-12,5],[-12,1],[12,1]];
+ const tip=[[9,4],[0,14],[-9,4],[-9,2],[9,2]];
+ const contour=root.map((p,i)=>{
+   const q=root[(i+1)%root.length],r=tip[i],s=tip[(i+1)%tip.length];
+   const interpolate=(u,v,t)=>[u[0]+(v[0]-u[0])*t,0,u[1]+(v[1]-u[1])*t];
+   return [{A:t=>interpolate(p,q,t),B:t=>interpolate(r,s,t),t0:0,t1:1},true];
+ });
+ const layout={machine:p=>[p[1],p[0],p[2]],towers:(a,b)=>[[a[0],a[2]],[b[0],b[2]]]};
+ const notes=[];
+ const [code]=gen.profileBlock(35,new gen.Program(gen.CONFIG,false,5),contour,
+   layout,1,0,notes,1,340,5,.01,1,false,0,true);
+ assert.match(code,/top apex entry, upper\/lower order unverified/);
+ assert.match(code,/UPPER-FIRST CHECK: NOT VERIFIED/);
+ assert.match(code,/ENTRY FROM ABOVE/);
+ assert.ok(notes.some(n=>n.includes('возможен старт посередине хорды')));
+});
+
+test('twisted end caps warn about conflicting upper-first directions',()=>{
+ // At the tip the upper/lower edge correspondence is reversed. No
+ // direction of travel can be upper-first on both end sections.
+ const root=[[12,15],[-12,15],[-12,1],[12,1]];
+ const tip=[[9,2],[-9,2],[-9,13],[9,13]];
+ const contour=root.map((p,i)=>{
+   const q=root[(i+1)%root.length],r=tip[i],s=tip[(i+1)%tip.length];
+   const interpolate=(u,v,t)=>[u[0]+(v[0]-u[0])*t,0,u[1]+(v[1]-u[1])*t];
+   return [{A:t=>interpolate(p,q,t),B:t=>interpolate(r,s,t),t0:0,t1:1},true];
+ });
+ const layout={machine:p=>[p[1],p[0],p[2]],towers:(a,b)=>[[a[0],a[2]],[b[0],b[2]]]};
+ const notes=[];
+ gen.profileBlock(35,new gen.Program(gen.CONFIG,false,5),contour,
+   layout,1,0,notes,1,340,5,.01,1,false,0,true);
+ assert.ok(notes.some(n=>n.includes('противоположный порядок')),
+   'upper-first on both towers cannot be certified for twisted rails');
+});
+
 test('sloped end contour and final trim are generated from synthetic topology',()=>{
  const step=slopedCapFixture(),m=new gen.Model(step,gen.identityRotation(),1,.1);
  const shape=m.slopedEndContour();assert.equal(shape.contour.length,6);
@@ -1895,6 +1933,8 @@ test('external stab: top entry at highest profile point and same-slit exit',
  assert.equal(result.holes,0);
  assert.match(g,/\*\*\* PROFILE: .*top apex entry/);
  assert.match(g,/ENTRY FROM ABOVE; EXIT THROUGH THE SAME SLIT/);
+ assert.match(g,/UPPER-FIRST CHECK: both wire ends agree/,
+   'original stab must support one consistent upper-first direction on both wire ends');
  const start=g.indexOf('*** PROFILE:'),end=g.indexOf('*** END BLOCK ***',start);
  const section=g.slice(start,end);
  const all=section.split(/\r?\n/),rapid=all.find(line=>/^G00 X/.test(line)),
