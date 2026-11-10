@@ -239,6 +239,53 @@ test('upper-first G-code cuts the upper skin before the lower on both towers',()
  }
 });
 
+test('thin tapered stab nose still cuts upper before lower regardless of STEP face order',()=>{
+ // In the first 40 mm the two nose branches differ by less than .05 mm.
+ // The legacy algorithm blindly chose forward, cutting the lower skin first.
+ const root=[[150,30],[75,29.96],[-150,0],[-150,29],[75,29.99]];
+ const tip=[[135,28],[65,27.96],[-135,1],[-135,27],[65,27.99]];
+ const reverse=points=>[points[0],...points.slice(1).reverse()];
+ const layout={machine:p=>[p[1],p[0],p[2]],
+   towers:(a,b)=>[[a[0],a[2]],[b[0],b[2]]]};
+ const crossings=(g,axis,height,station)=>{
+   const positions=g.split(/\r?\n/).filter(s=>/^G01 X/.test(s))
+     .map(s=>Object.fromEntries([...s.matchAll(/([XYZA])(-?\d+(?:\.\d+)?)/g)]
+       .map(m=>[m[1],+m[2]])));
+   const hits=[];
+   for(let i=1;i<positions.length;i++){
+     const a=positions[i-1],b=positions[i],dx=b[axis]-a[axis];
+     if(Math.abs(dx)<1e-7)continue;
+     const t=(station-a[axis])/dx;
+     if(t < -1e-7 || t > 1+1e-7)continue;
+     const value=a[height]+t*(b[height]-a[height]);
+     if(!hits.length||Math.abs(value-hits.at(-1))>.02)hits.push(value);
+   }
+   return hits;
+ };
+ for(const flip of [false,true]){
+   const a=flip?reverse(root):root,b=flip?reverse(tip):tip;
+   const contour=a.map((p,i)=>{
+     const q=a[(i+1)%a.length],r=b[i],s=b[(i+1)%b.length];
+     const interpolate=(u,v,t)=>[u[0]+t*(v[0]-u[0]),0,u[1]+t*(v[1]-u[1])];
+     return [{A:t=>interpolate(p,q,t),B:t=>interpolate(r,s,t),t0:0,t1:1},true];
+   });
+   const notes=[];
+   const [code]=gen.profileBlock(55,new gen.Program(gen.CONFIG,false,5),
+     contour,layout,1,0,notes,1,340,5,.01,1,false,0,true);
+   assert.match(code,/ENTRY FROM ABOVE/);
+   for(const [axis,height] of [['X','Y'],['Z','A']]){
+     for(const station of [0,-50]){
+       const hits=crossings(code,axis,height,station);
+       assert.ok(hits.length>=2,'both skins sampled for '+axis+' at '+station);
+       assert.ok(hits[0]>hits[1]+5,
+         'upper skin first at '+axis+' '+station+' reversed STEP='+flip);
+     }
+   }
+   assert.ok(!notes.some(s=>s.includes('не подтверждён')),
+     'strong chord separation should disambiguate both rails');
+ }
+});
+
 test('sloped end contour and final trim are generated from synthetic topology',()=>{
  const step=slopedCapFixture(),m=new gen.Model(step,gen.identityRotation(),1,.1);
  const shape=m.slopedEndContour();assert.equal(shape.contour.length,6);
