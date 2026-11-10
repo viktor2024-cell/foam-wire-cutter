@@ -280,6 +280,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
   </section>
   <section class="box gn-result">
     <h2>G-code</h2>
+    <label class="check gn-auto"><input type="checkbox" id="gnTopEntry"> Вход в основной контур сверху, выход по той же прорези (одна деталь)</label>
     <label class="check gn-auto"><input type="checkbox" id="gnSideEntry"> Вход и выход справа (одна деталь, максимум одно отверстие через правую технологическую прорезь, без торцевания)</label>
     <label class="check"><input type="checkbox" id="gnTrim" checked> Торцевать заготовку</label>
     <div class="fields">
@@ -4242,19 +4243,36 @@ const Gen = (() => {
       corners.push({k,y:(edge(seg.A(0))+edge(seg.B(0)))/2,z:(height(seg.A(0))+height(seg.B(0)))/2});
     });
     if(!corners.length) throw new StepError("Не найден угол для входа в наружный контур");
+    // When the operator chooses an upper entry, begin at the highest
+    // attainable point of the TWO kerf-compensated wire rails, rather than
+    // the old side-entry corner. Maximizing the lower tower height leaves
+    // the initial downward slit exposed on both end sections.
+    let apexTop=null;
+    if(preferTop&&!sideEntry){
+      segments.forEach((seg,k)=>{
+        for(let j=0;j<=256;j++){
+          const u=j/256,[[,zl],[,zr]]=layout.towers(seg.A(u),seg.B(u));
+          const min=Math.min(zl,zr),avg=(zl+zr)/2;
+          if(!apexTop||min>apexTop.min+.0001||
+            (Math.abs(min-apexTop.min)<.0001&&avg>apexTop.avg))
+            apexTop={k,u,min,avg};
+        }
+      });
+    }
     const bestY=Math.max(...corners.map(c=>c.y));
     // Adjacent ends of the same vertical edge can differ by a kerf radius
     // after compensation; treat them as a shared side of the profile.
     const sideCorners=corners.filter(c=>bestY-c.y<=Math.max(1,2*kerf));
     sideCorners.sort((a,b)=>b.z-a.z);
-    const hasUpperCorner=!smoothExterior&&sideCorners.length>1 && sideCorners[0].z-sideCorners.at(-1).z>Math.max(1,2*kerf);
-    const start=smoothExterior?0:hasUpperCorner?sideCorners[0].k:corners.reduce((best,c)=>c.y>best.y?c:best).k;
+    const hasUpperCorner=!apexTop&&!smoothExterior&&sideCorners.length>1 && sideCorners[0].z-sideCorners.at(-1).z>Math.max(1,2*kerf);
+    const start=apexTop?apexTop.k:smoothExterior?0:hasUpperCorner?sideCorners[0].k:corners.reduce((best,c)=>c.y>best.y?c:best).k;
     // Reversing the complete loop preserves kerf-compensated coordinates.
     const reverse = segments.map(seg => segment(u=>seg.A(1-u),u=>seg.B(1-u),seg.kind,(seg.breaks||[]).map(u=>1-u))).reverse();
-    const reverseIndex = segments.length - 1 - ((start + segments.length - 1) % segments.length);
-    const samplePath = (seq,index) => sampleSequence(startSequence(seq,index,0),sag,maxStep)
+    const reverseIndex = apexTop?segments.length-1-start:segments.length - 1 - ((start + segments.length - 1) % segments.length);
+    const samplePath = (seq,index,u=0) => sampleSequence(startSequence(seq,index,u),sag,maxStep)
       .map(([a,b]) => layout.towers(a,b));
-    const forward=samplePath(segments,start), backward=samplePath(reverse,reverseIndex);
+    const forward=samplePath(segments,start,apexTop?.u||0),
+      backward=samplePath(reverse,reverseIndex,apexTop?1-apexTop.u:0);
     // Compare branches by actual travelled distance, including kerf-join arcs.
     // A fixed parameter fraction is meaningless for faces of unequal length.
     function atDistance(path, distance) {
@@ -4278,11 +4296,16 @@ const Gen = (() => {
       const delta=z(f.point)-z(b.point);
       if(Math.abs(delta)>.05) { orderedPath=delta>0?forward:backward; break; }
     }
-    if(!orderedPath) throw new StepError("Не удалось однозначно выбрать верхний обход наружного контура");
+    if(!orderedPath){
+      // From the highest apex, both branches may initially descend by
+      // exactly the same amount. The seam and entry are still well-defined.
+      if(apexTop)orderedPath=forward;
+      else throw new StepError("Не удалось однозначно выбрать верхний обход наружного контура");
+    }
     const towers=orderedPath;
     const yOut = stockCenter + side * (stockWidth / 2 + margin);
     const [[yl, zl], [yr, zr]] = towers[0];
-    let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", corner entry, upper first, " + (hasUpperCorner ? "exit Z+5 mm" : "exit via entry slit") + " ***" + EOL;
+    let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", " + (apexTop?"top apex entry":"corner entry") + ", upper first, " + (hasUpperCorner ? "exit Z+5 mm" : "exit via entry slit") + " ***" + EOL;
     // Check the full wire at multiple span sections: a vertical approach to
     // this same corner must not first cross another part of the profile.
     let topEntry=preferTop&&!sideEntry&&safe>=Math.max(zl,zr)-1e-7;
@@ -4623,7 +4646,8 @@ const Gen = (() => {
       program += block; allTowers.push(...towers);
     };
     const addProfile = (layout, side) => {
-      const [block, towers] = profileBlock(safe, prog, outer, layout, axis, kerf, warnings, side, stockWidth, o.leadMargin, sag, maxStep, sideEntry, offset[1], !!slopedEnd && !holes.length);
+      const [block, towers] = profileBlock(safe, prog, outer, layout, axis, kerf, warnings, side, stockWidth, o.leadMargin, sag, maxStep, sideEntry, offset[1],
+        (o.topEntry===true&&!o.pair&&!o.mirror)||!!slopedEnd&&!holes.length);
       profileTowers = towers;
       program += block; allTowers.push(...towers);
     };
@@ -5496,6 +5520,17 @@ function openStep(file, handle = null) {
     stepFile = { name: file.name, text: String(rd.result), handle };
     modelRotation = Gen.identityRotation(); modelOffset = [0,0,0]; modelZOffset = 0; $("gnOffset").textContent="X 0 · Y 0 · Z 0 мм"; $("gnScale").value = 100; $("gnTolerance").value = "0.1";
     $("gnFile").textContent = file.name;
+    // Prefer an overhead lead for a plain single closed contour (stab-type
+    // parts), but not for F1's bore, F2's auxiliary cuts or F4 guide pairs.
+    $("gnTopEntry").checked = false;
+    $("gnSideEntry").checked = false;
+    try {
+      const shape = Gen.previewGeometry(stepFile.text);
+      $("gnTopEntry").checked = !shape.diagnosticOnly && shape.axis===1 &&
+        shape.outerCount>0 && shape.secondaryCount===0 &&
+        shape.rails.length===shape.outerCount &&
+        !shape.wireframe && !shape.auxiliaryCurves?.length && !shape.slopedPreview;
+    } catch (_) { /* A broken preview keeps the default mode until corrected. */ }
     // Preliminary validated F2 setup. The 250 mm vertical travel allows
     // only 10 mm overhead above a 240 mm high blank with bottom at Z=0.
     // Apply only when a new F2 file is opened; all controls remain editable.
@@ -5506,6 +5541,7 @@ function openStep(file, handle = null) {
       }
       $("gnTrim").checked = false;
       $("gnSideEntry").checked = false;
+      $("gnTopEntry").checked = false;
       $("gnSide").value = "+";
     }
     $("gnGo").disabled = $("gnMirror").disabled = $("gnPair").disabled = false;
@@ -5528,7 +5564,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
       rotation: modelRotation, offset: [...modelOffset], modelZOffset, scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
       clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked,
-      trimAngle:n("gnTrimAngle"), cutOrder:$("gnCutOrder").value, invB:$("invB").checked, sideEntry: $("gnSideEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair"
+      trimAngle:n("gnTrimAngle"), cutOrder:$("gnCutOrder").value, invB:$("invB").checked, sideEntry: $("gnSideEntry").checked, topEntry: $("gnTopEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair"
   };
   // Keep PR #16 stock dimensions in automatic and F4 filenames.
   const stem=stepFile.name.replace(/\.(stp|step)$/i,"");
@@ -5616,6 +5652,14 @@ function refreshGenerateMode() {
   $("gnStatus").textContent = "";
 }
 $("gnStockPair").addEventListener("change", refreshGenerateMode);
+$("gnTopEntry").addEventListener("change", () => {
+  if($("gnTopEntry").checked)$("gnSideEntry").checked=false;
+  refreshGenerateMode();
+});
+$("gnSideEntry").addEventListener("change", () => {
+  if($("gnSideEntry").checked)$("gnTopEntry").checked=false;
+  refreshGenerateMode();
+});
 $("gnGo").addEventListener("click", () => generate(selectedGenerateMode()));
 $("gnMirror").addEventListener("click", () => generate("mirror"));
 $("gnPair").addEventListener("click", () => {
