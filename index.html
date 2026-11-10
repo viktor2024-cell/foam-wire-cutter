@@ -4330,7 +4330,13 @@ const Gen = (() => {
       for(const [[yl2,zl2],[yr2,zr2]] of towers.slice(1))g+=prog.travel("cut",yl2,zl2,yr2,zr2);
       g+=prog.travel("cut",yl,safe,yr,safe);
     } else {
-      if(preferTop)notes.push("Вход сверху пересекает контур или превышает безопасную высоту; использован боковой вход");
+      if(preferTop&&!sideEntry){
+         // A rejected overhead apex is NOT a valid lateral entry point.
+         // Re-select the entry-side corner and its traversal before cutting
+         // from the stock edge, otherwise the lead-in could cross the part.
+         notes.push("Вход сверху пересекает контур или превышает безопасную высоту; боковой угол выбран заново");
+         return profileBlock(safe,prog,contour,layout,axis,kerf,notes,side,stockWidth,margin,sag,maxStep,sideEntry,stockCenter,false);
+       }
       if(sideEntry)g+=prog.travel("move",yOut,zl,yOut,zr);
       else{
         g+=prog.travel("move",yOut,safe,yOut,safe);
