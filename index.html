@@ -4288,19 +4288,12 @@ const Gen = (() => {
       }
       return null;
     }
-    let orderedPath=null;
-    for(const distance of [5,10,20,40]) {
-      const f=atDistance(forward,distance),b=atDistance(backward,distance);
-      if(!f || !b) break;
-      const z=p=>(p[0][1]+p[1][1])/2;
-      const delta=z(f.point)-z(b.point);
-      if(Math.abs(delta)>.05) { orderedPath=delta>0?forward:backward; break; }
-    }
-    if(!orderedPath && apexTop){
-      // On long tapered profiles the two skins may differ by less than 0.05
-      // mm over the first 40 mm. STEP face order is NOT a reliable upper/
-      // lower choice. Compare heights at MATCHING chord stations instead.
-      const firstHeightAt = (path,rail,x) => {
+    let orderedPath=null,upperOrderVerified=false;
+    if(apexTop){
+      // Compare both candidate traversals at the SAME chord stations
+      // independently on BOTH tower paths. A decision from mean height
+      // after 5-40 mm can cut the lower skin first on one end.
+      const firstHeightAt=(path,rail,x)=>{
         for(let i=1;i<path.length;i++){
           const a=path[i-1][rail],b=path[i][rail],dx=b[0]-a[0];
           if(Math.abs(dx)<1e-8)continue;
@@ -4310,36 +4303,55 @@ const Gen = (() => {
         }
         return null;
       };
-      let preference=0,positive=0,negative=0;
+      const railVotes=[];
       for(const rail of [0,1]){
         const xs=forward.map(p=>p[rail][0]),startX=xs[0];
         const minX=Math.min(...xs),maxX=Math.max(...xs),chord=maxX-minX;
-        // At a mid-chord apex the two paths initially visit different
-        // sides, not comparable upper/lower skins.
-        if(chord<3||Math.min(startX-minX,maxX-startX)>Math.max(2,.05*chord))continue;
-        const far=startX-minX>maxX-startX?minX:maxX;
-        for(const fraction of [.25,.5,.75]){
-          const x=startX+(far-startX)*fraction;
-          const f=firstHeightAt(forward,rail,x),b=firstHeightAt(backward,rail,x);
-          if(f===null||b===null||Math.abs(f-b)<=.05)continue;
-          const difference=f-b;
-          preference+=Math.max(-20,Math.min(20,difference));
-          if(difference>0)positive++;else negative++;
+        const votes=[];
+        // A mid-chord apex splits the upper skin into two arcs: no
+        // single closed pass can then cut ALL upper before lower.
+        if(chord>=3&&Math.min(startX-minX,maxX-startX)<=Math.max(2,.05*chord)){
+          const far=startX-minX>maxX-startX?minX:maxX;
+          for(const fraction of [.25,.5,.75]){
+            const x=startX+(far-startX)*fraction;
+            const f=firstHeightAt(forward,rail,x),b=firstHeightAt(backward,rail,x);
+            if(f===null||b===null||Math.abs(f-b)<=.05)continue;
+            votes.push(f-b);
+          }
         }
+        railVotes.push(votes);
       }
-      if(positive&&negative)
-        notes.push("Направление верхнего обхода различается по сечениям: проверьте обе каретки в G-code");
-      if(Math.abs(preference)>.05)orderedPath=preference>0?forward:backward;
-      else {
-        orderedPath=forward;
-        notes.push("Обе ветви от верхней точки практически равны: порядок верх/низ не подтверждён; проверьте G-code");
+      const evidence=railVotes.flat(),pos=evidence.filter(x=>x>0).length,
+        neg=evidence.filter(x=>x<0).length,
+        sum=evidence.reduce((s,x)=>s+Math.max(-20,Math.min(20,x)),0);
+      // A verified upper-first route must agree at every sampled chord
+      // position on BOTH wire ends, not merely on average.
+      upperOrderVerified=railVotes.every(v=>v.length>0)&&!(pos&&neg);
+      if(pos&&neg)notes.push("Верх/низ: противоположный порядок на разных участках или концах струны; проверьте оба профиля в G-code");
+      else if(!upperOrderVerified)
+        notes.push("Верх/низ: нет подтверждения порядка на обоих концах струны; возможен старт посередине хорды");
+      if(Math.abs(sum)>.05)orderedPath=sum>0?forward:backward;
+    }
+    if(!orderedPath){
+      // Distance comparison is only a fallback when matching chord
+      // stations are unavailable, not proof of upper-first travel.
+      for(const distance of [5,10,20,40]){
+        const f=atDistance(forward,distance),b=atDistance(backward,distance);
+        if(!f||!b)break;
+        const z=p=>(p[0][1]+p[1][1])/2;
+        const delta=z(f.point)-z(b.point);
+        if(Math.abs(delta)>.05){orderedPath=delta>0?forward:backward;break;}
       }
+    }
+    if(!orderedPath&&apexTop){
+      orderedPath=forward;
+      notes.push("Верх/низ: направления практически неразличимы, выбран обход по STEP; требуется визуальная проверка");
     }
     if(!orderedPath)throw new StepError("Не удалось однозначно выбрать верхний обход наружного контура");
     const towers=orderedPath;
     const yOut = stockCenter + side * (stockWidth / 2 + margin);
     const [[yl, zl], [yr, zr]] = towers[0];
-    let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", " + (apexTop?"top apex entry":"corner entry") + ", upper first, " + (hasUpperCorner ? "exit Z+5 mm" : "exit via entry slit") + " ***" + EOL;
+    let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", " + (apexTop?"top apex entry":"corner entry") + ", " + (apexTop&&!upperOrderVerified?"upper/lower order unverified":"upper first") + ", " + (hasUpperCorner ? "exit Z+5 mm" : "exit via entry slit") + " ***" + EOL;
     // Check the full wire at multiple span sections: a vertical approach to
     // this same corner must not first cross another part of the profile.
     let topEntry=preferTop&&!sideEntry&&safe>=Math.max(zl,zr)-1e-7;
@@ -4357,6 +4369,7 @@ const Gen = (() => {
       }
     }
     if(topEntry){
+      g+="; UPPER-FIRST CHECK: "+(upperOrderVerified?"both wire ends agree":"NOT VERIFIED - inspect both wire ends")+EOL;
       g=g.replace(hasUpperCorner?"exit Z+5 mm":"exit via entry slit","exit via entry slit");
       g+="; ENTRY FROM ABOVE; EXIT THROUGH THE SAME SLIT"+EOL;
       g+=prog.travel("move",yl,safe,yr,safe);
