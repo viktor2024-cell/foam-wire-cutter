@@ -203,13 +203,14 @@ test('upper apex avoids an overhanging side corner; failed approach re-selects a
 });
 
 test('upper-first G-code cuts the upper skin before the lower on both towers',()=>{
- // A simple closed STAB-like slab with distinct upper and lower edges.
- // Assertions inspect actual 4-axis motion rather than the G-code comment.
- const vertices=[[12,15],[-12,15],[-12,1],[12,1]];
- const contour=vertices.map((a,i)=>{
-   const b=vertices[(i+1)%vertices.length];
-   const point=u=>[a[0]+(b[0]-a[0])*u,0,a[1]+(b[1]-a[1])*u];
-   return [{A:point,B:point,t0:0,t1:1},true];
+ // STAB-like profiles on distinct end caps: different chords and heights.
+ // Read the actual four axes and verify both independently at each station.
+ const left=[[12,15],[-12,15],[-12,1],[12,1]];
+ const right=[[9,13],[-9,13],[-9,2],[9,2]];
+ const contour=left.map((a,i)=>{
+   const b=left[(i+1)%left.length],c=right[i],d=right[(i+1)%right.length];
+   const point=(p,q,u)=>[p[0]+(q[0]-p[0])*u,0,p[1]+(q[1]-p[1])*u];
+   return [{A:u=>point(a,b,u),B:u=>point(c,d,u),t0:0,t1:1},true];
  });
  const layout={machine:p=>[p[1],p[0],p[2]],towers:(a,b)=>[[a[0],a[2]],[b[0],b[2]]]};
  const [g]=gen.profileBlock(35,new gen.Program(gen.CONFIG,false,5),contour,layout,
@@ -219,22 +220,22 @@ test('upper-first G-code cuts the upper skin before the lower on both towers',()
    .map(line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?\d+(?:\.\d+)?)/g)]
      .map(m=>[m[1],+m[2]])));
  for(const chord of [-6,0,6]){
-   const crossing=[];
-   for(let i=1;i<cuts.length;i++){
-     const a=cuts[i-1],b=cuts[i];
-     if((a.X-chord)*(b.X-chord)>0||Math.abs(a.X-b.X)<1e-6)continue;
-     const t=(chord-a.X)/(b.X-a.X);
-     if(t < -1e-5 || t > 1+1e-5)continue;
-     const hit=[a.Y+t*(b.Y-a.Y),a.A+t*(b.A-a.A)];
-     // A point exactly on the station can occur at the end of one line
-     // and the start of the next. Count that as ONE crossing, not two.
-     if(!crossing.length||Math.max(...hit.map((v,k)=>Math.abs(v-crossing.at(-1)[k])))>.02)
-       crossing.push(hit);
+   for(const [horizontal,height] of [['X','Y'],['Z','A']]){
+     const crossing=[];
+     for(let i=1;i<cuts.length;i++){
+       const a=cuts[i-1],b=cuts[i];
+       if((a[horizontal]-chord)*(b[horizontal]-chord)>0||
+         Math.abs(a[horizontal]-b[horizontal])<1e-6)continue;
+       const t=(chord-a[horizontal])/(b[horizontal]-a[horizontal]);
+       if(t < -1e-5 || t > 1+1e-5)continue;
+       const hit=a[height]+t*(b[height]-a[height]);
+       // Exact vertex at a station belongs to two neighboring G01 lines.
+       if(!crossing.length||Math.abs(hit-crossing.at(-1))>.02)crossing.push(hit);
+     }
+     assert.ok(crossing.length>=2,'both skins cross '+horizontal+' chord '+chord);
+     assert.ok(crossing[0]>crossing[1]+10,
+       'upper skin must precede lower at '+horizontal+' chord '+chord);
    }
-   assert.ok(crossing.length>=2,'both skins cross chord '+chord);
-   assert.ok(crossing[0][0]>crossing[1][0]+10 &&
-             crossing[0][1]>crossing[1][1]+10,
-     'both towers must cut upper skin before lower skin at chord '+chord);
  }
 });
 
