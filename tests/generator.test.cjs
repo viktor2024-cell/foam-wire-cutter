@@ -1943,6 +1943,32 @@ test('external stab: top entry at highest profile point and same-slit exit',
  const parse=line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?\d+(?:\.\d+)?)/g)]
    .map(m=>[m[1],+m[2]]));
  const p0=parse(rapid),p1=parse(cuts[0]),pEnd=parse(cuts.at(-1));
+ const positions=cuts.map(parse);
+ // Independent check on the REAL stab G-code: at three chord stations the
+ // first crossing must be on the upper skin on BOTH tower profiles.
+ for(const [axis,zAxis] of [['X','Y'],['Z','A']]){
+   const values=positions.map(p=>p[axis]),low=Math.min(...values),high=Math.max(...values),
+     chord=high-low,entry=positions[0][axis];
+   assert.ok(chord>3,'stab chord too small on '+axis);
+   assert.ok(Math.min(entry-low,high-entry)<=Math.max(2,.05*chord),
+     'stab top entry is inside the chord, so upper-first is not established for '+axis);
+   const far=entry-low<high-entry?high:low;
+   for(const fraction of [.25,.5,.75]){
+     const station=entry+(far-entry)*fraction,heights=[];
+     for(let i=1;i<positions.length;i++){
+       const a=positions[i-1],b=positions[i],dx=b[axis]-a[axis];
+       if(Math.abs(dx)<1e-7)continue;
+       const t=(station-a[axis])/dx;
+       if(t< -1e-7||t>1+1e-7)continue;
+       const h=a[zAxis]+t*(b[zAxis]-a[zAxis]);
+       if(!heights.length||Math.abs(h-heights.at(-1))>.02)heights.push(h);
+     }
+     assert.ok(heights.length>=2,
+       'stab missing upper/lower chord crossing at '+axis+' '+fraction);
+     assert.ok(heights[0]>heights[1]+.05,
+       'stab lower skin was visited before upper on '+axis+' at '+fraction);
+   }
+ }
  assert.equal(p0.Y,65);
  assert.equal(p0.A,65);
  assert.ok(p1.Y<p0.Y&&p1.A<p0.A);
