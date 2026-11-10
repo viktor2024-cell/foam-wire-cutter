@@ -4259,6 +4259,44 @@ const Gen = (() => {
         }
       });
     }
+    let topCornerEntry=false;
+    if(apexTop){
+      // A crown near mid-chord cannot start a full upper-then-lower
+      // traverse: part of the upper skin would be cut after the lower.
+      // Prefer a CHORD-END corner where both kerf-compensated rails
+      // reach the same end of their respective profiles.
+      const pts=[];
+      segments.forEach((seg,k)=>{for(let j=0;j<=256;j++){
+        const u=j/256,tw=layout.towers(seg.A(u),seg.B(u));
+        pts.push({k,u,tw});
+      }});
+      const minX=[0,1].map(i=>Math.min(...pts.map(p=>p.tw[i][0])));
+      const maxX=[0,1].map(i=>Math.max(...pts.map(p=>p.tw[i][0])));
+      const range=maxX.map((x,i)=>x-minX[i]);
+      const apex=layout.towers(segments[apexTop.k].A(apexTop.u),segments[apexTop.k].B(apexTop.u));
+      const nearEdge=(tw)=>[0,1].every(i=>range[i]>1e-6&&
+        Math.min(Math.abs(tw[i][0]-minX[i]),Math.abs(maxX[i]-tw[i][0]))<=Math.max(1,.05*range[i]));
+      if(!nearEdge(apex)){
+        const choices=[];
+        for(const dir of [-1,1]){
+          const cost=p=>[0,1].reduce((s,i)=>s+
+            (dir>0?maxX[i]-p.tw[i][0]:p.tw[i][0]-minX[i])/Math.max(1e-8,range[i]),0);
+          const closest=Math.min(...pts.map(cost));
+          if(closest>.02)continue; // no common chord end on the two rails
+          const near=pts.filter(p=>cost(p)<=closest+.002);
+          near.sort((a,b)=>Math.min(b.tw[0][1],b.tw[1][1])-Math.min(a.tw[0][1],a.tw[1][1]));
+          const p=near[0],[[,zl],[,zr]]=p.tw;
+          choices.push({k:p.k,u:p.u,min:Math.min(zl,zr),avg:(zl+zr)/2});
+        }
+        // Prefer the higher corner; the existing full-span vertical-entry
+        // check below still rejects an intersecting top slit.
+        choices.sort((a,b)=>b.min-a.min||b.avg-a.avg);
+        if(choices.length){
+          apexTop=choices[0];
+          topCornerEntry=true;
+        } else notes.push("Для верхнего входа не найден общий край хорды на обоих концах струны; используется вершина профиля");
+      }
+    }
     const bestY=Math.max(...corners.map(c=>c.y));
     // Adjacent ends of the same vertical edge can differ by a kerf radius
     // after compensation; treat them as a shared side of the profile.
@@ -4351,7 +4389,7 @@ const Gen = (() => {
     const towers=orderedPath;
     const yOut = stockCenter + side * (stockWidth / 2 + margin);
     const [[yl, zl], [yr, zr]] = towers[0];
-    let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", " + (apexTop?"top apex entry":"corner entry") + ", " + (apexTop&&!upperOrderVerified?"upper/lower order unverified":"upper first") + ", " + (hasUpperCorner ? "exit Z+5 mm" : "exit via entry slit") + " ***" + EOL;
+    let g = ";" + EOL + "; *** PROFILE: " + towers.length + " points, kerf " + kerf.toFixed(2) + ", " + (topCornerEntry?"top corner entry":apexTop?"top apex entry":"corner entry") + ", " + (apexTop&&!upperOrderVerified?"upper/lower order unverified":"upper first") + ", " + (hasUpperCorner ? "exit Z+5 mm" : "exit via entry slit") + " ***" + EOL;
     // Check the full wire at multiple span sections: a vertical approach to
     // this same corner must not first cross another part of the profile.
     let topEntry=preferTop&&!sideEntry&&safe>=Math.max(zl,zr)-1e-7;
