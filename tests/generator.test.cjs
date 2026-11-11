@@ -762,7 +762,7 @@ test('auto stock takes standard sheet thickness along wire, not vertical Z',asyn
  const state={
   Gen:gen,stepFile:{text},modelRotation:gen.identityRotation(),modelOffset:[0,0,0],
   geometry:gen.previewGeometry(text),machine:gen.CONFIG,
-  document:{getElementById:()=>({checked:false})},
+  document:{getElementById:id=>({checked:id==='gnTrim'})},
   n:id=>({gnScale:100,gnKerf:1,gnZ:10,gnClear:20,gnLead:5,gnTolerance:.6})[id],setTimeout
  };
  const seenTolerances=[];
@@ -800,22 +800,28 @@ test('F2 auto stock reduces allowances and clearance when the default setup exce
  const source=fs.readFileSync(path.join(__dirname,'../generator-view.js'),'utf8');
  const begin=source.indexOf('  async function autoStockOptions(');
  const end=source.indexOf("  document.getElementById('gnStockFromModel').addEventListener",begin);
+ let trimEnabled=true;
  const state={Gen:gen,stepFile:{text:step},modelRotation:gen.identityRotation(),modelOffset:[0,0,0],
   geometry:gen.previewGeometry(step),machine:gen.CONFIG,
-  document:{getElementById:()=>({checked:false})},
+  document:{getElementById:id=>({checked:id==='gnTrim'&&trimEnabled})},
   n:id=>({gnScale:100,gnKerf:1,gnZ:10,gnClear:20,gnLead:5,gnTolerance:.1})[id],setTimeout};
  const choices=await vm.runInNewContext(source.slice(begin,end)+';autoStockOptions()',state);
  assert.ok(choices.length,'auto stock should find a setup for F2');
  const best=choices[0];
  assert.equal(best.clearance,5);
  assert.equal(best.height,235);
- assert.equal(best.length,60);
+ assert.equal(best.length,100);
  const config=options({stock:[best.length,best.width,best.height],bottomZ:10,clearance:best.clearance,
   rotation:best.rotation,trim:true,trimAngle:90,cutOrder:'B90_B0',frameMarks:true,powerComp:false});
  const result=gen.buildProgram(step,'F2.stp',config);
  const parsed=sim.parseGcode(result.program);
  const report=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(report.warns.filter(warning=>warning.level==='crit').length,0,JSON.stringify(report.warns));
+ trimEnabled=false;
+ const withoutTrim=await vm.runInNewContext(source.slice(begin,end)+';autoStockOptions()',state);
+ assert.equal(withoutTrim[0].length,50);
+ const noTrim=gen.buildProgram(step,'F2.stp',{...config,stock:[50,withoutTrim[0].width,withoutTrim[0].height],trim:false});
+ assert.ok(noTrim.warnings.some(warning=>warning.includes('Разметка габарита')));
 });
 test('kil2 automatic stock and placement include the rotated bevel',{skip:!process.env.KIL_STEP},async()=>{
  const text=fs.readFileSync(process.env.KIL_STEP,'utf8'),geometry=gen.previewGeometry(text,gen.identityRotation(),1,.6);

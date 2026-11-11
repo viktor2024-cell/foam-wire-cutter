@@ -919,7 +919,7 @@ const generatorPreview = (() => {
         // THE WIRE (gnL / stock X), not the upright Z dimension.
         // Keep 5 mm on each wire-side end; vertical and transverse
         // cutting allowance remains 10 mm per side.
-        const minimumLength=g.size[0]+10;
+        const minimumLength=g.size[0]+(document.getElementById('gnTrim').checked?10:0);
         const sheet=[20,50,100].find(t=>t+1e-7>=minimumLength);
         let length=sheet||round5(minimumLength);
         let height=round5(minimumHeight),selectedClearance=clearance;
@@ -931,7 +931,6 @@ const generatorPreview = (() => {
           const maximumHeight=availableHeight(selectedClearance);
           if(maximumHeight<minimumReducedHeight)continue;
           height=Math.min(height,maximumHeight);
-          if(g.secondaryCount>0)length=round5(minimumLength);
         }
         let width=round5(g.size[1]+20);
         if(g.slopedPreview){
