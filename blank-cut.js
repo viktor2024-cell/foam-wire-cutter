@@ -90,13 +90,12 @@
       if(!near(pos.B,this.tableAngle)) throw new Error("Положение стола изменилось.");
       this.origin={...pos};this.plan=null;this.phase="zeroed";
     }
-    returnHome(pos) {
-      if(!["manual","zeroed","positioned","finished","done"].includes(this.phase) || this.hot || this.paused)
-        throw new Error("Остановите станок и выключите нагрев перед возвратом.");
+    navigate(pos,goal,bottom) {
       checkPosition(pos);
       if(!near(pos.B,this.tableAngle)) throw new Error("Положение стола изменилось.");
-      const high=Number(f(Math.max(pos.Y,pos.A,ALIGNED.Y-5)));
-      const goal=ALIGNED.X-5, bottom=ALIGNED.Y-5, steps=[];
+      if(!Number.isFinite(goal) || !Number.isFinite(bottom) || goal < -245 || goal>245 || bottom<0 || bottom>250)
+        throw new Error("Цель выходит за рабочий ход кареток.");
+      const high=Number(f(Math.max(pos.Y,pos.A,bottom))), steps=[];
       let here={...pos};
       const add=(command,target)=>{steps.push({command,target});here=target;};
       if(Math.abs(pos.Y-high)>0.02 || Math.abs(pos.A-high)>0.02)
@@ -107,6 +106,22 @@
         add(`G00 Y${f(bottom)} A${f(bottom)}`,{...here,Y:bottom,A:bottom});
       this.origin=null;this.plan=null;this.returnSteps=steps;
       this.returnNext();
+    }
+    moveFree(pos,depth,distance) {
+      if(this.phase!=="manual" || this.hot || this.paused) throw new Error("Свободное перемещение доступно до установки нуля с выключенным нагревом.");
+      if(!Number.isFinite(depth) || depth<0 || depth>ALIGNED.Y || !Number.isFinite(distance) || distance<0 || distance>limits.horizontal)
+        throw new Error("Проверьте Z и Y относительно HOME.");
+      this.navigate(pos,ALIGNED.X-distance,ALIGNED.Y-depth);
+    }
+    returnHome(pos) {
+      if(!["manual","zeroed","positioned","finished","done"].includes(this.phase) || this.paused || (this.hot && this.phase!=="done"))
+        throw new Error("Остановите станок перед возвратом.");
+      checkPosition(pos);
+      if(!near(pos.B,this.tableAngle)) throw new Error("Положение стола изменилось.");
+      if(this.hot) {
+        this.phase="cooling-return";
+        this.transmit("M05",()=>{this.hot=false;this.navigate(pos,ALIGNED.X-5,ALIGNED.Y-5);});
+      } else this.navigate(pos,ALIGNED.X-5,ALIGNED.Y-5);
     }
     returnNext() {
       const next=this.returnSteps.shift();
