@@ -709,7 +709,7 @@ test('pair checkbox controls Create G-code, not only the stock preview',()=>{
  assert.equal(get('gnTopEntry').checked,false,'side entry clears top entry');
 });
 test('pair G-code explicitly contains two profiles and a two-piece mode header',()=>{
- const r=build(options({pair:true,stock:[50,140,89]}));
+ const r=build(options({pair:true,stock:[50,140,93]}));
  assert.match(r.program,/CUT MODE=PAIR PIECES=2/);
  assert.equal((r.program.match(/PROFILE [12]\/2:/g)||[]).length,2);
  assert.ok(r.program.indexOf('PROFILE 1/2: UPPER')<r.program.indexOf('PROFILE 2/2: LOWER'));
@@ -717,8 +717,8 @@ test('pair G-code explicitly contains two profiles and a two-piece mode header',
  assert.match(build().program,/CUT MODE=SINGLE PIECES=1/);
  assert.equal((build().program.match(/PROFILE [12]\/2:/g)||[]).length,0);
 });
-test('pair uses one central web and two kerf-aware outer margins',()=>{
- const small=options({pair:true,stock:[50,140,89]});
+test('pair uses one central web and a fixed upper margin',()=>{
+ const small=options({pair:true,stock:[50,140,93]});
  const r=build(small);
  assert.match(r.program,/pair: upper reflected over gap/);
  assert.doesNotMatch(r.program,/GAP ENTRY/); // synthetic profile has no holes
@@ -728,7 +728,7 @@ test('pair uses one central web and two kerf-aware outer margins',()=>{
  const p=sim.parseGcode(r.program),machine={...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false};
  const check=sim.analyse(p,machine);
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
- assert.throws(()=>build(options({pair:true,stock:[50,140,88]})),/Пара не помещается.*89\.0/);
+ assert.throws(()=>build(options({pair:true,stock:[50,140,92]})),/Пара не помещается.*93\.0/);
 });
 test('external W1: mirror pair at 65 mm stock height is machinable',{skip:!process.env.W1_STEP},()=>{
  const text=fs.readFileSync(process.env.W1_STEP,'utf8');
@@ -1182,6 +1182,15 @@ test('pair preview uses the same height and gap as generated toolpaths',()=>{
  assert.ok(placement.zUpper>placement.zLower);
  assert.match(result.program,/PROFILE 1\/2: UPPER MIRRORED PIECE/);
  assert.throws(()=>build(options({pair:true,stock:[50,140,placement.minimumHeight-.1],bottomZ:10,kerf:1})),/Пара не помещается/);
+});
+test('pair upper body stays 5 mm below stock top for different kerfs and stock heights',()=>{
+ const geometry=gen.previewGeometry(fixture);
+ const minZ=Math.min(...geometry.sampled.flat().flatMap(pair=>pair.map(point=>point[2])));
+ for(const kerf of [0.5,1,2]) for(const height of [100,110]) {
+  const bottom=10, placement=gen.previewPair(geometry,height,bottom,kerf);
+  const upperBodyTop=placement.zUpper-(minZ-geometry.center[2]);
+  assert.ok(Math.abs(bottom+height-upperBodyTop-5)<1e-8);
+ }
 });
 
 
@@ -2165,7 +2174,7 @@ test('stab pair groove leads descend at both corners and clear both retained STE
   return Math.min(pointDistance(start,edgeA,edgeB),pointDistance(end,edgeA,edgeB),
    pointDistance(edgeA,start,end),pointDistance(edgeB,start,end));
  };
- for(const height of [48,70]){
+ for(const height of [52,70]){
   const config=options({stock:[305,220,height],bottomZ:10,clearance:15,kerf:1,
    pair:true,topEntry:false,trim:false,powerComp:false});
   const result=gen.buildProgram(step,'stab.stp',config);
