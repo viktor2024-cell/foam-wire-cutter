@@ -922,7 +922,17 @@ const generatorPreview = (() => {
         const minimumLength=g.size[0]+10;
         const sheet=[20,50,100].find(t=>t+1e-7>=minimumLength);
         let length=sheet||round5(minimumLength);
-        const height=round5(minimumHeight);
+        let height=round5(minimumHeight),selectedClearance=clearance;
+        const availableHeight=gap=>Math.floor((machine.VerticalTravel-bottom-modelOffset[2]-gap+1e-7)/5)*5;
+        const minimumReducedHeight=round5(required+2*Math.max(3,kerf/2+.1));
+        if(height>availableHeight(selectedClearance)){
+          if(minimumReducedHeight>availableHeight(selectedClearance)&&selectedClearance>5)
+            selectedClearance=5;
+          const maximumHeight=availableHeight(selectedClearance);
+          if(maximumHeight<minimumReducedHeight)continue;
+          height=Math.min(height,maximumHeight);
+          if(g.secondaryCount>0)length=round5(minimumLength);
+        }
         let width=round5(g.size[1]+20);
         if(g.slopedPreview){
           if(paired||!Number.isFinite(g.slopedBevelAngle))continue;
@@ -949,8 +959,8 @@ const generatorPreview = (() => {
            width/2+Math.abs(modelOffset[1])>machine.HorizontalTravel/2+1e-7 ||
            width/2+Math.abs(modelOffset[1])+n('gnLead')>machine.ParkX+1e-7 ||
            bottom+modelOffset[2]<0 ||
-           bottom+modelOffset[2]+height+clearance>machine.VerticalTravel+1e-7)continue;
-        results.push({rotation,geometry:g,length,width,height,standard:Boolean(sheet&&Math.abs(length-sheet)<1e-7),turn,
+           bottom+modelOffset[2]+height+selectedClearance>machine.VerticalTravel+1e-7)continue;
+        results.push({rotation,geometry:g,length,width,height,clearance:selectedClearance,standard:Boolean(sheet&&Math.abs(length-sheet)<1e-7),turn,
           description:rotations[turn].description,area:width*height,minimumHeight,minimumLength});
       }catch(e){/* A candidate may not form valid cutting geometry at this orientation. */}
     }
@@ -996,13 +1006,14 @@ const generatorPreview = (() => {
       fit.textContent='Ни одно положение модели не помещается в рабочую область с заданным нижним Z и безопасным зазором. Уменьшите масштаб или измените установку.';
       return;
     }
-    const best=choices[0];
+    const best=choices[0],clearanceBefore=n('gnClear');
     modelRotation=best.rotation;
     modelZOffset=0;showOffset();
     geometry=best.geometry;
     document.getElementById('gnL').value=best.length;
     document.getElementById('gnW').value=best.width;
     document.getElementById('gnH').value=best.height;
+    document.getElementById('gnClear').value=best.clearance;
     invalidate();rebuild();
     const fit=document.getElementById('gnFit');
     // The stock check above has validated dimensions; append actionable
@@ -1010,6 +1021,8 @@ const generatorPreview = (() => {
     const info='Автоподбор: '+best.description+', толщина листа вдоль струны '+
       best.length+' мм ('+(best.standard?'стандартная':'нестандартная')+
       '), заготовка '+best.length+' × '+best.width+' × '+best.height+' мм.'+
+      (best.height+1e-7<best.minimumHeight?' Вертикальный припуск уменьшен до '+((best.height-(best.minimumHeight-20))/2).toFixed(1)+' мм с каждой стороны.':'')+
+      (best.clearance<clearanceBefore?' Зазор над заготовкой уменьшен с '+clearanceBefore+' до '+best.clearance+' мм.':'')+
       (best.geometry.slopedPreview&&(best.width<Math.ceil((best.geometry.size[1]+20-1e-7)/5)*5||best.length<Math.ceil((best.geometry.size[0]+10-1e-7)/5)*5)
         ? ' Припуски уменьшены для поворота: вдоль струны '+((best.length-best.geometry.size[0])/2).toFixed(1)+' мм и поперёк '+((best.width-best.geometry.size[1])/2).toFixed(1)+' мм с каждой стороны.' : '');
     fit.textContent+=' '+info;
