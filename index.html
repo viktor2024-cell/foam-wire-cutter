@@ -2215,10 +2215,10 @@ const Gen = (() => {
   function pairPlacement(zsA, zsB, zc, span, stockHeight, bottomZ, kerf) {
     const low = Math.min(...zsA,...zsB)-zc-kerf/2;
     const topA = Math.max(...zsA)-zc+kerf/2, topB = Math.max(...zsB)-zc+kerf/2;
-    const outerMargin=kerf/2, minGap=5+kerf;
+    const outerMargin=kerf/2, upperMargin=5, minGap=5+kerf;
     const minimumHeight=Math.max(2*(Math.max(...zsA,...zsB)-Math.min(...zsA,...zsB))+minGap,
-      -2*low+topA+topB+minGap+2*outerMargin);
-    const zLower=bottomZ+outerMargin-low,zUpper=bottomZ+stockHeight-outerMargin+low;
+      -2*low+topA+topB+minGap+outerMargin+upperMargin-kerf/2);
+    const zLower=bottomZ+outerMargin-low,zUpper=bottomZ+stockHeight-upperMargin+low+kerf/2;
     const gapMid=(zLower+zUpper)/2, tilt=(topA-topB)/2*CONFIG.FieldWidth/span;
     return {minimumHeight,zLower,zUpper,gap:[gapMid-tilt,gapMid+tilt], gapAfterKerf:zUpper-zLower-topA-topB-kerf};
   }
