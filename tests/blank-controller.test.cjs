@@ -2,11 +2,17 @@ const {test}=require("node:test"),assert=require("node:assert/strict");
 const fs=require("node:fs"),vm=require("node:vm"),path=require("node:path");
 const BlankCut=require("../blank-cut.js");
 const html=fs.readFileSync(path.join(__dirname,"../index.html"),"utf8").replace(/\r/g,"");
+test("centre control sets zero and machine panel retains a separate stop",()=>{
+  assert.match(html,/<button id="blankZero" class="jog-center stop"[^>]*>0<\/button>/);
+  assert.equal((html.match(/id="blankZero"/g)||[]).length,1);
+  assert.match(html,/<button id="blankMachineStop" class="stop">Стоп<\/button>/);
+  assert.doesNotMatch(html,/id="blankStop"/);
+});
 function controller() {
   const start=html.indexOf("const BAUD ="),end=html.indexOf("refreshMachine();\n\n// ---",start);
   assert.ok(start>0&&end>start);
   const nodes={};
-  const get=id=>nodes[id]??=( {value:"",checked:false,disabled:false,textContent:"",
+  const get=id=>nodes[id]??=( {value:"",checked:false,disabled:false,textContent:"",classList:{toggle(key,value){this[key]=value;}},
     setAttribute(key,value){this[key]=value;},
     addEventListener(type,fn){this[type]=fn;}} );
   const context=vm.createContext({BlankCut,$:get,TextEncoder,Uint8Array,
@@ -26,6 +32,8 @@ function controller() {
 }
 test("manual controls send steps only after home, calibration and matching live positions",()=>{
   const {c,get,click,ack}=controller();
+  assert.equal(get("blankHeat").className,"heat-off");
+  assert.equal(get("blankHeat").textContent,"Включить нагрев");
   assert.equal(get("blankStart").disabled,true);
   click("blankHome"); assert.equal(c.mach.queue[0].text,"M05");
   ack(); assert.equal(c.mach.queue[0].text,"$H");
@@ -36,7 +44,6 @@ test("manual controls send steps only after home, calibration and matching live 
   assert.equal(c.blankSession.phase,"await-home");
   c.onStatus("<Idle|WPos:249,238,245,236,-7.3>");
   assert.equal(c.blankSession.phase,"ready");
-  assert.equal(get("blankPrepare").disabled,true);
   click("blankRotate"); assert.equal(c.mach.queue[0].text,"G00 B90.00 F1800.0"); ack();
   c.onStatus("<Idle|WPos:249,238,245,236,0>");
   assert.equal(c.blankSession.phase,"await-rotation");
@@ -47,11 +54,11 @@ test("manual controls send steps only after home, calibration and matching live 
   click("blankZDown");assert.equal(c.mach.queue[0].text,"G01 Y231.00 A231.00 F420.00");ack();
   c.onStatus("<Idle|WPos:245,231,245,231,90>");
   click("blankZero");assert.equal(c.mach.queue.length,0);
-  click("blankPrepare");assert.equal(c.mach.queue.length,0);
-  assert.equal(c.blankSession.phase,"positioned");
+  assert.equal(c.mach.queue.length,0);
+  assert.equal(c.blankSession.phase,"zeroed");
   assert.equal(get("blankHeat").className,"heat-off");
   click("blankHeat"); assert.equal(c.mach.queue[0].text,"M03 S500.00");
-  assert.equal(get("blankHeat").disabled,true); assert.equal(get("blankHeat").className,"heat-unknown");ack();
+  assert.equal(get("blankHeat").disabled,true); assert.equal(get("blankHeat").className,"heat-on");ack();
   assert.equal(get("blankHeat").className,"heat-on");
   click("blankStart"); assert.equal(c.mach.queue[0].text,"G01 Y181.00 A181.00 F420.00");ack();
   assert.equal(c.mach.queue[0].text,"G01 X145.00 Z145.00 F420.00");ack();
@@ -60,6 +67,23 @@ test("manual controls send steps only after home, calibration and matching live 
   assert.equal(get("blankHeat").className,"heat-on");ack();
   assert.equal(get("blankHeat").className,"heat-off");
   click("blankEnd"); assert.equal(c.blankSession.phase,"idle");
+});
+test("out-of-travel Z and Y are marked red and block starting",()=>{
+  const {c,get,click,ack}=controller();
+  get("blankDry").checked=true;
+  click("blankHome");ack();ack();ack();ack();
+  c.onStatus("<Idle|WPos:249,238,245,236,-7.3>");
+  click("blankRotate");ack();c.onStatus("<Idle|WPos:249,238,245,236,90>");
+  ack();ack();c.onStatus("<Idle|WPos:245,236,245,236,90>");
+  click("blankZero");
+  get("blankZ").value="237";get("blankY").value="491";c.refreshMachine();
+  assert.equal(get("blankZ").classList["blank-invalid"],true);
+  assert.equal(get("blankY").classList["blank-invalid"],true);
+  assert.equal(get("blankStart").disabled,true);
+  get("blankZ").value="50";get("blankY").value="100";c.refreshMachine();
+  assert.equal(get("blankZ").classList["blank-invalid"],false);
+  assert.equal(get("blankY").classList["blank-invalid"],false);
+  assert.equal(get("blankStart").disabled,false);
 });
 test("table arrow sends bounded rotation only at the raised HOME position",()=>{
   const {c,get,click,ack}=controller();
@@ -72,17 +96,30 @@ test("table arrow sends bounded rotation only at the raised HOME position",()=>{
   click("blankBMinus");assert.equal(c.mach.queue[0].text,"G00 B85.00 F1800.0");ack();
   c.onStatus("<Idle|WPos:245,236,245,236,85>");
   assert.equal(c.blankSession.tableAngle,85);
-  click("blankZero");click("blankPrepare");
-  assert.equal(c.blankSession.plan.angle,85);
+  click("blankZero");
+  assert.equal(c.blankSession.tableAngle,85);
+});
+test("return button uses calibrated 5 mm point without rotating the table",()=>{
+  const {c,get,click,ack}=controller();
+  click("blankHome");ack();ack();ack();ack();
+  c.onStatus("<Idle|WPos:249,238,245,236,-7.3>");
+  click("blankRotate");ack();c.onStatus("<Idle|WPos:249,238,245,236,90>");
+  ack();ack();c.onStatus("<Idle|WPos:245,236,245,236,90>");
+  assert.equal(get("blankReturn").disabled,false);
+  click("blankReturn");assert.equal(c.mach.queue[0].text,"G00 X240.00 Z240.00");ack();
+  c.onStatus("<Idle|WPos:240,236,240,236,90>");
+  assert.equal(c.mach.queue[0].text,"G00 Y231.00 A231.00");ack();
+  c.onStatus("<Idle|WPos:240,231,240,231,90>");
+  assert.equal(c.blankSession.phase,"manual");assert.equal(c.blankSession.tableAngle,90);
 });
 test("controller errors block further motion",()=>{
   const {c,click,ack}=controller(); click("blankHome"); c.onLine("error:1");
   assert.equal(c.blankSession.phase,"fault"); assert.ok(c.mach.stopTimer);
   assert.throws(()=>c.blankSession.cut());
 });
-test("centre stop interrupts a manual operation and blocks further movement",()=>{
+test("machine stop interrupts a manual operation and blocks further movement",()=>{
   const {c,click}=controller();
-  click("blankHome");click("blankStop");
+  click("blankHome");click("blankMachineStop");
   assert.equal(c.blankSession.phase,"fault");
   assert.ok(c.mach.stopTimer);
   assert.throws(()=>c.blankSession.cut());
@@ -93,7 +130,7 @@ test("laser mode prevents stationary heating",()=>{
   c.onStatus("<Idle|WPos:249,238,245,236,-7.3>");
   click("blankRotate"); ack(); c.onStatus("<Idle|WPos:249,238,245,236,90>");
   ack(); ack(); c.onStatus("<Idle|WPos:245,236,245,236,90>");
-  click("blankZero");click("blankPrepare");
+  click("blankZero");
   c.onLine("$32=1"); c.refreshMachine();
   assert.equal(get("blankHeat").disabled,true);
   click("blankHeat");
@@ -107,10 +144,11 @@ test("dry run sends movements without enabling heat",()=>{
   c.onStatus("<Idle|WPos:249,238,245,236,-7.3>");
   click("blankRotate");ack();c.onStatus("<Idle|WPos:249,238,245,236,90>");
   ack();ack();c.onStatus("<Idle|WPos:245,236,245,236,90>");
-  click("blankZero");click("blankPrepare");
+  click("blankZero");
   assert.equal(get("blankHeat").disabled,true);
   assert.equal(get("blankStart").disabled,false);
-  click("blankStart");
+  assert.equal(get("blankMoveTarget").disabled,false);
+  click("blankMoveTarget");
   assert.equal(c.mach.queue[0].text,"G01 Y186.00 A186.00 F420.00");ack();
   assert.equal(c.mach.queue[0].text,"G01 X145.00 Z145.00 F420.00");ack();
   c.onStatus("<Idle|WPos:145,186,145,186,90>");
@@ -122,7 +160,7 @@ test("heater state is marked uncertain after a controller alarm",()=>{
   c.onStatus("<Idle|WPos:249,238,245,236,-7.3>");
   click("blankRotate");ack();c.onStatus("<Idle|WPos:249,238,245,236,90>");
   ack();ack();c.onStatus("<Idle|WPos:245,236,245,236,90>");
-  click("blankZero");click("blankPrepare");click("blankHeat");ack();
+  click("blankZero");click("blankHeat");ack();
   assert.equal(get("blankHeat").className,"heat-on");
   c.onLine("ALARM:1");
   assert.equal(get("blankHeat").className,"heat-unknown");
@@ -135,7 +173,7 @@ test("blank machine panel pauses without sending the next cut until resume",asyn
   c.onStatus("<Idle|WPos:249,238,245,236,-7.3>");
   click("blankRotate");ack();c.onStatus("<Idle|WPos:249,238,245,236,90>");
   ack();ack();c.onStatus("<Idle|WPos:245,236,245,236,90>");
-  click("blankZero");click("blankPrepare");click("blankHeat");ack();
+  click("blankZero");click("blankHeat");ack();
   click("blankStart");assert.equal(c.mach.queue[0].text,"G01 Y186.00 A186.00 F420.00");
   click("blankPause");assert.equal(c.blankSession.paused,true);
   c.onStatus("<Hold:0|WPos:245,220,245,220,90>");

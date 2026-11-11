@@ -60,3 +60,25 @@ test("errors and lost connection prevent further movement",()=>{
   assert.deepEqual(failures,["error:1"]);assert.throws(()=>s.zero(origin));
   s.reset();s.home();s.lost();assert.equal(s.phase,"fault");
 });
+test("return waits for the vertical move before moving Y and keeps B fixed",()=>{
+  const {s,sent}=ready(),pos={X:100,Z:100,Y:100,A:100,B:90};
+  s.zero(pos);s.returnHome(pos);
+  assert.equal(s.origin,null);
+  assert.equal(sent.at(-1),"G00 Y231.00 A231.00");s.ack();
+  const count=sent.length;
+  s.status("Run",{...pos,Y:231,A:231},true);assert.equal(sent.length,count);
+  s.status("Idle",pos,true);assert.equal(sent.length,count);
+  s.status("Idle",{...pos,Y:231,A:231},true);
+  assert.equal(sent.at(-1),"G00 X240.00 Z240.00");s.ack();
+  s.status("Idle",{X:240,Z:240,Y:231,A:231,B:90},true);
+  assert.equal(s.phase,"manual");
+  assert.ok(!sent.slice(count-1).some(line=>/\bB/.test(line)));
+});
+test("return from above target moves horizontally before final lowering",()=>{
+  const {s,sent}=ready(),pos={X:200,Z:200,Y:236,A:236,B:90};
+  s.returnHome(pos);assert.equal(sent.at(-1),"G00 X240.00 Z240.00");s.ack();
+  s.status("Idle",{...pos,X:240,Z:240},true);
+  assert.equal(sent.at(-1),"G00 Y231.00 A231.00");s.ack();
+  s.status("Idle",{X:240,Z:240,Y:231,A:231,B:90},true);
+  assert.equal(s.phase,"manual");
+});
