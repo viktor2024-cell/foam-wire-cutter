@@ -30,3 +30,47 @@ test('switching modes preserves controls and selects the correct generation mode
   assert.equal(manual[0].hidden,true); assert.equal(auto[0].hidden,false);
   assert.equal(context.selected(),'pair'); assert.equal(nodes.gnModeAuto['aria-pressed'],'true');
 });
+
+test('manual generation keeps code available for review despite simulator critical warnings',()=>{
+ const start=html.indexOf('function generate(mode)');
+ const end=html.indexOf('$("tabCut").addEventListener',start);
+ const values={gnScale:100,gnTolerance:.1,gnL:100,gnW:200,gnH:70,gnZ:10,
+  gnKerf:1,gnFeed:7,gnMinS:500,gnMaxS:1000,gnClear:15,gnRetract:20,gnLead:5,
+  gnTrimAngle:0,gnCutOrder:'B0_B90',gnSide:'+'};
+ const nodes={};
+ const lookup=id=>nodes[id]??=(Object.hasOwn(values,id)?{value:values[id]}:{checked:false});
+ nodes.gnWarn={innerHTML:'',items:[],appendChild(item){this.items.push(item)}};
+ const calls=[];
+ const context=vm.createContext({$:lookup,stepFile:{name:'part.stp',text:'STEP'},job:null,
+  generatorMode:'manual',modelRotation:[],modelOffset:[0,0,0],modelZOffset:0,
+  generatorPreview:{getGuidePairs:()=>[[1,2]],getGuideStarts:()=>({}),hasAuxiliaryCurves:()=>true},
+  Gen:{buildF4Program:()=>({program:'G21\nM05\n',diagnostic:{operations:[{}]},
+   warnings:['Вход: нужна прорезь','Выход: нужна проверка']})},
+  document:{createElement:()=>({})},generatorSignature:()=> 'current',setCamera:()=>{},
+  prog:{check:{warns:[{level:'crit',text:'Перемещение через заготовку'}]}},
+  loadProgram:(...args)=>calls.push(args)});
+ vm.runInContext(html.slice(start,end)+';globalThis.runGenerate=generate;',context);
+ context.runGenerate('normal');
+ assert.equal(calls.length,1);
+ assert.equal(calls[0][2].previewOnly,false);
+ assert.equal(calls[0][2].operatorDirected,true);
+ assert.equal(nodes.gnDone.hidden,false);
+ assert.equal(nodes.gnSave.hidden,false);
+ assert.match(nodes.gnStatus.textContent,/Критических замечаний симулятора: 1/);
+ assert.equal(nodes.gnWarn.items.length,2);
+});
+
+test('machine start still blocks simulator critical errors for operator-directed code',()=>{
+ const start=html.indexOf('function startJob()');
+ const end=html.indexOf('function togglePause()',start);
+ const messages=[];
+ const context=vm.createContext({requireMachinableProgram:()=>true,requireCurrentProgram:()=>true,
+  mach:{connected:true,state:'Idle',spinOn:false},job:null,operatorDirectedProgram:true,
+  prog:{check:{warns:[{level:'crit',text:'Перемещение через заготовку'}]}},
+  $:()=>({checked:false}),currentText:'G21\nM05\n',buildStream:()=>[],
+  showMsg:message=>messages.push(message),confirm:()=>assert.fail('blocked job must not reach confirmation')});
+ vm.runInContext(html.slice(start,end)+';globalThis.runStart=startJob;',context);
+ context.runStart();
+ assert.equal(context.job,null);
+ assert.match(messages[0],/Запуск заблокирован: критических ошибок траектории 1/);
+});

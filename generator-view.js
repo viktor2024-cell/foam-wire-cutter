@@ -145,7 +145,7 @@ const generatorPreview = (() => {
     if (guideWire) {guideWire.parent?.remove(guideWire);guideWire.geometry.dispose();guideWire.material.dispose();guideWire=null;}
     const pair = savedGuidePairs[Number(guideOp.value)];
     if (!geometry || !pair) {
-      guideMotion.textContent='Назначьте пару кривых для диагностического просмотра. Станочный G-code не разрешён.';
+      guideMotion.textContent='Назначьте пару кривых для просмотра движения и создания G-code.';
       return draw();
     }
     const curves = geometry.auxiliaryCurves;
@@ -200,7 +200,7 @@ const generatorPreview = (() => {
     document.getElementById('gnOrderExplanation').textContent=
       'План: '+trimming+(finalOpenSlot?
         'B90 замкнутое отверстие → B0 основной профиль → B90 нижний паз (последний)':orderLabel)+'. '+
-      (mixed?'Для вспомогательных кривых это диагностическая последовательность; проверьте G-code F4 отдельно.':
+      (mixed?'G-code по подтверждённым парам использует этот порядок; проверьте входы, выходы и повороты в 3D.':
         blocked?'ВНИМАНИЕ: B0 первым может освободить деталь; этот порядок до дополнительной проверки заблокирован.':
         finalOpenSlot?'Перед завершающим пазом проверьте фиксацию детали после основного профиля.':
         'При поддерживаемой геометрии генератор сформирует G-code с указанными параметрами.');
@@ -208,7 +208,7 @@ const generatorPreview = (() => {
   guideOp.addEventListener('change',updateGuideMotion);
   guideProgress.addEventListener('input',updateGuideMotion);
   const guideEntryResult=document.getElementById('gnGuideEntryExitResult');
-  const getGuideDiagnostic=()=>{
+  const getGuideDiagnostic=(simulateStockRemoval=true)=>{
     if(!stepFile || !savedGuidePairs.length)
       throw new Error('Сначала выберите и подтвердите хотя бы одну пару направляющих.');
     const n=id=>Number(document.getElementById(id).value);
@@ -218,7 +218,7 @@ const generatorPreview = (() => {
       bottomZ:n('gnZ'),clearance:n('gnClear'),kerf:n('gnKerf'),
       trim:document.getElementById('gnTrim').checked,
       trimAngle:n('gnTrimAngle'),cutOrder:document.getElementById('gnCutOrder').value,
-      guideStarts:{...guideStarts},samples:128
+      guideStarts:{...guideStarts},samples:128,simulateStockRemoval
     });
   };
   guideEntryResult.style.whiteSpace='pre-wrap';
@@ -235,11 +235,11 @@ const generatorPreview = (() => {
   }).join('\n\n');
   document.getElementById('gnGuideEntryExit').addEventListener('click',()=>{
     try {
-      const report=getGuideDiagnostic();
+      const report=getGuideDiagnostic(false);
       guideEntryResult.className='note crit';
       guideEntryResult.textContent='Результаты входов и выходов (3 варианта для каждого конца):\n\n'+
         guideEntrySummary(report)+
-        '\n\nПересечения проверены с исходным прямоугольным блоком, не с готовой деталью. G-code запрещён.';
+        '\n\nПересечения проверены с исходным прямоугольным блоком, не с готовой деталью. Предупреждения не блокируют создание G-code для просмотра. Запуск станка проверяется отдельно.';
     } catch(e) {
       guideEntryResult.className='note crit';
       guideEntryResult.textContent='Проверка не выполнена: '+e.message;
@@ -306,7 +306,7 @@ const generatorPreview = (() => {
         sim.voxelSize.map(v=>v.toFixed(2)).join('×')+
         ' мм; снято торцеванием '+sim.trimmedVoxels+' ячеек. '+summary+
         '. Числа после двоеточия — пересечённые ячейки оставшегося пенопласта. '+
-        'Облако показывает выбранный остаток. Сохранность STEP-детали ещё не подтверждена; G-code заблокирован.';
+        'Облако показывает выбранный остаток. Сохранность STEP-детали ещё не подтверждена. G-code доступен для просмотра; запуск станка проверяется отдельно.';
       showStockStage();
     }catch(e){
       resetStockSimulation();
