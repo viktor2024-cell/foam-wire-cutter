@@ -34,7 +34,7 @@
     constructor(send,fail) { this.send=send; this.fail=fail; this.reset(); }
     reset() { this.phase="idle"; this.pending=null; this.hot=false; this.plan=null;
       this.tableAngle=null; this.targetAngle=null; this.origin=null; this.jogTarget=null;
-      this.paused=false; this.holdOff=false; this.deferred=null; }
+      this.paused=false; this.holdOff=false; this.deferred=null; this.returnSteps=[]; this.returnTarget=null; }
     get active() { return this.phase!=="idle"; }
     transmit(command,next) {
       if(this.pending) throw new Error("Дождитесь ответа контроллера.");
@@ -90,6 +90,30 @@
       if(!near(pos.B,this.tableAngle)) throw new Error("Положение стола изменилось.");
       this.origin={...pos};this.plan=null;this.phase="zeroed";
     }
+    returnHome(pos) {
+      if(!["manual","zeroed","positioned","finished","done"].includes(this.phase) || this.hot || this.paused)
+        throw new Error("Остановите станок и выключите нагрев перед возвратом.");
+      checkPosition(pos);
+      if(!near(pos.B,this.tableAngle)) throw new Error("Положение стола изменилось.");
+      const high=Number(f(Math.max(pos.Y,pos.A,ALIGNED.Y-5)));
+      const goal=ALIGNED.X-5, bottom=ALIGNED.Y-5, steps=[];
+      let here={...pos};
+      const add=(command,target)=>{steps.push({command,target});here=target;};
+      if(Math.abs(pos.Y-high)>0.02 || Math.abs(pos.A-high)>0.02)
+        add(`G00 Y${f(high)} A${f(high)}`,{...here,Y:high,A:high});
+      if(Math.abs(pos.X-goal)>0.02 || Math.abs(pos.Z-goal)>0.02)
+        add(`G00 X${f(goal)} Z${f(goal)}`,{...here,X:goal,Z:goal});
+      if(high>bottom+0.02)
+        add(`G00 Y${f(bottom)} A${f(bottom)}`,{...here,Y:bottom,A:bottom});
+      this.origin=null;this.plan=null;this.returnSteps=steps;
+      this.returnNext();
+    }
+    returnNext() {
+      const next=this.returnSteps.shift();
+      if(!next) {this.returnTarget=null;this.phase="manual";return;}
+      this.returnTarget=next.target;this.phase="returning";
+      this.transmit(next.command,()=>{this.phase="await-return";});
+    }
     prepare(p) {
       if(this.phase!=="zeroed" || !this.origin || !same(p.origin,this.origin) || this.tableAngle!==p.angle)
         throw new Error("Сначала задайте ноль у угла заготовки.");
@@ -143,10 +167,13 @@
       if(this.phase==="await-jog" && same(pos,this.jogTarget)) {
         this.tableAngle=this.jogTarget.B;this.jogTarget=null;this.phase="manual";
       }
+      if(this.phase==="await-return" && this.returnTarget &&
+          Object.entries(this.returnTarget).every(([axis,value])=>Number.isFinite(pos[axis]) && Math.abs(pos[axis]-value)<0.02))
+        this.returnNext();
       if(this.phase==="await-cut" && this.plan && same(pos,{X:this.plan.target,Z:this.plan.target,
           Y:this.plan.bottom,A:this.plan.bottom,B:this.tableAngle})) this.phase="done";
     }
-    lost() {if(this.active) {this.pending=null;this.deferred=null;this.paused=false;this.phase="fault";}}
+    lost() {if(this.active) {this.pending=null;this.deferred=null;this.returnSteps=[];this.returnTarget=null;this.paused=false;this.phase="fault";}}
   }
   const api={HOME,ALIGNED,limits,calibration,plan,Session,checkPosition,same};
   if(typeof module!=="undefined" && module.exports) module.exports=api;

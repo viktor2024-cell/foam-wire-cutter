@@ -119,15 +119,30 @@ pre.code .ln { color: var(--muted); display: inline-block; min-width: 4.5ch; }
 .blank-jog-grid { display: grid; grid-template-columns: repeat(3, 44px); grid-template-rows: repeat(3, 44px); gap: 4px; }
 .blank-jog-z { display: grid; grid-template-rows: repeat(3, 44px); gap: 4px; }
 .blank-jog button { padding: 0; width: 44px; height: 44px; font-size: 22px; line-height: 1; }
-.blank-jog .jog-left { grid-area: 2 / 1; }
-.blank-jog .jog-center { grid-area: 2 / 2; }
-.blank-jog .jog-right { grid-area: 2 / 3; }
-.blank-jog .jog-up { grid-area: 1 / 2; }
-.blank-jog .jog-down { grid-area: 3 / 2; }
+.blank-jog-grid .jog-left { grid-area: 2 / 1; }
+.blank-jog-grid .jog-center { grid-area: 2 / 2; }
+.blank-jog-grid .jog-right { grid-area: 2 / 3; }
+.blank-jog-grid .jog-up { grid-area: 1 / 2; }
+.blank-jog-grid .jog-down { grid-area: 3 / 2; }
 .blank-jog-z .jog-up { grid-area: 1 / 1; }
 .blank-jog-z .jog-down { grid-area: 3 / 1; }
-#panelBlankCut { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: minmax(0,1fr) 320px; gap: 12px; align-items: start; }
-@media (max-width: 860px) { #panelBlankCut { display: block; } #panelBlankCut .blank-aside { margin-top: 12px; } }
+#panelBlankCut { flex:1; min-height:0; overflow:auto; padding:8px; }
+.blank-header { display:flex; justify-content:space-between; align-items:center; }
+.blank-top,.blank-bottom { display:grid; gap:10px; margin:10px 0; }
+.blank-top { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.blank-bottom { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.blank-card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px; min-width:0; display:grid; gap:8px; align-content:start; }
+.blank-card h2 { margin:0 0 4px; }
+.blank-card label:not(.check) { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.blank-card input[type=number] { width:95px; padding:5px 8px; }
+.blank-card select { max-width:150px; }
+.blank-card button { border-radius:20px; }
+.blank-target { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; align-items:center; }
+.blank-target > div:first-child { display:grid; gap:8px; }
+.blank-jog-grid button { width:44px; height:44px; padding:0; font-size:20px; }
+.blank-rotate { display:flex; flex-wrap:wrap; gap:6px; align-items:center; border-top:1px solid var(--line); padding-top:10px; }
+#blankCmd { width:100%; } #blankLog { margin:0; max-height:9em; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; }
+@media (max-width: 700px) { .blank-top,.blank-bottom { grid-template-columns:minmax(0,1fr); } }
 #panelGen { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-content: start; }
 #panelGen .gn-preview { grid-column: 1 / -1; }
 #panelGen [hidden] { display: none !important; }
@@ -152,6 +167,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
 button.heat-off { background: #176d40; border-color: #176d40; color: #fff; }
 button.heat-on { background: #aa2525; border-color: #aa2525; color: #fff; }
 button.heat-unknown { background: var(--warn); border-color: var(--warn); color: #111; }
+.blank-invalid { border: 2px solid #d32f2f !important; background: #ffd9d9 !important; color: #111 !important; }
 .state.crit { background: color-mix(in srgb, var(--crit) 20%, transparent); color: var(--crit); }
 .state.ready { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
 .mline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -328,71 +344,22 @@ button.heat-unknown { background: var(--warn); border-color: var(--warn); color:
   </section>
 </div>
 
-<section id="panelBlankCut" class="box" hidden>
-  <div class="blank-main">
-  <h2>Резка заготовок</h2>
-  <p class="note">После HOME и поворота стола струна выравнивается. Переместите её к углу заготовки и нажмите «0»: от этой точки положительный Z идёт вниз, Y — внутрь станка.</p>
-  <div class="row" style="margin-top:10px">
-    <button id="blankPreview" type="button">Показать команды</button>
-    <label>Вниз от 0: Z, мм <input id="blankZ" type="number" min="0" step="0.1" placeholder="глубина"></label>
-    <label>Внутрь от 0: Y, мм <input id="blankY" type="number" min="0" step="0.1" placeholder="расстояние"></label>
-    <label>Стол после HOME <select id="blankAngle"><option value="0">B0 — 0°</option><option value="90">B90 — 90°</option></select></label>
-    <button id="blankRotate" type="button" disabled>Повернуть стол</button>
-    <label>Скорость, мм/с <input id="blankFeed" type="number" min="0.1" step="0.1" value="7"></label>
-    <label>Мощность S <input id="blankPower" type="number" min="1" max="1000" step="1" value="500"></label>
+<section id="panelBlankCut" hidden>
+  <div class="blank-header"><h2>РЕЗКА ЗАГОТОВОК</h2><span class="state off" id="blankState">нет связи</span></div>
+  <div class="blank-top">
+    <section class="blank-card"><h2>1. Станок</h2><button id="blankConnect" class="primary">Подключить</button><button id="blankUnlock">Разблокировать</button></section>
+    <section class="blank-card"><h2>2. HOME</h2><button id="blankHome">Выполнить HOME</button><button id="blankReturn" type="button" disabled>Возврат к HOME (5 мм)</button><p id="blankProgress" class="note" role="status"></p><label>Угол после HOME <select id="blankAngle"><option value="0">B0 — 0°</option><option value="90">B90 — 90°</option></select></label><button id="blankRotate" type="button" disabled>Повернуть стол</button></section>
+    <section class="blank-card"><h2>3. Параметры реза</h2><label>Скорость, мм/с <input id="blankFeed" type="number" min="0.1" step="0.1" value="7"></label><label>Нагрев, S <input id="blankPower" type="number" min="1" max="1000" step="1" value="500"></label><button id="blankHeat" type="button" aria-pressed="false" disabled>Нагрев</button></section>
   </div>
-  <div class="row" style="margin-top:10px">
-    <label>Шаг, мм <input id="blankStep" type="number" min="0.1" max="20" step="0.1" value="5"></label>
-    <label>Шаг стола, ° <input id="blankStepB" type="number" min="0.1" max="15" step="0.1" value="5"></label>
-    <button id="blankZero" type="button" disabled>0 — угол заготовки</button>
+  <div class="blank-bottom">
+    <section class="blank-card"><h2>4. Целевое положение струны и стола</h2>
+      <div class="blank-target"><div><label>Вниз от 0: Z, мм <input id="blankZ" type="number" min="0" step="0.1" placeholder="глубина"></label><label>Внутрь от 0: Y, мм <input id="blankY" type="number" min="0" step="0.1" placeholder="расстояние"></label><label>Шаг, мм (макс. 20) <input id="blankStep" type="number" min="0.1" max="20" step="0.1" value="5"></label></div>
+      <div class="blank-jog-grid" role="group" aria-label="Ручное перемещение"><button id="blankZUp" class="jog-up" type="button" aria-label="Z вверх" title="Z вверх" disabled>▲</button><button id="blankYOut" class="jog-left" type="button" aria-label="Y наружу" title="Y наружу" disabled>◀</button><button id="blankZero" class="jog-center stop" type="button" aria-label="Установить локальный ноль" title="Установить локальный ноль у угла заготовки" disabled>0</button><button id="blankYIn" class="jog-right" type="button" aria-label="Y внутрь" title="Y внутрь" disabled>▶</button><button id="blankZDown" class="jog-down" type="button" aria-label="Z вниз" title="Z вниз" disabled>▼</button></div></div>
+      <div class="blank-rotate"><span>Стол B</span><button id="blankBMinus" type="button" aria-label="Поворот стола B минус" title="B минус" disabled>↶</button><button id="blankBPlus" type="button" aria-label="Поворот стола B плюс" title="B плюс" disabled>↷</button><label>Шаг, ° (макс. 15) <input id="blankStepB" type="number" min="0.1" max="15" step="0.1" value="5"></label></div><p class="note">Поворот стола — только при поднятой струне у HOME. Кнопка 0 запоминает угол заготовки.</p><button id="blankMoveTarget" type="button" disabled>Переместить к цели</button>
+    </section>
+    <section class="blank-card"><h2>5. Управление резом</h2><button id="blankStart" class="primary">Старт</button><button id="blankPause">Пауза</button><button id="blankMachineStop" class="stop">Стоп</button><button id="blankEnd" type="button" disabled>Завершить</button><label class="check"><input type="checkbox" id="blankDry" checked> Холостой прогон без нагрева и пенопласта</label><label class="check"><input type="checkbox" id="blankHoldOff" checked> Гасить струну на паузе</label><div id="blankProg" class="note"></div><div id="blankPosition" class="note"></div><div id="blankMessage" class="note" role="status" aria-live="polite"></div><details><summary>Команды и журнал станка</summary><input id="blankCmd" type="text" placeholder="Команда, например $$" aria-label="Команда для контроллера" spellcheck="false" autocomplete="off"><pre id="blankLog"></pre></details></section>
   </div>
-  <div class="blank-jog" role="group" aria-label="Ручное перемещение">
-    <div class="blank-jog-grid">
-      <button id="blankZUp" class="jog-up" type="button" aria-label="Z вверх" title="Z вверх" disabled>▲</button>
-      <button id="blankYOut" class="jog-left" type="button" aria-label="Y наружу" title="Y наружу" disabled>◀</button>
-      <button id="blankStop" class="jog-center stop" type="button" aria-label="Стоп станка" title="Стоп станка" disabled>■</button>
-      <button id="blankYIn" class="jog-right" type="button" aria-label="Y внутрь" title="Y внутрь" disabled>▶</button>
-      <button id="blankZDown" class="jog-down" type="button" aria-label="Z вниз" title="Z вниз" disabled>▼</button>
-    </div>
-    <div class="blank-jog-z" role="group" aria-label="Поворот стола">
-      <button id="blankBPlus" class="jog-up" type="button" aria-label="Поворот стола B плюс" title="B плюс" disabled>▲</button>
-      <button id="blankBMinus" class="jog-down" type="button" aria-label="Поворот стола B минус" title="B минус" disabled>▼</button>
-    </div>
-    <div class="note">Крест: Z вверх/вниз, Y наружу/внутрь.<br>Справа: стол B+/B− у HOME.</div>
-  </div>
-  <p id="blankProgress" class="note" role="status"></p>
-  <p id="blankPosition" class="note"></p>
-  <div class="row" style="margin-top:10px">
-    <button id="blankPrepare" type="button" disabled>Подготовить рез</button>
-    <button id="blankHeat" type="button" aria-pressed="false" disabled>Нагрев: проверить</button>
-    <button id="blankEnd" type="button" disabled>Завершить</button>
-  </div>
-  <pre id="blankCode" class="code"></pre>
-  <p class="note">Поле между башнями — 370 мм, поперечный ход — 490 мм. Размеры и свободное место при повороте не проверяются: убедитесь, что заготовка и крепление проходят между башнями. Программный стоп не заменяет аварийную кнопку станка.</p>
-  </div>
-  <aside class="blank-aside"><section class="box">
-    <h2>Станок</h2>
-    <div class="mline">
-      <button id="blankConnect" class="primary">Подключить</button>
-      <span class="state off" id="blankState">нет связи</span>
-    </div>
-    <div class="row">
-      <button id="blankHome">Хоминг</button>
-      <button id="blankUnlock">Разблокировать</button>
-    </div>
-    <label class="check"><input type="checkbox" id="blankDry" checked> Холостой прогон, без струны</label>
-    <label class="check"><input type="checkbox" id="blankHoldOff" checked> Гасить струну на паузе</label>
-    <div class="row">
-      <button id="blankStart" class="primary">Старт</button>
-      <button id="blankPause">Пауза</button>
-      <button id="blankMachineStop" class="stop">Стоп</button>
-    </div>
-    <div class="note" id="blankProg"></div>
-    <div class="note" id="blankMessage" role="status" aria-live="polite"></div>
-    <input id="blankCmd" type="text" placeholder="Команда, например $$" aria-label="Команда для контроллера" spellcheck="false" autocomplete="off" style="width:100%">
-    <pre id="blankLog" style="margin:0;max-height:9em;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere"></pre>
-    <div class="note">«Стоп» программный. Аварийно останавливайте станок кнопкой или выключателем питания.</div>
-  </section></aside>
+  <p class="note">Поле между башнями — 370 мм, поперечный ход — 490 мм. Габариты заготовки и свободное место при повороте не проверяются. Программный стоп не заменяет аварийную кнопку станка.</p>
 </section>
 
 <section id="panelLayout" class="box" hidden>
@@ -2091,7 +2058,8 @@ function refreshBlank(on,base) {
     aligning:"Выравнивание струны у HOME…","await-align":"Ожидание выравнивания струны…",
     manual:"Переместите струну к углу заготовки и нажмите «0».",
     jogging:"Команда перемещения отправлена…","await-jog":"Ожидание окончания перемещения…",
-    zeroed:"Ноль задан. Введите Z и Y и подготовьте рез.",
+    returning:"Возврат к HOME…","await-return":"Ожидание завершения этапа возврата…",
+    zeroed:"Ноль задан. Введите Z и Y для реза.",
     positioned:blankSession.plan?.dry?"Холостой прогон готов: уберите пенопласт.":"Рез подготовлен; можно включить нагрев.",heating:"Включение нагрева…",
     heated:"Команда нагрева принята; проверьте нагрев перед резом.",cutting:"Команда реза отправлена…",
     "await-cut":"Рез выполняется…",done:blankSession.hot?"Рез завершён; выключите нагрев.":"Холостой прогон завершён.",
@@ -2101,21 +2069,23 @@ function refreshBlank(on,base) {
   $("blankState").textContent=!on?"нет связи":mach.state?(STATES[base]||mach.state):"жду ответ";
   $("blankState").className="state "+(!on?"off":base==="Alarm"?"crit":base==="Idle"?"ready":"on");
   $("blankHome").disabled=!free || blankSession.active;
+  $("blankReturn").disabled=!free || blankSession.hot || !["manual","zeroed","positioned","finished","done"].includes(p);
   $("blankUnlock").disabled=$("blankCmd").disabled=!on || !!job || blankSession.active;
   $("blankRotate").disabled=!free || p!=="ready";
-  $("blankPrepare").disabled=!free || p!=="zeroed";
-  const canHeatOn=free && p==="positioned" && !blankSession.plan?.dry && blankLaserMode===0;
+  const validated=blankValidate(), candidate=p==="zeroed"?validated:null;
+  const canHeatOn=free && ((p==="zeroed" && candidate && !candidate.dry) || (p==="positioned" && !blankSession.plan?.dry)) && blankLaserMode===0;
   const canHeatOff=free && blankSession.hot && ["heated","done"].includes(p);
-  const heat=$("blankHeat"), heatUnknown=!on || mach.linkLost || p==="fault" || p==="idle" || p==="homing" || p==="await-home" || p==="heating" || (blankSession.paused && blankSession.holdOff);
+  const heat=$("blankHeat"), heatUnknown=!on || mach.linkLost || p==="fault" || (blankSession.paused && blankSession.holdOff), heatRequested=blankSession.hot || p==="heating";
   heat.disabled=!(canHeatOn || canHeatOff);
-  heat.className=heatUnknown?"heat-unknown":blankSession.hot?"heat-on":"heat-off";
-  heat.textContent=heatUnknown?"Нагрев: проверить":blankSession.hot?"Нагрев ВКЛ":"Нагрев ВЫКЛ";
-  heat.setAttribute("aria-pressed",String(blankSession.hot));
-  heat.title=heatUnknown?"Состояние нагрева не подтверждено":blankSession.hot?"Нажмите, чтобы выключить нагрев":"Нажмите, чтобы включить нагрев";
-  $("blankStart").disabled=!free || !(p==="heated" || (p==="positioned" && blankSession.plan?.dry));
+  heat.className=heatUnknown?"heat-unknown":heatRequested?"heat-on":"heat-off";
+  heat.textContent=heatUnknown?(!on || mach.linkLost?"Нагрев: нет связи":p==="fault"?"Нагрев: ошибка":"Нагрев: пауза"):p==="heating"?"Включение нагрева…":blankSession.hot?"Нагрев ВКЛ":"Включить нагрев";
+  heat.setAttribute("aria-pressed",String(heatRequested));
+  heat.title=heatUnknown?"Состояние нагрева неизвестно":heatRequested?"Нажмите, чтобы выключить нагрев":"Нажмите, чтобы включить нагрев";
+  $("blankStart").disabled=!free || !(p==="heated" || (p==="positioned" && blankSession.plan?.dry) || (p==="zeroed" && candidate?.dry));
+  $("blankMoveTarget").disabled=$("blankStart").disabled;
   $("blankPause").disabled=!on || (job?!!job.halt:!["cutting","await-cut"].includes(p));
   $("blankPause").textContent=(job?job.paused:blankSession.paused)?"Продолжить":"Пауза";
-  $("blankStop").disabled=$("blankMachineStop").disabled=!on;
+  $("blankMachineStop").disabled=!on;
   $("blankEnd").disabled=!(free && !blankSession.hot && ["ready","manual","zeroed","positioned","finished","done"].includes(p)) && !(p==="fault" && !mach.stopTimer);
   for(const id of ["blankZUp","blankZDown","blankYOut","blankYIn","blankZero"]) $(id).disabled=!free || !["manual","zeroed"].includes(p);
   const canTurn=free && ["manual","zeroed"].includes(p) && !blankSession.hot && mach.blankPositionValid &&
@@ -2140,23 +2110,28 @@ function blankPlan() {
   const field=id=>$(id).value.trim()===""?NaN:Number($(id).value);
   return BlankCut.plan(blankSession.origin,field("blankZ"),field("blankY"),field("blankFeed"),field("blankPower"),blankSession.tableAngle,$("blankDry").checked);
 }
+function blankValidate() {
+  const origin=blankSession.origin;
+  for(const [id,invalid] of [
+    ["blankZ",origin && $("blankZ").value.trim()!=="" && (!Number.isFinite(Number($("blankZ").value)) || Number($("blankZ").value)<0 || Number($("blankZ").value)>origin.Y)],
+    ["blankY",origin && $("blankY").value.trim()!=="" && (!Number.isFinite(Number($("blankY").value)) || Number($("blankY").value)<=0 || Number($("blankY").value)>origin.X+245)]
+  ]) { $(id).classList.toggle("blank-invalid",!!invalid); $(id).setAttribute("aria-invalid",String(!!invalid)); }
+  try { return blankPlan(); } catch { return null; }
+}
 function requireBlankPosition(expected) {
   if(!mach.hasPos || !mach.blankPositionValid || performance.now()-mach.lastPosAt>1500 ||
       Object.entries(expected).some(([axis,value])=>!Number.isFinite(mach.pos[axis]) || Math.abs(mach.pos[axis]-value)>0.15))
     throw new Error("Текущее положение не подтверждено. Проверьте координаты и выполните хоминг заново.");
-}
-function blankPreview() {
-  const p=blankPlan();
-  $("blankCode").textContent=["; Фрагменты для просмотра — запускать только из вкладки","; От заданного оператором нуля",p.dry?"; Холостой прогон без нагрева":p.heat,
-    "; Сначала вниз Z, затем внутрь Y",p.lower,p.cut,p.dry?null:p.off].filter(Boolean).join("\n");
-  return p;
 }
 function blankAction(action) {
   try { action(); showMsg(""); }
   catch(error) { showMsg(error.message,true); }
   refreshMachine();
 }
-$("blankPreview").addEventListener("click",()=>blankAction(blankPreview));
+for(const id of ["blankZ","blankY","blankFeed","blankPower","blankDry"]) {
+  $(id).addEventListener("input",refreshMachine);
+  $(id).addEventListener("change",refreshMachine);
+}
 $("blankConnect").addEventListener("click",connectMachine);
 $("blankUnlock").addEventListener("click",()=>{ if(mach.connected && !job && !blankSession.active) sendLine("$X"); });
 $("blankCmd").addEventListener("keydown",e=>{
@@ -2168,6 +2143,12 @@ $("gHoldOff").addEventListener("change",()=>{ $("blankHoldOff").checked=$("gHold
 $("blankHome").addEventListener("click",()=>blankAction(()=>{
   if(!mach.connected || mach.state!=="Idle" || mach.linkLost || job || mach.queue.length) throw new Error("Контроллер не готов.");
   if(confirm("Хоминг переместит каретки и повернёт стол. Путь свободен?")) blankSession.home();
+}));
+$("blankReturn").addEventListener("click",()=>blankAction(()=>{
+  if(!mach.connected || mach.state!=="Idle" || mach.linkLost || job || mach.queue.length) throw new Error("Контроллер не готов.");
+  requireBlankPosition({B:blankSession.tableAngle});
+  if(confirm("Струна вернётся к 5 мм от выровненного HOME: сначала поднимется, затем пойдёт по Y, при необходимости опустится на конечную высоту. Стол не поворачивается. Нагрев должен быть выключен, весь путь свободен. Продолжить?"))
+    blankSession.returnHome(mach.pos);
 }));
 $("blankAngle").addEventListener("change",refreshMachine);
 $("blankRotate").addEventListener("click",()=>blankAction(()=>{
@@ -2198,30 +2179,25 @@ $("blankZero").addEventListener("click",()=>blankAction(()=>{
   requireBlankPosition({B:blankSession.tableAngle});
   blankSession.zero(mach.pos);
 }));
-$("blankPrepare").addEventListener("click",()=>blankAction(()=>{
-  if(!mach.connected || mach.state!=="Idle" || mach.linkLost || job || mach.queue.length) throw new Error("Контроллер не готов.");
-  const p=blankPreview();
-  requireBlankPosition(p.origin);
-  blankSession.prepare(p);
-}));
 $("blankHeat").addEventListener("click",()=>blankAction(()=>{
   if(!mach.connected || mach.state!=="Idle" || mach.linkLost || job || mach.queue.length) throw new Error("Сначала остановите движение.");
   if(blankSession.hot) { blankSession.off(); return; }
   if(blankLaserMode!==0) throw new Error("Нагрев недоступен: проверьте режим $32=0.");
-  const p=blankSession.plan;
-  if(!p) throw new Error("Сначала подготовьте рез.");
+  const p=blankSession.phase==="zeroed"?blankPlan():blankSession.plan;
+  if(!p) throw new Error("Сначала задайте ноль и допустимые параметры реза.");
   requireBlankPosition(p.origin);
-  if(confirm("Включить нагрев струны?")) blankSession.heat();
+  if(confirm("Включить нагрев струны?")) { if(blankSession.phase==="zeroed") blankSession.prepare(p); blankSession.heat(); }
 }));
-$("blankStart").addEventListener("click",()=>blankAction(()=>{
+function startBlankCut() { blankAction(()=>{
   if(!mach.connected || mach.state!=="Idle" || mach.linkLost || job || mach.queue.length) throw new Error("Контроллер не готов.");
-  const p=blankSession.plan;
+  const p=blankSession.phase==="zeroed"?blankPlan():blankSession.plan;
   requireBlankPosition(p.origin);
   if(p.dry && mach.spinOn) throw new Error("Выключите нагрев перед холостым прогоном.");
   const message=p.dry?"Холостой прогон без нагрева. Пенопласт убран?":"Струна с нагревом опустится на Z="+p.depth+" мм, затем пойдёт внутрь на Y="+p.distance+" мм. Начать рез?";
-  if(confirm(message)) blankSession.cut();
-}));
-$("blankStop").addEventListener("click",()=>stopMachine("Остановлено. Проверьте, что нагрев выключен.",true));
+  if(confirm(message)) { if(blankSession.phase==="zeroed") blankSession.prepare(p); blankSession.cut(); }
+}); }
+$("blankStart").addEventListener("click",startBlankCut);
+$("blankMoveTarget").addEventListener("click",startBlankCut);
 $("blankMachineStop").addEventListener("click",()=>stopMachine("Остановлено. Проверьте, что нагрев выключен.",true));
 function toggleBlankPause() {
   if(!mach.connected || mach.linkLost || job) throw new Error("Контроллер не готов.");
