@@ -1101,7 +1101,15 @@ function checkProfileOverlap(program, expectedDirection = 1, requireRise = true)
  const count=+lines[i].match(/PROFILE: (\d+) points/)[1];
  const moves=lines.slice(i+1).filter(line=>/^G01 /.test(line));
  const coords=line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?\d+(?:\.\d+)?)/g)].map(m=>[m[1],+m[2]]));
- const points=moves.map(coords),start=points[0],closed=points[count-1];
+ let points=moves.map(coords);
+ if(/entry\/exit Z\+5 mm/.test(lines[i])) {
+  // The entry mirrors the exit: first G01 runs 5 mm above the corner, then drops onto it.
+  const [above,corner]=points;
+  assert.ok(Math.abs(above.X-corner.X)<.03 && Math.abs(above.Z-corner.Z)<.03,'drop onto the corner is vertical');
+  assert.ok(Math.abs(above.Y-corner.Y-5*expectedDirection)<.03 && Math.abs(above.A-corner.A-5*expectedDirection)<.03,'entry is 5 mm above the corner');
+  points=points.slice(1);
+ }
+ const start=points[0],closed=points[count-1];
  for(const axis of ['X','Y','Z','A']) assert.ok(Math.abs(start[axis]-closed[axis])<.03,'contour returns to entry '+axis);
  const exit=points[count],outside=points[count+(expectedDirection?1:0)];
  if(expectedDirection) {
@@ -2022,4 +2030,93 @@ test('external stab: top entry at highest profile point and same-slit exit',
  const p=sim.parseGcode(g),report=sim.analyse(p,
    {...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
+});
+
+// Corner entry on a profile with a V-groove (stab + elevator hinge): the corner is the lip of the groove
+// and the skin continues past it. A horizontal lead-in at corner height ran 0.2 mm from that skin
+// (closer than half the kerf) and scarred it; the entry now mirrors the exit: in 5 mm above, then down.
+test('side entry to a groove lip arrives from above, mirroring the exit',()=>{
+ const stab=fs.readFileSync(path.join(__dirname,'fixtures/stab-groove.stp'),'latin1');
+ const o=options({stock:[320,240,50],bottomZ:10,clearance:20,kerf:1,trim:false,powerComp:false});
+ const program=gen.buildProgram(stab,'stab-groove.stp',o).program;
+ const block=program.slice(program.indexOf('*** PROFILE:')).split(/\r?\n/);
+ assert.match(block[0],/entry\/exit Z\+5 mm/);
+ const xyza=line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?\d+(?:\.\d+)?)/g)].map(m=>[m[1],+m[2]]));
+ const cuts=block.filter(s=>/^G01 X/.test(s)).map(xyza);
+ const [inward,drop]=cuts,exit=cuts.at(-1),rise=cuts.at(-2);
+ // G-code axes: X=left tower Y, Y=left tower Z, Z=right tower Y, A=right tower Z
+ assert.ok(Math.abs(inward.Y-drop.Y-5)<.01&&Math.abs(inward.A-drop.A-5)<.01,'drop of 5 mm onto the corner');
+ assert.ok(Math.abs(inward.X-drop.X)<.01&&Math.abs(inward.Z-drop.Z)<.01,'drop is vertical');
+ assert.ok(Math.abs(rise.Y-drop.Y-5)<.01,'exit rises along the same line');
+ assert.ok(Math.abs(exit.Y-inward.Y)<.01&&Math.abs(exit.A-inward.A)<.01,'exit leaves at the entry height');
+});
+
+test('stab pair groove leads descend at both corners and clear both retained STEP profiles',()=>{
+ const step=fs.readFileSync(path.join(__dirname,'fixtures/stab-groove.stp'),'utf8');
+ const shape=new gen.Model(step).build();
+ const boundary=shape.outer.flatMap(([face,forward])=>{
+  const samples=gen.sampleFace(face,face.t0,face.t1,.001,.5);
+  return forward?samples:samples.slice().reverse();
+ });
+ const geometry=gen.previewGeometry(step);
+ const pointDistance=(point,start,end)=>{
+  const dx=end[0]-start[0],dz=end[1]-start[1];
+  const ratio=Math.max(0,Math.min(1,((point[0]-start[0])*dx+(point[1]-start[1])*dz)/Math.max(1e-18,dx*dx+dz*dz)));
+  return Math.hypot(point[0]-start[0]-ratio*dx,point[1]-start[1]-ratio*dz);
+ };
+ const cross=(start,end,point)=>(end[0]-start[0])*(point[1]-start[1])-(end[1]-start[1])*(point[0]-start[0]);
+ const segmentDistance=(start,end,edgeA,edgeB)=>{
+  if(cross(start,end,edgeA)*cross(start,end,edgeB)<0&&
+     cross(edgeA,edgeB,start)*cross(edgeA,edgeB,end)<0)return 0;
+  return Math.min(pointDistance(start,edgeA,edgeB),pointDistance(end,edgeA,edgeB),
+   pointDistance(edgeA,start,end),pointDistance(edgeB,start,end));
+ };
+ for(const height of [48,70]){
+  const config=options({stock:[305,220,height],bottomZ:10,clearance:15,kerf:1,
+   pair:true,topEntry:false,trim:false,powerComp:false});
+  const result=gen.buildProgram(step,'stab.stp',config);
+  const placement=gen.previewPair(geometry,height,config.bottomZ,config.kerf);
+  const parsed=sim.parseGcode(result.program);
+  const markers=parsed.sections.filter(section=>/^PROFILE [12]\/2:/.test(section.text));
+  assert.equal(markers.length,2);
+  const operations=markers.map((marker,index)=>{
+   const moves=parsed.moves.filter(move=>move.line>marker.line&&(index===1||move.line<markers[1].line));
+   const cuts=moves.filter(move=>move.type==='G1');
+   const [approach,drop]=cuts;
+   for(const axis of ['X','Z'])assert.equal(approach.to[axis],drop.to[axis]);
+   for(const axis of ['Y','A'])assert.ok(Math.abs(approach.to[axis]-drop.to[axis]-5)<.01);
+   for(const axis of ['X','Y','Z','A'])
+    assert.equal(cuts.at(-2).to[axis],approach.to[axis],'exit retraces the vertical entry');
+   return [...cuts.slice(0,2),...cuts.slice(-2)];
+  });
+  const clearance=operations.map(()=>[Infinity,Infinity]);
+  for(let spanIndex=0;spanIndex<=40;spanIndex++){
+   const along=-result.part.span/2+result.part.span*spanIndex/40;
+   const towerFraction=(along+gen.CONFIG.FieldWidth/2)/gen.CONFIG.FieldWidth;
+   const polygons=[true,false].map(upper=>boundary.map(pair=>{
+    const spanA=(upper?1:-1)*(pair[0][1]-(shape.planeA+shape.planeB)/2);
+    const spanB=(upper?1:-1)*(pair[1][1]-(shape.planeA+shape.planeB)/2);
+    const ratio=(along-spanA)/(spanB-spanA);
+    const point=pair[0].map((value,axis)=>value+ratio*(pair[1][axis]-value));
+    return [(upper?-1:1)*(point[0]-(result.part.x0+result.part.x1)/2),
+     (upper?-1:1)*(point[2]-(result.part.z0+result.part.z1)/2)+(upper?placement.zUpper:placement.zLower)];
+   }));
+   const wirePoint=position=>[position.X*(1-towerFraction)+position.Z*towerFraction,
+    position.Y*(1-towerFraction)+position.A*towerFraction];
+   operations.forEach((leads,operation)=>leads.forEach(move=>{
+    const start=wirePoint(move.from),end=wirePoint(move.to);
+    polygons.forEach((polygon,body)=>{
+     for(let index=0;index<polygon.length;index++)
+      clearance[operation][body]=Math.min(clearance[operation][body],
+       segmentDistance(start,end,polygon[index],polygon[(index+1)%polygon.length]));
+    });
+   }));
+  }
+  for(let operation=0;operation<2;operation++){
+   assert.ok(clearance[operation][operation]>=config.kerf/2-.02,'lead must stay outside the retained surface, allowing G-code rounding');
+   assert.ok(clearance[operation][1-operation]>4,'lead must clear the other retained piece even at near-minimum pair height');
+  }
+  const report=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+  assert.equal(report.warns.filter(warning=>warning.level==='crit').length,0,JSON.stringify(report.warns));
+ }
 });

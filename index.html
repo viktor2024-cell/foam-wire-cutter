@@ -4422,15 +4422,55 @@ const Gen = (() => {
          notes.push("Вход сверху пересекает контур или превышает безопасную высоту; боковой угол выбран заново");
          return profileBlock(safe,prog,contour,layout,axis,kerf,notes,side,stockWidth,margin,sag,maxStep,sideEntry,stockCenter,false);
        }
-      if(sideEntry)g+=prog.travel("move",yOut,zl,yOut,zr);
+      // Side entry must mirror the exit. A horizontal run at the corner height
+      // lies in the slot between the corner and the skin that continues past it:
+      // with a kerf-compensated corner the wire centre is closer to that skin than
+      // half the kerf, so the lead-in scars the neighbouring surface. When the
+      // exit leaves the corner upward, the entry comes in above the corner and
+      // drops onto it along the same vertical line.
+      const stations=[0,.125,.25,.375,.5,.625,.75,.875,1];
+      const at=(pair,f)=>({x:pair[0][0]+f*(pair[1][0]-pair[0][0]),z:pair[0][1]+f*(pair[1][1]-pair[0][1])});
+      const outline=stations.map(f=>towers.map(p=>at(p,f)));   // wire-centre path = profile offset by kerf/2
+      const depthInside=(poly,x,z)=>{                          // > 0: the point is inside the outline, by this distance
+        let hit=false,near=Infinity;
+        for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+          const a=poly[i],b=poly[j];
+          if((a.z>z)!==(b.z>z)&&x<(b.x-a.x)*(z-a.z)/(b.z-a.z)+a.x)hit=!hit;
+          const dx=b.x-a.x,dz=b.z-a.z,t=Math.max(0,Math.min(1,((x-a.x)*dx+(z-a.z)*dz)/Math.max(1e-14,dx*dx+dz*dz)));
+          near=Math.min(near,Math.hypot(x-a.x-t*dx,z-a.z-t*dz));
+        }
+        return hit?near:0;
+      };
+      // Lead-in at lift h: horizontal from the stock edge at z+h, then straight down onto the corner.
+      const leadGrazes=h=>stations.some((f,k)=>{
+        const s=at(towers[0],f),poly=outline[k];
+        for(let i=0;i<=60;i++){
+          const x=yOut+(s.x-yOut)*i/60;
+          if(depthInside(poly,x,s.z+h)>.05)return true;
+        }
+        const dropSteps=Math.max(1,Math.ceil(h*4));
+        for(let i=0;i<=dropSteps;i++)
+          if(depthInside(poly,s.x,s.z+h*(1-i/dropSteps))>.05)return true;
+        return false;
+      });
+      const room=safe-Math.max(zl,zr);
+      let lift=hasUpperCorner||leadGrazes(0)?Math.max(0,Math.min(5,room)):0;
+      g=g.replace(hasUpperCorner?"exit Z+5 mm":"exit via entry slit",lift>0?"entry/exit Z+"+lift+" mm":"exit via entry slit");
+      if(lift>0&&leadGrazes(lift)){
+        notes.push("Заход сбоку: подход к углу сверху на "+lift+" мм пересекает контур; проверьте заход в 3D");
+      } else if(lift===0&&leadGrazes(0)){
+        notes.push("Заход сбоку идёт вплотную к соседней поверхности (ближе половины реза), а места для захода сверху нет; проверьте заход в 3D");
+      }
+      if(sideEntry)g+=prog.travel("move",yOut,zl+lift,yOut,zr+lift);
       else{
         g+=prog.travel("move",yOut,safe,yOut,safe);
-        g+=prog.travel("move",yOut,zl,yOut,zr);
+        g+=prog.travel("move",yOut,zl+lift,yOut,zr+lift);
       }
+      if(lift>0)g+=prog.travel("cut",yl,zl+lift,yr,zr+lift);
       g+=prog.travel("cut",yl,zl,yr,zr);
       for(const [[yl2,zl2],[yr2,zr2]] of towers.slice(1))g+=prog.travel("cut",yl2,zl2,yr2,zr2);
-      if(hasUpperCorner)g+=prog.travel("cut",yl,zl+5,yr,zr+5);
-      g+=prog.travel("cut",yOut,zl+(hasUpperCorner?5:0),yOut,zr+(hasUpperCorner?5:0));
+      if(lift>0)g+=prog.travel("cut",yl,zl+lift,yr,zr+lift);
+      g+=prog.travel("cut",yOut,zl+lift,yOut,zr+lift);
       if(!sideEntry)g+=prog.travel("move",yOut,safe,yOut,safe);
     }
     return [g, towers];
