@@ -3,6 +3,24 @@ const assert=require('node:assert/strict');
 const vm=require('node:vm');
 const fs=require('node:fs'),path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../generator-view.js'),'utf8');
+test('automatic STEP tolerance retries only surface-deviation errors within the 0.30 mm limit',()=>{
+ const start=source.indexOf('  function autoTolerancePreview('),end=source.indexOf('  function load() {',start);
+ assert.ok(start>0&&end>start);
+ const attempted=[];
+ const context={Gen:{previewGeometry:(_text,_rotation,_scale,tolerance)=>{
+  attempted.push(tolerance);
+  return tolerance<.3?{diagnosticOnly:true,previewError:'пересечение вне поверхности'}:{diagnosticOnly:false};
+ }}};
+ vm.createContext(context);
+ const select=vm.runInContext(source.slice(start,end)+';autoTolerancePreview',context);
+ const result=select('step',[],1,.1,{diagnosticOnly:true,previewError:'отклонение STEP'});
+ assert.equal(result.tolerance,.3);
+ assert.deepEqual(attempted,[.15,.2,.25,.3]);
+ attempted.length=0;
+ const invalid=select('step',[],1,.1,{diagnosticOnly:true,previewError:'другая ошибка'});
+ assert.equal(invalid.tolerance,.1);
+ assert.equal(attempted.length,0);
+});
 function pairing() {
  const start=source.indexOf('  function chooseGuide(id) {');
  const end=source.indexOf('  // Project polyline vertices',start);

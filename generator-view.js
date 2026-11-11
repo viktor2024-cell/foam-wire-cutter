@@ -707,6 +707,7 @@ const generatorPreview = (() => {
           '. Предварительные углы стола: '+
           (geometry.guideKinematics?.operations.map(op=>'B'+op.angle).join(', ')||'нет')+
           '. Траектории диагностические, резка запрещена до проверки объёма.':'');
+      if(autoToleranceNote)fit.textContent+=' '+autoToleranceNote;
       if(!bevelFits)fit.textContent+=' При B'+bevelAngle.toFixed(2)+
         '° проекция '+bevelProjection.toFixed(1)+' мм, доступно '+bevelRoom.toFixed(1)+
         ' мм (превышение '+(bevelProjection-bevelRoom).toFixed(1)+
@@ -733,15 +734,38 @@ const generatorPreview = (() => {
     aim(); updateGuideMotion();
     if (preserveDiagnostics === true && manualActive) showStockStage();
   }
-  let generatorPreviewLoadedFile = null;
+  let generatorPreviewLoadedFile = null, autoToleranceNote = '';
+  function autoTolerancePreview(text,rotation,scale,initialTolerance,preview) {
+    if(!preview?.diagnosticOnly || !/отклон/i.test(preview.previewError||''))
+      return {preview,tolerance:initialTolerance};
+    for(let step=Math.floor(initialTolerance*20+1e-8)+1;step<=6;step++){
+      const tolerance=step/20;
+      const candidate=Gen.previewGeometry(text,rotation,scale,tolerance);
+      if(!candidate.diagnosticOnly)return {preview:candidate,tolerance};
+    }
+    return {preview,tolerance:initialTolerance};
+  }
   function load() {
     invalidate(); geometry = null; error = '';
-    if (stepFile !== generatorPreviewLoadedFile) {
+    const newFile=stepFile !== generatorPreviewLoadedFile;
+    if (newFile) {
+      autoToleranceNote='';
       savedGuidePairs = []; pendingGuide = []; 
       for(const key of Object.keys(guideStarts))delete guideStarts[key];
       generatorPreviewLoadedFile = stepFile || null;
     }
-    try { if (stepFile) geometry = Gen.previewGeometry(stepFile.text, modelRotation, n('gnScale')/100, n('gnTolerance')); }
+    try { if (stepFile) {
+      const scale=n('gnScale')/100,tolerance=n('gnTolerance');
+      geometry=Gen.previewGeometry(stepFile.text,modelRotation,scale,tolerance);
+      if(newFile){
+        const selected=autoTolerancePreview(stepFile.text,modelRotation,scale,tolerance,geometry);
+        geometry=selected.preview;
+        if(selected.tolerance>tolerance){
+          document.getElementById('gnTolerance').value=selected.tolerance.toFixed(2);
+          autoToleranceNote='Допуск STEP автоматически увеличен с '+tolerance.toFixed(2)+' до '+selected.tolerance.toFixed(2)+' мм. Проверка отклонения выборочная; оцените точность детали.';
+        }
+      }
+    } }
     catch (e) { error = e.message; }
     savedGuidePairs = savedGuidePairs.filter(pair => pair.every(id =>
       geometry?.auxiliaryCurves?.some(c => c.id === id)));
@@ -1027,7 +1051,7 @@ const generatorPreview = (() => {
     fit.textContent+=' '+info;
   });
   document.getElementById('gnScale').addEventListener('change',load);
-  document.getElementById('gnTolerance').addEventListener('change',load);
+  document.getElementById('gnTolerance').addEventListener('change',()=>{autoToleranceNote='';load();});
   for (const id of ['gnL','gnW','gnH','gnZ']) document.getElementById(id).addEventListener('input',()=>{invalidate();rebuild();});
   new ResizeObserver(()=>{
     const w=host.clientWidth,h=host.clientHeight;if (!w || !h) return;
