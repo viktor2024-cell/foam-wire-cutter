@@ -738,7 +738,7 @@ const generatorPreview = (() => {
   function autoTolerancePreview(text,rotation,scale,initialTolerance,preview) {
     if(!preview?.diagnosticOnly || !/отклон/i.test(preview.previewError||''))
       return {preview,tolerance:initialTolerance};
-    for(let step=Math.floor(initialTolerance*20+1e-8)+1;step<=6;step++){
+    for(let step=Math.floor(initialTolerance*20+1e-8)+1;step<=12;step++){
       const tolerance=step/20;
       const candidate=Gen.previewGeometry(text,rotation,scale,tolerance);
       if(!candidate.diagnosticOnly)return {preview:candidate,tolerance};
@@ -762,6 +762,7 @@ const generatorPreview = (() => {
         geometry=selected.preview;
         if(selected.tolerance>tolerance){
           document.getElementById('gnTolerance').value=selected.tolerance.toFixed(2);
+          document.getElementById('gnTolerance').classList.add('auto-adjusted');
           autoToleranceNote='Допуск STEP автоматически увеличен с '+tolerance.toFixed(2)+' до '+selected.tolerance.toFixed(2)+' мм. Проверка отклонения выборочная; оцените точность детали.';
         }
       }
@@ -1037,6 +1038,7 @@ const generatorPreview = (() => {
     document.getElementById('gnW').value=best.width;
     document.getElementById('gnH').value=best.height;
     document.getElementById('gnClear').value=best.clearance;
+    if(best.clearance!==clearanceBefore)document.getElementById('gnClear').classList.add('auto-adjusted');
     invalidate();rebuild();
     const fit=document.getElementById('gnFit');
     // The stock check above has validated dimensions; append actionable
@@ -1051,6 +1053,8 @@ const generatorPreview = (() => {
     fit.textContent+=' '+info;
   });
   document.getElementById('gnScale').addEventListener('change',load);
+  for(const id of ['gnTolerance','gnZ','gnClear'])
+    document.getElementById(id).addEventListener('input',()=>document.getElementById(id).classList.remove('auto-adjusted'));
   document.getElementById('gnTolerance').addEventListener('change',()=>{autoToleranceNote='';load();});
   for (const id of ['gnL','gnW','gnH','gnZ']) document.getElementById(id).addEventListener('input',()=>{invalidate();rebuild();});
   new ResizeObserver(()=>{
