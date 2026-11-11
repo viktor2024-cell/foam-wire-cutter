@@ -82,3 +82,12 @@ test("return from above target moves horizontally before final lowering",()=>{
   s.status("Idle",{X:240,Z:240,Y:231,A:231,B:90},true);
   assert.equal(s.phase,"manual");
 });
+test("failed heater-off acknowledgement prevents return movement",()=>{
+  const {s,sent}=ready(),corner={...ALIGNED,B:90};
+  s.zero(corner);const p=plan(corner,10,10,7,500,90,false);s.prepare(p);
+  s.heat();s.ack();s.cut();s.ack();s.ack();
+  const end={X:p.target,Z:p.target,Y:p.bottom,A:p.bottom,B:90};s.status("Idle",end,true);
+  s.returnHome(end);assert.equal(sent.at(-1),"M05");
+  const count=sent.length;s.ack("error:1");
+  assert.equal(s.phase,"fault");assert.equal(sent.length,count);
+});
