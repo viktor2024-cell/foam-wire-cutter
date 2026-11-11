@@ -33,7 +33,8 @@
   class Session {
     constructor(send,fail) { this.send=send; this.fail=fail; this.reset(); }
     reset() { this.phase="idle"; this.pending=null; this.hot=false; this.plan=null;
-      this.tableAngle=null; this.targetAngle=null; this.origin=null; this.jogTarget=null; }
+      this.tableAngle=null; this.targetAngle=null; this.origin=null; this.jogTarget=null;
+      this.paused=false; this.holdOff=false; this.deferred=null; }
     get active() { return this.phase!=="idle"; }
     transmit(command,next) {
       if(this.pending) throw new Error("Дождитесь ответа контроллера.");
@@ -106,6 +107,17 @@
       const horizontal=()=>this.transmit(this.plan.cut,()=>{this.phase="await-cut";});
       if(this.plan.lower) this.transmit(this.plan.lower,horizontal); else horizontal();
     }
+    pause() {
+      if(this.paused || !["cutting","await-cut"].includes(this.phase))
+        throw new Error("Пауза доступна во время реза.");
+      this.paused=true;
+    }
+    resume() {
+      if(!this.paused) throw new Error("Рез не на паузе.");
+      this.paused=false;this.holdOff=false;
+      const next=this.deferred;this.deferred=null;
+      if(next) next();
+    }
     off() {
       if(!this.hot || !["heated","done"].includes(this.phase)) throw new Error("Остановите движение перед выключением нагрева.");
       this.phase="cooling";this.transmit("M05",()=>{this.hot=false;this.phase="finished";});
@@ -119,10 +131,10 @@
       if(!this.pending) return;
       const action=this.pending;this.pending=null;
       if(error) {this.phase="fault";this.fail(error);return;}
-      action.next();
+      if(this.paused) this.deferred=action.next; else action.next();
     }
     status(state,pos,validPosition) {
-      if(!validPosition || state!=="Idle") return;
+      if(this.paused || !validPosition || state!=="Idle") return;
       if(this.phase==="await-home" && same(pos,HOME)) this.phase="ready";
       if(this.phase==="await-rotation" && same(pos,{...HOME,B:this.targetAngle})) {
         this.tableAngle=this.targetAngle;this.align();
@@ -134,7 +146,7 @@
       if(this.phase==="await-cut" && this.plan && same(pos,{X:this.plan.target,Z:this.plan.target,
           Y:this.plan.bottom,A:this.plan.bottom,B:this.tableAngle})) this.phase="done";
     }
-    lost() {if(this.active) {this.pending=null;this.phase="fault";}}
+    lost() {if(this.active) {this.pending=null;this.deferred=null;this.paused=false;this.phase="fault";}}
   }
   const api={HOME,ALIGNED,limits,calibration,plan,Session,checkPosition,same};
   if(typeof module!=="undefined" && module.exports) module.exports=api;

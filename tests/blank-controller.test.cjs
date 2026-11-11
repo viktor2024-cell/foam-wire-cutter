@@ -15,13 +15,14 @@ function controller() {
     navigator:{},playing:false,previewOnlyProgram:false,prog:null,simTime:0,
     render:()=>{},recheck:()=>{},requireMachinableProgram:()=>true,requireCurrentProgram:()=>true});
   vm.runInContext(html.slice(start,end)+"refreshMachine();"+
-    ";globalThis.test={mach,blankSession,onLine,onStatus,refreshMachine};",context);
+    ";globalThis.test={mach,blankSession,onLine,onStatus,refreshMachine,setJob:value=>job=value};",context);
   const c=context.test;
-  Object.assign(c.mach,{connected:true,state:"Idle",writer:{write:()=>Promise.resolve()},hasPos:true});
+  const writes=[];
+  Object.assign(c.mach,{connected:true,state:"Idle",writer:{write:bytes=>{writes.push([...bytes]);return Promise.resolve();}},hasPos:true});
   for(const [id,value] of Object.entries({blankZ:"50",blankY:"100",blankAngle:"90",blankFeed:"7",blankPower:"500",blankStep:"5",blankStepB:"5"}))
     get(id).value=value;
   c.onLine("$32=0"); c.refreshMachine();
-  return {c,get,click:id=>get(id).click(),ack:()=>c.onLine("ok")};
+  return {c,get,writes,click:id=>get(id).click(),ack:()=>c.onLine("ok")};
 }
 test("manual controls send steps only after home, calibration and matching live positions",()=>{
   const {c,get,click,ack}=controller();
@@ -126,4 +127,47 @@ test("heater state is marked uncertain after a controller alarm",()=>{
   c.onLine("ALARM:1");
   assert.equal(get("blankHeat").className,"heat-unknown");
   assert.equal(get("blankHeat").disabled,true);
+});
+test("blank machine panel pauses without sending the next cut until resume",async()=>{
+  const {c,get,click,ack,writes}=controller();
+  get("blankHoldOff").checked=true;
+  click("blankHome");ack();ack();ack();ack();
+  c.onStatus("<Idle|WPos:249,238,245,236,-7.3>");
+  click("blankRotate");ack();c.onStatus("<Idle|WPos:249,238,245,236,90>");
+  ack();ack();c.onStatus("<Idle|WPos:245,236,245,236,90>");
+  click("blankZero");click("blankPrepare");click("blankHeat");ack();
+  click("blankStart");assert.equal(c.mach.queue[0].text,"G01 Y186.00 A186.00 F420.00");
+  click("blankPause");assert.equal(c.blankSession.paused,true);
+  c.onStatus("<Hold:0|WPos:245,220,245,220,90>");
+  assert.equal(c.blankSession.holdOff,true);
+  assert.equal(get("blankHeat").className,"heat-unknown");
+  ack();assert.equal(c.mach.queue.length,0);
+  assert.equal(get("blankPause").textContent,"Продолжить");
+  click("gPause");assert.equal(c.blankSession.paused,false);
+  assert.equal(get("blankPause").textContent,"Пауза");
+  assert.equal(c.mach.queue[0].text,"G01 X145.00 Z145.00 F420.00");
+  await c.mach.tx;
+  const realtime=writes.filter(a=>a.length===1).map(a=>a[0]);
+  assert.deepEqual(realtime.slice(-3),[0x21,0x9e,0x7e]);
+});
+test("machine command and unlock are shared and blocked during a blank session",()=>{
+  const {c,get,click,ack}=controller();
+  click("blankUnlock");assert.equal(c.mach.queue[0].text,"$X");ack();
+  assert.match(get("blankLog").textContent,/\$X/);
+  get("blankCmd").value="$$";get("blankCmd").keydown({key:"Enter",target:get("blankCmd")});
+  assert.equal(c.mach.queue[0].text,"$$");ack();
+  click("blankHome");assert.equal(get("blankUnlock").disabled,true);
+  const before=c.mach.queue.length;click("blankUnlock");
+  get("blankCmd").value="G0 X0";get("blankCmd").keydown({key:"Enter",target:get("blankCmd")});
+  assert.equal(c.mach.queue.length,before);
+});
+test("the blank panel can pause a program started in the main cutting tab",()=>{
+  const {c,get,click}=controller();
+  const active={paused:false,halt:false,acked:0,lines:[{text:"G01 X1"}],dry:false};
+  c.setJob(active);c.refreshMachine();
+  assert.equal(get("blankPause").disabled,false);
+  click("blankPause");
+  assert.equal(active.paused,true);
+  assert.equal(get("blankPause").textContent,"Продолжить");
+  assert.equal(get("gPause").textContent,"Продолжить");
 });
