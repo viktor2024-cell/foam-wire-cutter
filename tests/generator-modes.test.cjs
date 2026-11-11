@@ -10,8 +10,8 @@ test('switching modes preserves controls and selects the correct generation mode
   const labelStart = html.indexOf('function selectedGenerateMode()');
   const labelEnd = html.indexOf('function refreshGenerateMode()', labelStart);
   assert.ok(start >= 0 && end > start && labelStart >= 0 && labelEnd > labelStart);
-  const nodes = {gnModeAuto:{}, gnModeManual:{}, tabCut:{}, panelGen:{}, panelCut:{}, gnGo:{}, gnStockPair:{checked:true}};
-  for (const node of [nodes.gnModeAuto, nodes.gnModeManual, nodes.tabCut]) node.setAttribute = (key, value) => node[key] = value;
+  const nodes = {gnModeAuto:{}, gnModeManual:{}, tabCut:{}, tabLayout:{}, tabBlankCut:{}, panelGen:{}, panelCut:{}, panelLayout:{}, panelBlankCut:{}, gnGo:{}, gnStockPair:{checked:true}};
+  for (const node of [nodes.gnModeAuto, nodes.gnModeManual, nodes.tabCut, nodes.tabLayout, nodes.tabBlankCut]) node.setAttribute = (key, value) => node[key] = value;
   const manual = [{hidden:true}], auto = [{hidden:false}];
   const preview = {setManualActive(value){this.active=value;}};
   const context = vm.createContext({$:id=>nodes[id], generatorPreview:preview,
@@ -24,6 +24,12 @@ test('switching modes preserves controls and selects the correct generation mode
   assert.equal(context.selected(),'normal');
   context.showTab('cut');
   assert.equal(nodes.gnModeManual['aria-pressed'],'false'); assert.equal(nodes.tabCut['aria-pressed'],'true');
+  context.showTab('layout');
+  assert.equal(nodes.panelLayout.hidden,false); assert.equal(nodes.panelCut.hidden,true);
+  assert.equal(nodes.tabLayout['aria-pressed'],'true'); assert.equal(nodes.tabCut['aria-pressed'],'false');
+  context.showTab('blank');
+  assert.equal(nodes.panelBlankCut.hidden,false); assert.equal(nodes.panelLayout.hidden,true);
+  assert.equal(nodes.tabBlankCut['aria-pressed'],'true');
   context.showTab('gen');
   assert.equal(nodes.gnModeManual['aria-pressed'],'true'); assert.equal(nodes.panelGen.hidden,false);
   context.switchMode('auto');
