@@ -282,6 +282,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
     <h2>G-code</h2>
     <label class="check gn-auto"><input type="checkbox" id="gnTopEntry"> Вход в основной контур сверху, выход по той же прорези (одна деталь)</label>
     <label class="check gn-auto"><input type="checkbox" id="gnSideEntry"> Вход и выход справа (одна деталь, максимум одно отверстие через правую технологическую прорезь, без торцевания)</label>
+    <label class="check gn-auto"><input type="checkbox" id="gnFrameMarks" checked> Разметка габарита в начале: 4 прорези по 3 мм сверху (для пары — общий габарит двух деталей)</label>
     <label class="check"><input type="checkbox" id="gnTrim" checked> Торцевать заготовку</label>
     <div class="fields">
       <label>Угол торцевания
@@ -3821,6 +3822,32 @@ const Gen = (() => {
     }
     return g;
   }
+  // - Разметка габарита для установки заготовки: 4 врезки сверху вниз на f.depth мм. Две по краям хорды при B0
+  //   (проволока вдоль размаха) и две по краям размаха при B90 (проволока вдоль хорды). Проволока идёт через всю
+  //   заготовку, поэтому на верхней грани получается рамка габарита детали (для пары - общего габарита обеих).
+  //   Врезки стоят на kerf/2 снаружи габарита: кромка реза совпадает с границей детали, как при торцевании.
+  function frameMarkBlock(cfg, prog, f) {
+    const approach = Math.min(f.top + 2, f.safe), bottom = f.top - f.depth;
+    const slits = (ys) => {
+      let g = "";
+      for (const y of ys) {
+        g += prog.travel("move", y, f.safe, y, f.safe);
+        if (approach < f.safe) g += prog.travel("move", y, approach, y, approach);
+        g += prog.travel("cut", y, bottom, y, bottom);        // - врезка вниз на глубину метки
+        g += prog.travel("cut", y, approach, y, approach);    // - обратно по той же прорези
+        if (approach < f.safe) g += prog.travel("move", y, f.safe, y, f.safe);
+      }
+      return g;
+    };
+    const edges = (center, size) => [center - size / 2 - f.kerf / 2, center + size / 2 + f.kerf / 2];
+    let g = ";" + EOL + "; *** FRAME MARKS: 4 slits x " + fmtG(f.depth) + " mm from the stock top, chord=" + fmtG(f.chord) +
+      " span=" + fmtG(f.span) + " (outline of " + (f.pair ? "both pieces" : "the piece") + ") ***" + EOL;
+    g += "; - B0: chord edges (wire along the span)" + EOL + slits(edges(f.chordCenter, f.chord));
+    g += ";" + EOL + "; - Rotation B90 for frame marks" + EOL + prog.travel("move", cfg.ParkX, f.safe, cfg.ParkX, f.safe) + rotate(cfg, 90);
+    g += "; - B90: span edges (wire along the chord)" + EOL + slits(edges(f.spanCenter, f.span));
+    g += ";" + EOL + "; - Return table to B0 after frame marks" + EOL + prog.travel("move", cfg.ParkX, f.safe, cfg.ParkX, f.safe) + rotate(cfg, 0);
+    return g;
+  }
   function checkTrim(cfg, trim, overhead = true) {
     const errors = [], halfY = cfg.HorizontalTravel / 2, top = trim.BottomZ + trim.Height;
     if (Math.min(trim.Length, trim.Width, trim.Height) <= 0) return ["Размеры заготовки должны быть положительными"];
@@ -4422,15 +4449,55 @@ const Gen = (() => {
          notes.push("Вход сверху пересекает контур или превышает безопасную высоту; боковой угол выбран заново");
          return profileBlock(safe,prog,contour,layout,axis,kerf,notes,side,stockWidth,margin,sag,maxStep,sideEntry,stockCenter,false);
        }
-      if(sideEntry)g+=prog.travel("move",yOut,zl,yOut,zr);
+      // Side entry must mirror the exit. A horizontal run at the corner height
+      // lies in the slot between the corner and the skin that continues past it:
+      // with a kerf-compensated corner the wire centre is closer to that skin than
+      // half the kerf, so the lead-in scars the neighbouring surface. When the
+      // exit leaves the corner upward, the entry comes in above the corner and
+      // drops onto it along the same vertical line.
+      const stations=[0,.125,.25,.375,.5,.625,.75,.875,1];
+      const at=(pair,f)=>({x:pair[0][0]+f*(pair[1][0]-pair[0][0]),z:pair[0][1]+f*(pair[1][1]-pair[0][1])});
+      const outline=stations.map(f=>towers.map(p=>at(p,f)));   // wire-centre path = profile offset by kerf/2
+      const depthInside=(poly,x,z)=>{                          // > 0: the point is inside the outline, by this distance
+        let hit=false,near=Infinity;
+        for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+          const a=poly[i],b=poly[j];
+          if((a.z>z)!==(b.z>z)&&x<(b.x-a.x)*(z-a.z)/(b.z-a.z)+a.x)hit=!hit;
+          const dx=b.x-a.x,dz=b.z-a.z,t=Math.max(0,Math.min(1,((x-a.x)*dx+(z-a.z)*dz)/Math.max(1e-14,dx*dx+dz*dz)));
+          near=Math.min(near,Math.hypot(x-a.x-t*dx,z-a.z-t*dz));
+        }
+        return hit?near:0;
+      };
+      // Lead-in at lift h: horizontal from the stock edge at z+h, then straight down onto the corner.
+      const leadGrazes=h=>stations.some((f,k)=>{
+        const s=at(towers[0],f),poly=outline[k];
+        for(let i=0;i<=60;i++){
+          const x=yOut+(s.x-yOut)*i/60;
+          if(depthInside(poly,x,s.z+h)>.05)return true;
+        }
+        const dropSteps=Math.max(1,Math.ceil(h*4));
+        for(let i=0;i<=dropSteps;i++)
+          if(depthInside(poly,s.x,s.z+h*(1-i/dropSteps))>.05)return true;
+        return false;
+      });
+      const room=safe-Math.max(zl,zr);
+      let lift=hasUpperCorner||leadGrazes(0)?Math.max(0,Math.min(5,room)):0;
+      g=g.replace(hasUpperCorner?"exit Z+5 mm":"exit via entry slit",lift>0?"entry/exit Z+"+lift+" mm":"exit via entry slit");
+      if(lift>0&&leadGrazes(lift)){
+        notes.push("Заход сбоку: подход к углу сверху на "+lift+" мм пересекает контур; проверьте заход в 3D");
+      } else if(lift===0&&leadGrazes(0)){
+        notes.push("Заход сбоку идёт вплотную к соседней поверхности (ближе половины реза), а места для захода сверху нет; проверьте заход в 3D");
+      }
+      if(sideEntry)g+=prog.travel("move",yOut,zl+lift,yOut,zr+lift);
       else{
         g+=prog.travel("move",yOut,safe,yOut,safe);
-        g+=prog.travel("move",yOut,zl,yOut,zr);
+        g+=prog.travel("move",yOut,zl+lift,yOut,zr+lift);
       }
+      if(lift>0)g+=prog.travel("cut",yl,zl+lift,yr,zr+lift);
       g+=prog.travel("cut",yl,zl,yr,zr);
       for(const [[yl2,zl2],[yr2,zr2]] of towers.slice(1))g+=prog.travel("cut",yl2,zl2,yr2,zr2);
-      if(hasUpperCorner)g+=prog.travel("cut",yl,zl+5,yr,zr+5);
-      g+=prog.travel("cut",yOut,zl+(hasUpperCorner?5:0),yOut,zr+(hasUpperCorner?5:0));
+      if(lift>0)g+=prog.travel("cut",yl,zl+lift,yr,zr+lift);
+      g+=prog.travel("cut",yOut,zl+lift,yOut,zr+lift);
       if(!sideEntry)g+=prog.travel("move",yOut,safe,yOut,safe);
     }
     return [g, towers];
@@ -4639,6 +4706,26 @@ const Gen = (() => {
     let profileTowers = null;
     // - Сначала отводим каретки в безопасную позицию; торцевание выполняется при столе 90°
     program += ";" + EOL + "; - Safe position before cutting" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe);
+    if (o.frameMarks === true) {
+      // - Метки ставятся первыми, до торцевания: стол поворачивается на 90, как при торцевании, и возвращается в 0
+      const cornerRadius = Math.hypot(stockLength / 2 + Math.abs(offset[0]), stockWidth / 2 + Math.abs(offset[1]));
+      if (!cfg.PlacementProbe && stockAlongWireAtAngle(stockLength, stockWidth, offset, 90) > (cfg.FieldWidth - 2) / 2 + 1e-7)
+        throw new StepError("Разметка габарита B90: ширина заготовки " + stockWidth.toFixed(1) + " мм вдоль струны не помещается между башнями");
+      if (!cfg.PlacementProbe && cfg.ParkX - cornerRadius < RadialMargin)
+        throw new StepError("Разметка габарита: нет безопасного места для поворота заготовки на B90; отключите разметку или уменьшите заготовку");
+      const markTop=o.bottomZ+offset[2]+stockHeight;
+      const markSafe=markTop+Math.max(2,o.clearance);
+      if(stockHeight<3 || markSafe>cfg.VerticalTravel)
+        throw new StepError("Разметка габарита: нужны толщина заготовки не менее 3 мм и свободный ход над ней; отключите разметку или измените размеры");
+      if(stockWidth<part.x1-part.x0+kerf || stockLength<part.span+kerf)
+        warnings.push("Разметка габарита: часть прорезей может находиться за краем заготовки из-за отсутствия припуска");
+      program += prog.travel("move",cfg.ParkX,markSafe,cfg.ParkX,markSafe);
+      program += frameMarkBlock(cfg, prog, {
+        depth: 3, kerf, safe:markSafe, top:markTop, pair: !!o.pair,
+        chord: part.x1 - part.x0, span: part.span,
+        chordCenter: offset[1], spanCenter: o.invB ? -offset[0] : offset[0],
+      });
+    }
     if (hasTrim) {
       program += ";" + EOL + "; - Rotation B"+trimAngle+" for trimming" + EOL + rotate(cfg, trimAngle);
       program += trimBlock(cfg, trim, prog);
@@ -5655,7 +5742,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
       rotation: modelRotation, offset: [...modelOffset], modelZOffset, scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
       clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked,
-      trimAngle:n("gnTrimAngle"), cutOrder:$("gnCutOrder").value, invB:$("invB").checked, sideEntry: $("gnSideEntry").checked, topEntry: $("gnTopEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair"
+      trimAngle:n("gnTrimAngle"), cutOrder:$("gnCutOrder").value, invB:$("invB").checked, sideEntry: $("gnSideEntry").checked, topEntry: $("gnTopEntry").checked, frameMarks: $("gnFrameMarks").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair"
   };
   // Keep PR #16 stock dimensions in automatic and F4 filenames.
   const stem=stepFile.name.replace(/\.(stp|step)$/i,"");
