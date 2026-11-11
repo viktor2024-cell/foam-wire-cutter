@@ -2051,6 +2051,58 @@ test('side entry to a groove lip arrives from above, mirroring the exit',()=>{
  assert.ok(Math.abs(exit.Y-inward.Y)<.01&&Math.abs(exit.A-inward.A)<.01,'exit leaves at the entry height');
 });
 
+// Frame marks: four 3 mm plunge slits from the stock top outline the part (or both pieces in PAIR mode)
+// on the top face, so the stock can be placed on the machine by eye before the real cutting starts.
+test('frame marks outline the part with four 3 mm slits before trimming and cutting',()=>{
+ const stab=fs.readFileSync(path.join(__dirname,'fixtures/stab-groove.stp'),'latin1');
+ const xyza=line=>Object.fromEntries([...line.matchAll(/([XYZA])(-?\d+(?:\.\d+)?)/g)].map(m=>[m[1],+m[2]]));
+ const marks=(extra)=>{
+  const o=options({stock:[330,240,50],bottomZ:10,clearance:20,kerf:1,trim:true,powerComp:false,...extra});
+  const program=gen.buildProgram(stab,'stab-groove.stp',o).program;
+  const lines=program.split(/\r?\n/);
+  const from=lines.findIndex(l=>l.includes('FRAME MARKS')),back=lines.findIndex(l=>l.includes('Return table to B0 after frame marks')),to=back<0?-1:back+3;
+  return {program,block:from<0?null:lines.slice(from,to),from,to,trim:lines.findIndex(l=>l.includes('Rotation B90 for trimming'))};
+ };
+ assert.equal(marks({}).block,null,'off unless requested');
+ const single=marks({frameMarks:true});
+ assert.ok(single.from>0&&single.to>single.from,'marks come before trimming');
+ const plunges=single.block.filter(l=>/^G01 X/.test(l)).map(xyza);
+ assert.equal(plunges.length,8,'4 slits: down and back up');
+ const downs=plunges.filter((_,i)=>i%2===0),ups=plunges.filter((_,i)=>i%2===1);
+ for(let i=0;i<4;i++){
+  assert.ok(Math.abs(downs[i].Y-downs[i].A)<1e-9&&Math.abs(downs[i].X-downs[i].Z)<1e-9,'slit is a plain plunge');
+  assert.ok(Math.abs(ups[i].Y-downs[i].Y-2-3)<.01,'3 mm below the stock top (Z=60), returns 2 mm above it');
+  assert.ok(Math.abs(downs[i].Y-57)<.01);
+ }
+ // chord edges at B0, span edges at B90: part 212.924 x 305 with kerf/2 outside on each side
+ assert.deepEqual(downs.map(d=>Math.abs(d.X)).map(v=>+v.toFixed(2)),[106.96,106.96,153,153]);
+ const order=single.block.filter(l=>/^G00 B/.test(l)||/^G01 X/.test(l));
+ assert.deepEqual(order.filter(l=>/^G00 B/.test(l)).map(l=>l.split(' ')[1]),['B90.00','B0.00']);
+ assert.ok(single.trim>single.to-1,'trimming still follows the marks');
+ const parsed=sim.parseGcode(single.program),report=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
+ // PAIR: both pieces share one outline, so the same four slits
+ const pair=marks({frameMarks:true,pair:true,stock:[330,240,100],trim:false});
+ const pairDowns=pair.block.filter(l=>/^G01 X/.test(l)).map(xyza).filter((_,i)=>i%2===0);
+ assert.match(pair.block[0],/both pieces/);
+ assert.deepEqual(pairDowns.map(d=>Math.abs(d.X)).map(v=>+v.toFixed(2)),[106.96,106.96,153,153]);
+ assert.ok(Math.abs(pairDowns[0].Y-(10+100-3))<.01,'depth counted from the top of the taller stock');
+});
+test('frame marks refuse a stock that cannot turn to B90',()=>{
+ const stab=fs.readFileSync(path.join(__dirname,'fixtures/stab-groove.stp'),'latin1');
+ assert.throws(()=>gen.buildProgram(stab,'stab-groove.stp',options({stock:[330,365,50],bottomZ:10,trim:false,frameMarks:true})),/Разметка габарита/);
+});
+test('frame marks use an overhead position even when side-entry parking is below the stock top',()=>{
+ const config=options({stock:[50,140,230],bottomZ:10,clearance:5,trim:false,sideEntry:true,frameMarks:true,powerComp:false});
+ const result=gen.buildProgram(fixture,'split-profile.stp',config);
+ const parsed=sim.parseGcode(result.program);
+ const report=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
+ assert.equal(report.warns.filter(warning=>warning.level==='crit').length,0,JSON.stringify(report.warns));
+ const block=result.program.split('FRAME MARKS')[1];
+ assert.match(block,/G00 X[^\n]*Y245\.00[^\n]*A245\.00/);
+ assert.throws(()=>gen.buildProgram(fixture,'split-profile.stp',{...config,clearance:11}),/Разметка габарита/);
+});
+
 test('stab pair groove leads descend at both corners and clear both retained STEP profiles',()=>{
  const step=fs.readFileSync(path.join(__dirname,'fixtures/stab-groove.stp'),'utf8');
  const shape=new gen.Model(step).build();

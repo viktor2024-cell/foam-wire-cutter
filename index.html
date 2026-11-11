@@ -282,6 +282,7 @@ button.stop { background: var(--crit); border-color: var(--crit); color: #fff; }
     <h2>G-code</h2>
     <label class="check gn-auto"><input type="checkbox" id="gnTopEntry"> Вход в основной контур сверху, выход по той же прорези (одна деталь)</label>
     <label class="check gn-auto"><input type="checkbox" id="gnSideEntry"> Вход и выход справа (одна деталь, максимум одно отверстие через правую технологическую прорезь, без торцевания)</label>
+    <label class="check gn-auto"><input type="checkbox" id="gnFrameMarks" checked> Разметка габарита в начале: 4 прорези по 3 мм сверху (для пары — общий габарит двух деталей)</label>
     <label class="check"><input type="checkbox" id="gnTrim" checked> Торцевать заготовку</label>
     <div class="fields">
       <label>Угол торцевания
@@ -3821,6 +3822,32 @@ const Gen = (() => {
     }
     return g;
   }
+  // - Разметка габарита для установки заготовки: 4 врезки сверху вниз на f.depth мм. Две по краям хорды при B0
+  //   (проволока вдоль размаха) и две по краям размаха при B90 (проволока вдоль хорды). Проволока идёт через всю
+  //   заготовку, поэтому на верхней грани получается рамка габарита детали (для пары - общего габарита обеих).
+  //   Врезки стоят на kerf/2 снаружи габарита: кромка реза совпадает с границей детали, как при торцевании.
+  function frameMarkBlock(cfg, prog, f) {
+    const approach = Math.min(f.top + 2, f.safe), bottom = f.top - f.depth;
+    const slits = (ys) => {
+      let g = "";
+      for (const y of ys) {
+        g += prog.travel("move", y, f.safe, y, f.safe);
+        if (approach < f.safe) g += prog.travel("move", y, approach, y, approach);
+        g += prog.travel("cut", y, bottom, y, bottom);        // - врезка вниз на глубину метки
+        g += prog.travel("cut", y, approach, y, approach);    // - обратно по той же прорези
+        if (approach < f.safe) g += prog.travel("move", y, f.safe, y, f.safe);
+      }
+      return g;
+    };
+    const edges = (center, size) => [center - size / 2 - f.kerf / 2, center + size / 2 + f.kerf / 2];
+    let g = ";" + EOL + "; *** FRAME MARKS: 4 slits x " + fmtG(f.depth) + " mm from the stock top, chord=" + fmtG(f.chord) +
+      " span=" + fmtG(f.span) + " (outline of " + (f.pair ? "both pieces" : "the piece") + ") ***" + EOL;
+    g += "; - B0: chord edges (wire along the span)" + EOL + slits(edges(f.chordCenter, f.chord));
+    g += ";" + EOL + "; - Rotation B90 for frame marks" + EOL + prog.travel("move", cfg.ParkX, f.safe, cfg.ParkX, f.safe) + rotate(cfg, 90);
+    g += "; - B90: span edges (wire along the chord)" + EOL + slits(edges(f.spanCenter, f.span));
+    g += ";" + EOL + "; - Return table to B0 after frame marks" + EOL + prog.travel("move", cfg.ParkX, f.safe, cfg.ParkX, f.safe) + rotate(cfg, 0);
+    return g;
+  }
   function checkTrim(cfg, trim, overhead = true) {
     const errors = [], halfY = cfg.HorizontalTravel / 2, top = trim.BottomZ + trim.Height;
     if (Math.min(trim.Length, trim.Width, trim.Height) <= 0) return ["Размеры заготовки должны быть положительными"];
@@ -4679,6 +4706,26 @@ const Gen = (() => {
     let profileTowers = null;
     // - Сначала отводим каретки в безопасную позицию; торцевание выполняется при столе 90°
     program += ";" + EOL + "; - Safe position before cutting" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe);
+    if (o.frameMarks === true) {
+      // - Метки ставятся первыми, до торцевания: стол поворачивается на 90, как при торцевании, и возвращается в 0
+      const cornerRadius = Math.hypot(stockLength / 2 + Math.abs(offset[0]), stockWidth / 2 + Math.abs(offset[1]));
+      if (!cfg.PlacementProbe && stockAlongWireAtAngle(stockLength, stockWidth, offset, 90) > (cfg.FieldWidth - 2) / 2 + 1e-7)
+        throw new StepError("Разметка габарита B90: ширина заготовки " + stockWidth.toFixed(1) + " мм вдоль струны не помещается между башнями");
+      if (!cfg.PlacementProbe && cfg.ParkX - cornerRadius < RadialMargin)
+        throw new StepError("Разметка габарита: нет безопасного места для поворота заготовки на B90; отключите разметку или уменьшите заготовку");
+      const markTop=o.bottomZ+offset[2]+stockHeight;
+      const markSafe=markTop+Math.max(2,o.clearance);
+      if(stockHeight<3 || markSafe>cfg.VerticalTravel)
+        throw new StepError("Разметка габарита: нужны толщина заготовки не менее 3 мм и свободный ход над ней; отключите разметку или измените размеры");
+      if(stockWidth<part.x1-part.x0+kerf || stockLength<part.span+kerf)
+        warnings.push("Разметка габарита: часть прорезей может находиться за краем заготовки из-за отсутствия припуска");
+      program += prog.travel("move",cfg.ParkX,markSafe,cfg.ParkX,markSafe);
+      program += frameMarkBlock(cfg, prog, {
+        depth: 3, kerf, safe:markSafe, top:markTop, pair: !!o.pair,
+        chord: part.x1 - part.x0, span: part.span,
+        chordCenter: offset[1], spanCenter: o.invB ? -offset[0] : offset[0],
+      });
+    }
     if (hasTrim) {
       program += ";" + EOL + "; - Rotation B"+trimAngle+" for trimming" + EOL + rotate(cfg, trimAngle);
       program += trimBlock(cfg, trim, prog);
@@ -5695,7 +5742,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
       rotation: modelRotation, offset: [...modelOffset], modelZOffset, scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
       clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked,
-      trimAngle:n("gnTrimAngle"), cutOrder:$("gnCutOrder").value, invB:$("invB").checked, sideEntry: $("gnSideEntry").checked, topEntry: $("gnTopEntry").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair"
+      trimAngle:n("gnTrimAngle"), cutOrder:$("gnCutOrder").value, invB:$("invB").checked, sideEntry: $("gnSideEntry").checked, topEntry: $("gnTopEntry").checked, frameMarks: $("gnFrameMarks").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair"
   };
   // Keep PR #16 stock dimensions in automatic and F4 filenames.
   const stem=stepFile.name.replace(/\.(stp|step)$/i,"");
