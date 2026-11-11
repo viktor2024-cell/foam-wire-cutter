@@ -707,6 +707,7 @@ const generatorPreview = (() => {
           '. Предварительные углы стола: '+
           (geometry.guideKinematics?.operations.map(op=>'B'+op.angle).join(', ')||'нет')+
           '. Траектории диагностические, резка запрещена до проверки объёма.':'');
+      if(autoToleranceNote)fit.textContent+=' '+autoToleranceNote;
       if(!bevelFits)fit.textContent+=' При B'+bevelAngle.toFixed(2)+
         '° проекция '+bevelProjection.toFixed(1)+' мм, доступно '+bevelRoom.toFixed(1)+
         ' мм (превышение '+(bevelProjection-bevelRoom).toFixed(1)+
@@ -733,15 +734,39 @@ const generatorPreview = (() => {
     aim(); updateGuideMotion();
     if (preserveDiagnostics === true && manualActive) showStockStage();
   }
-  let generatorPreviewLoadedFile = null;
+  let generatorPreviewLoadedFile = null, autoToleranceNote = '';
+  function autoTolerancePreview(text,rotation,scale,initialTolerance,preview) {
+    if(!preview?.diagnosticOnly || !/отклон/i.test(preview.previewError||''))
+      return {preview,tolerance:initialTolerance};
+    for(let step=Math.floor(initialTolerance*20+1e-8)+1;step<=12;step++){
+      const tolerance=step/20;
+      const candidate=Gen.previewGeometry(text,rotation,scale,tolerance);
+      if(!candidate.diagnosticOnly)return {preview:candidate,tolerance};
+    }
+    return {preview,tolerance:initialTolerance};
+  }
   function load() {
     invalidate(); geometry = null; error = '';
-    if (stepFile !== generatorPreviewLoadedFile) {
+    const newFile=stepFile !== generatorPreviewLoadedFile;
+    if (newFile) {
+      autoToleranceNote='';
       savedGuidePairs = []; pendingGuide = []; 
       for(const key of Object.keys(guideStarts))delete guideStarts[key];
       generatorPreviewLoadedFile = stepFile || null;
     }
-    try { if (stepFile) geometry = Gen.previewGeometry(stepFile.text, modelRotation, n('gnScale')/100, n('gnTolerance')); }
+    try { if (stepFile) {
+      const scale=n('gnScale')/100,tolerance=n('gnTolerance');
+      geometry=Gen.previewGeometry(stepFile.text,modelRotation,scale,tolerance);
+      if(newFile){
+        const selected=autoTolerancePreview(stepFile.text,modelRotation,scale,tolerance,geometry);
+        geometry=selected.preview;
+        if(selected.tolerance>tolerance){
+          document.getElementById('gnTolerance').value=selected.tolerance.toFixed(2);
+          document.getElementById('gnTolerance').classList.add('auto-adjusted');
+          autoToleranceNote='Допуск STEP автоматически увеличен с '+tolerance.toFixed(2)+' до '+selected.tolerance.toFixed(2)+' мм. Проверка отклонения выборочная; оцените точность детали.';
+        }
+      }
+    } }
     catch (e) { error = e.message; }
     savedGuidePairs = savedGuidePairs.filter(pair => pair.every(id =>
       geometry?.auxiliaryCurves?.some(c => c.id === id)));
@@ -919,10 +944,19 @@ const generatorPreview = (() => {
         // THE WIRE (gnL / stock X), not the upright Z dimension.
         // Keep 5 mm on each wire-side end; vertical and transverse
         // cutting allowance remains 10 mm per side.
-        const minimumLength=g.size[0]+10;
+        const minimumLength=g.size[0]+(document.getElementById('gnTrim').checked?10:0);
         const sheet=[20,50,100].find(t=>t+1e-7>=minimumLength);
         let length=sheet||round5(minimumLength);
-        const height=round5(minimumHeight);
+        let height=round5(minimumHeight),selectedClearance=clearance;
+        const availableHeight=gap=>Math.floor((machine.VerticalTravel-bottom-modelOffset[2]-gap+1e-7)/5)*5;
+        const minimumReducedHeight=round5(required+2*Math.max(3,kerf/2+.1));
+        if(height>availableHeight(selectedClearance)){
+          if(minimumReducedHeight>availableHeight(selectedClearance)&&selectedClearance>5)
+            selectedClearance=5;
+          const maximumHeight=availableHeight(selectedClearance);
+          if(maximumHeight<minimumReducedHeight)continue;
+          height=Math.min(height,maximumHeight);
+        }
         let width=round5(g.size[1]+20);
         if(g.slopedPreview){
           if(paired||!Number.isFinite(g.slopedBevelAngle))continue;
@@ -949,8 +983,8 @@ const generatorPreview = (() => {
            width/2+Math.abs(modelOffset[1])>machine.HorizontalTravel/2+1e-7 ||
            width/2+Math.abs(modelOffset[1])+n('gnLead')>machine.ParkX+1e-7 ||
            bottom+modelOffset[2]<0 ||
-           bottom+modelOffset[2]+height+clearance>machine.VerticalTravel+1e-7)continue;
-        results.push({rotation,geometry:g,length,width,height,standard:Boolean(sheet&&Math.abs(length-sheet)<1e-7),turn,
+           bottom+modelOffset[2]+height+selectedClearance>machine.VerticalTravel+1e-7)continue;
+        results.push({rotation,geometry:g,length,width,height,clearance:selectedClearance,standard:Boolean(sheet&&Math.abs(length-sheet)<1e-7),turn,
           description:rotations[turn].description,area:width*height,minimumHeight,minimumLength});
       }catch(e){/* A candidate may not form valid cutting geometry at this orientation. */}
     }
@@ -996,13 +1030,15 @@ const generatorPreview = (() => {
       fit.textContent='Ни одно положение модели не помещается в рабочую область с заданным нижним Z и безопасным зазором. Уменьшите масштаб или измените установку.';
       return;
     }
-    const best=choices[0];
+    const best=choices[0],clearanceBefore=n('gnClear');
     modelRotation=best.rotation;
     modelZOffset=0;showOffset();
     geometry=best.geometry;
     document.getElementById('gnL').value=best.length;
     document.getElementById('gnW').value=best.width;
     document.getElementById('gnH').value=best.height;
+    document.getElementById('gnClear').value=best.clearance;
+    if(best.clearance!==clearanceBefore)document.getElementById('gnClear').classList.add('auto-adjusted');
     invalidate();rebuild();
     const fit=document.getElementById('gnFit');
     // The stock check above has validated dimensions; append actionable
@@ -1010,12 +1046,16 @@ const generatorPreview = (() => {
     const info='Автоподбор: '+best.description+', толщина листа вдоль струны '+
       best.length+' мм ('+(best.standard?'стандартная':'нестандартная')+
       '), заготовка '+best.length+' × '+best.width+' × '+best.height+' мм.'+
+      (best.height+1e-7<best.minimumHeight?' Вертикальный припуск уменьшен до '+((best.height-(best.minimumHeight-20))/2).toFixed(1)+' мм с каждой стороны.':'')+
+      (best.clearance<clearanceBefore?' Зазор над заготовкой уменьшен с '+clearanceBefore+' до '+best.clearance+' мм.':'')+
       (best.geometry.slopedPreview&&(best.width<Math.ceil((best.geometry.size[1]+20-1e-7)/5)*5||best.length<Math.ceil((best.geometry.size[0]+10-1e-7)/5)*5)
         ? ' Припуски уменьшены для поворота: вдоль струны '+((best.length-best.geometry.size[0])/2).toFixed(1)+' мм и поперёк '+((best.width-best.geometry.size[1])/2).toFixed(1)+' мм с каждой стороны.' : '');
     fit.textContent+=' '+info;
   });
   document.getElementById('gnScale').addEventListener('change',load);
-  document.getElementById('gnTolerance').addEventListener('change',load);
+  for(const id of ['gnTolerance','gnZ','gnClear'])
+    document.getElementById(id).addEventListener('input',()=>document.getElementById(id).classList.remove('auto-adjusted'));
+  document.getElementById('gnTolerance').addEventListener('change',()=>{autoToleranceNote='';load();});
   for (const id of ['gnL','gnW','gnH','gnZ']) document.getElementById(id).addEventListener('input',()=>{invalidate();rebuild();});
   new ResizeObserver(()=>{
     const w=host.clientWidth,h=host.clientHeight;if (!w || !h) return;

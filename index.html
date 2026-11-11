@@ -92,6 +92,7 @@ section.box h2 { font-size: 11.5px; font-weight: 600; text-transform: uppercase;
 .fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
 .fields label { display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; color: var(--muted); }
 .fields input { width: 100%; padding: 4px 6px; font-family: var(--font-num); font-size: 13px; }
+.fields input.auto-adjusted { border: 2px solid #168344; box-shadow: 0 0 0 2px rgba(40, 170, 90, .28); }
 .check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
 .summary { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { padding: 2px 9px; border-radius: 99px; font-size: 12.5px; font-weight: 600; border: 1px solid currentColor; }
@@ -5695,6 +5696,7 @@ function showTab(tab) {
 function openStep(file, handle = null) {
   const rd = new FileReader();
   rd.onload = () => {
+    for(const id of ['gnTolerance','gnZ','gnClear'])$(id).classList.remove('auto-adjusted');
     stepFile = { name: file.name, text: String(rd.result), handle };
     modelRotation = Gen.identityRotation(); modelOffset = [0,0,0]; modelZOffset = 0; $("gnOffset").textContent="X 0 · Y 0 · Z 0 мм"; $("gnScale").value = 100; $("gnTolerance").value = "0.1";
     $("gnFile").textContent = file.name;
@@ -5715,6 +5717,7 @@ function openStep(file, handle = null) {
     if (/^F2-50-325-240(?:\(\d+\))?\.(?:stp|step)$/i.test(file.name)) {
       for (const [id, value] of [["gnL",50],["gnW",325],["gnH",240],
                                   ["gnZ",0],["gnClear",10],["gnKerf",1]]) {
+        if((id==='gnZ'||id==='gnClear')&&Number($(id).value)!==value)$(id).classList.add('auto-adjusted');
         $(id).value = value;
       }
       $("gnTrim").checked = false;

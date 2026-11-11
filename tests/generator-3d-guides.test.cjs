@@ -3,6 +3,46 @@ const assert=require('node:assert/strict');
 const vm=require('node:vm');
 const fs=require('node:fs'),path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../generator-view.js'),'utf8');
+test('automatic STEP tolerance retries only surface-deviation errors within the 0.60 mm limit',()=>{
+ const start=source.indexOf('  function autoTolerancePreview('),end=source.indexOf('  function load() {',start);
+ assert.ok(start>0&&end>start);
+ const attempted=[];
+ const context={Gen:{previewGeometry:(_text,_rotation,_scale,tolerance)=>{
+  attempted.push(tolerance);
+  return tolerance<.3?{diagnosticOnly:true,previewError:'пересечение вне поверхности'}:{diagnosticOnly:false};
+ }}};
+ vm.createContext(context);
+ const select=vm.runInContext(source.slice(start,end)+';autoTolerancePreview',context);
+ const result=select('step',[],1,.1,{diagnosticOnly:true,previewError:'отклонение STEP'});
+ assert.equal(result.tolerance,.3);
+ assert.deepEqual(attempted,[.15,.2,.25,.3]);
+ attempted.length=0;
+ const invalid=select('step',[],1,.1,{diagnosticOnly:true,previewError:'другая ошибка'});
+ assert.equal(invalid.tolerance,.1);
+ assert.equal(attempted.length,0);
+ context.Gen.previewGeometry=(_text,_rotation,_scale,tolerance)=>{
+  attempted.push(tolerance);
+  return {diagnosticOnly:true,previewError:'отклонение STEP'};
+ };
+ const unresolved=select('step',[],1,.1,{diagnosticOnly:true,previewError:'отклонение STEP'});
+ assert.equal(unresolved.tolerance,.1);
+ assert.equal(attempted.at(-1),.6);
+ assert.ok(attempted.every(tolerance=>tolerance<=.6));
+});
+test('manual edits clear the green automatic-adjustment indicator',()=>{
+ const start=source.indexOf("  for(const id of ['gnTolerance','gnZ','gnClear'])");
+ const end=source.indexOf("  document.getElementById('gnTolerance').addEventListener('change'",start);
+ assert.ok(start>0&&end>start);
+ const nodes=Object.fromEntries(['gnTolerance','gnZ','gnClear'].map(id=>[id,{
+  marked:true,classList:{remove(name){assert.equal(name,'auto-adjusted');nodes[id].marked=false}},
+  addEventListener(event,handler){assert.equal(event,'input');this.handler=handler}
+ }]));
+ vm.runInNewContext(source.slice(start,end),{document:{getElementById:id=>nodes[id]}});
+ nodes.gnClear.handler();
+ assert.equal(nodes.gnClear.marked,false);
+ assert.equal(nodes.gnZ.marked,true);
+ assert.equal(nodes.gnTolerance.marked,true);
+});
 function pairing() {
  const start=source.indexOf('  function chooseGuide(id) {');
  const end=source.indexOf('  // Project polyline vertices',start);
