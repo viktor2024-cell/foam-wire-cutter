@@ -2080,7 +2080,7 @@ function refreshBlank(on,base) {
   $("blankUnlock").disabled=$("blankCmd").disabled=!on || !!job || blankSession.active;
   $("blankRotate").disabled=!free || p!=="ready";
   const validated=blankValidate(), candidate=p==="zeroed"?validated:null, freeCandidate=p==="manual"?validated:null;
-  const canHeatOn=free && ((p==="zeroed" && candidate && !candidate.dry) || (p==="positioned" && !blankSession.plan?.dry)) && blankLaserMode===0;
+  const canHeatOn=free && ((p==="zeroed" && candidate && !candidate.dry) || (p==="positioned" && !blankSession.plan?.dry));
   const canHeatOff=free && blankSession.hot && ["heated","done"].includes(p);
   const heat=$("blankHeat"), heatUnknown=!on || mach.linkLost || p==="fault" || (blankSession.paused && blankSession.holdOff), heatRequested=blankSession.hot || p==="heating";
   heat.disabled=!(canHeatOn || canHeatOff);
@@ -2088,7 +2088,7 @@ function refreshBlank(on,base) {
   heat.textContent=heatUnknown?(!on || mach.linkLost?"Нагрев: нет связи":p==="fault"?"Нагрев: ошибка":"Нагрев: пауза"):p==="heating"?"Включение нагрева…":blankSession.hot?"Нагрев ВКЛ":"Включить нагрев";
   heat.setAttribute("aria-pressed",String(heatRequested));
   heat.title=heatUnknown?"Состояние нагрева неизвестно":heatRequested?"Нажмите, чтобы выключить нагрев":"Нажмите, чтобы включить нагрев";
-  $("blankStart").disabled=!free || !(p==="heated" || (p==="positioned" && blankSession.plan?.dry) || (p==="zeroed" && candidate && (candidate.dry || blankLaserMode===0)));
+  $("blankStart").disabled=!on;
   $("blankMoveTarget").disabled=!free || !freeCandidate || p!=="manual" || blankSession.hot;
   $("blankPause").disabled=!on || (job?!!job.halt:!["cutting","await-lower","await-cut","lifting","await-lift"].includes(p));
   $("blankPause").textContent=(job?job.paused:blankSession.paused)?"Продолжить":"Пауза";
@@ -2103,8 +2103,8 @@ function refreshBlank(on,base) {
   $("blankAngle").disabled=blankSession.active && p!=="ready";
   $("blankStep").disabled=!free || !["manual","zeroed"].includes(p);
   for(const id of ["blankZ","blankY","blankFeed","blankPower","blankDry"]) $(id).disabled=blankSession.active && !["ready","manual","zeroed"].includes(p);
-  const modeHint=p==="positioned" && !blankSession.plan?.dry && blankLaserMode===null?" Ожидаются настройки $32 контроллера.":
-    p==="positioned" && !blankSession.plan?.dry && blankLaserMode!==0?" Режим $32=1 не поддерживает неподвижный прогрев.":"";
+  const modeHint=(p==="zeroed" || p==="positioned") && !$("blankDry").checked && blankLaserMode===null?" Режим $32 не получен; проверьте нагрев.":
+    (p==="zeroed" || p==="positioned") && !$("blankDry").checked && blankLaserMode===1?" При $32=1 неподвижная струна может не нагреваться.":"";
   $("blankProgress").textContent=(labels[p]||"")+modeHint;
   $("blankProg").textContent=job?$("gProg").textContent:blankSession.paused?"Рез заготовки на паузе":(["cutting","await-lower","await-cut","lifting","await-lift"].includes(p)?"Выполняется рез заготовки":"");
   const hasBlankPosition=on && mach.blankPositionValid && blankSession.tableAngle!==null && !["fault","await-home"].includes(p);
@@ -2200,19 +2200,21 @@ $("blankZero").addEventListener("click",()=>blankAction(()=>{
 $("blankHeat").addEventListener("click",()=>blankAction(()=>{
   if(!mach.connected || mach.state!=="Idle" || mach.linkLost || job || mach.queue.length) throw new Error("Сначала остановите движение.");
   if(blankSession.hot) { blankSession.off(); return; }
-  if(blankLaserMode!==0) throw new Error("Нагрев недоступен: проверьте режим $32=0.");
   const p=blankSession.phase==="zeroed"?blankPlan():blankSession.plan;
   if(!p) throw new Error("Сначала задайте ноль и допустимые параметры реза.");
   requireBlankCutPosition(p);
   if(blankSession.phase==="zeroed") blankSession.prepare(p); blankSession.heat();
 }));
 function startBlankCut() { blankAction(()=>{
-  if(!mach.connected || mach.state!=="Idle" || mach.linkLost || job || mach.queue.length) throw new Error("Контроллер не готов.");
+  if(!mach.connected || mach.linkLost) throw new Error("Нет связи со станком.");
+  if(job) throw new Error("Другая программа ещё выполняется.");
+  if(mach.queue.length) throw new Error("Дождитесь ответа на предыдущую команду.");
+  if(mach.state!=="Idle") throw new Error("Станок не готов: "+(mach.state||"нет ответа")+".");
   const p=blankSession.phase==="zeroed"?blankPlan():blankSession.plan;
+  if(!p) throw new Error("Установите локальный ноль и введите координаты Z и Y.");
   requireBlankCutPosition(p);
   if(p.dry && mach.spinOn) throw new Error("Выключите нагрев перед холостым прогоном.");
   if(blankSession.phase==="zeroed") {
-    if(!p.dry && blankLaserMode!==0) throw new Error("Нагрев недоступен: проверьте режим $32=0.");
     blankSession.prepare(p);
     if(p.dry) blankSession.cut({...mach.pos}); else blankSession.autoCut({...mach.pos});
   } else blankSession.cut({...mach.pos});
