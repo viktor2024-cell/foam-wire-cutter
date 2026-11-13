@@ -17,7 +17,7 @@
     checkPosition(origin);
     if (![depth,distance,feed,power,angle].every(Number.isFinite)) throw new Error("Введите все параметры реза.");
     if (depth<0) throw new Error("Глубина Z должна быть неотрицательной.");
-    if (distance<=0) throw new Error("Расстояние Y должно быть больше 0.");
+    if (distance<0) throw new Error("Расстояние Y не может быть отрицательным.");
     if (feed<=0 || feed>14) throw new Error("Скорость должна быть больше 0 и не больше 14 мм/с.");
     if (power<=0 || power>limits.power) throw new Error("Мощность S должна быть больше 0 и не больше 1000.");
     if (angle<0 || angle>90 || !near(origin.B,angle)) throw new Error("Проверьте положение стола в пределах B0–B90.");
@@ -27,14 +27,15 @@
     return {origin:{...origin},depth,distance,feed,power,angle,dry:!!dry,bottom,target,
       lower:depth>0?`G01 Y${f(bottom)} A${f(bottom)} F${f(feed*60)}`:null,
       heat:`M03 S${f(power)}`,
-      cut:`G01 X${f(target)} Z${f(target)} F${f(feed*60)}`,off:"M05"};
+      cut:`G01 X${f(target)} Z${f(target)} F${f(feed*60)}`,
+      lift:`G01 Y${f(origin.Y)} A${f(origin.A)} F${f(feed*60)}`,off:"M05"};
   }
   const calibration=`G92 X${f(HOME.X)} Y${f(HOME.Y)} Z${f(HOME.Z)} A${f(HOME.A)} B${f(HOME.B)}`;
   class Session {
     constructor(send,fail) { this.send=send; this.fail=fail; this.reset(); }
     reset() { this.phase="idle"; this.pending=null; this.hot=false; this.plan=null;
       this.tableAngle=null; this.targetAngle=null; this.origin=null; this.jogTarget=null;
-      this.paused=false; this.holdOff=false; this.deferred=null; this.returnSteps=[]; this.returnTarget=null; }
+      this.paused=false; this.holdOff=false; this.deferred=null; this.returnSteps=[]; this.returnTarget=null; this.cutStart=null; this.horizontalNeeded=false; }
     get active() { return this.phase!=="idle"; }
     transmit(command,next) {
       if(this.pending) throw new Error("Дождитесь ответа контроллера.");
@@ -139,15 +140,37 @@
       this.phase="heating";
       this.transmit(this.plan.heat,()=>{this.hot=true;this.phase="heated";});
     }
-    cut() {
+    cut(pos=this.origin) {
       if(!this.plan || !(this.plan.dry ? this.phase==="positioned" && !this.hot : this.phase==="heated" && this.hot))
         throw new Error("Подготовьте рез и включите нагрев либо выберите холостой прогон.");
-      this.phase="cutting";
-      const horizontal=()=>this.transmit(this.plan.cut,()=>{this.phase="await-cut";});
-      if(this.plan.lower) this.transmit(this.plan.lower,horizontal); else horizontal();
+      checkPosition(pos);
+      if(!near(pos.Y,this.origin.Y) || !near(pos.A,this.origin.A) || !near(pos.B,this.tableAngle))
+        throw new Error("Перед резом струна должна находиться на уровне Z=0.");
+      const horizontalNeeded=!near(pos.X,this.plan.target) || !near(pos.Z,this.plan.target);
+      if(!this.plan.lower && !horizontalNeeded) throw new Error("Задайте ненулевое перемещение для реза.");
+      this.cutStart={...pos};this.horizontalNeeded=horizontalNeeded;this.phase="cutting";
+      if(this.plan.lower) this.transmit(this.plan.lower,()=>{this.phase="await-lower";}); else this.continueCut();
+    }
+    continueCut() {
+      if(this.horizontalNeeded) {this.phase="cutting";this.transmit(this.plan.cut,()=>{this.phase="await-cut";});}
+      else this.liftCut();
+    }
+    liftCut() {
+      if(this.plan.depth>0) {this.phase="lifting";this.transmit(this.plan.lift,()=>{this.phase="await-lift";});}
+      else this.finishCut();
+    }
+    autoCut(pos) {
+      if(this.phase!=="positioned" || this.plan.dry) throw new Error("Нагрев недоступен.");
+      const start={...pos};checkPosition(start);
+      if(!near(start.Y,this.origin.Y) || !near(start.A,this.origin.A) || !near(start.B,this.tableAngle))
+        throw new Error("Перед резом струна должна находиться на уровне Z=0.");
+      if(!this.plan.lower && near(start.X,this.plan.target) && near(start.Z,this.plan.target))
+        throw new Error("Задайте ненулевое перемещение для реза.");
+      this.phase="heating";
+      this.transmit(this.plan.heat,()=>{this.hot=true;this.phase="heated";this.cut(start);});
     }
     pause() {
-      if(this.paused || !["cutting","await-cut"].includes(this.phase))
+      if(this.paused || !["cutting","await-lower","await-cut","lifting","await-lift"].includes(this.phase))
         throw new Error("Пауза доступна во время реза.");
       this.paused=true;
     }
@@ -185,8 +208,17 @@
       if(this.phase==="await-return" && this.returnTarget &&
           Object.entries(this.returnTarget).every(([axis,value])=>Number.isFinite(pos[axis]) && Math.abs(pos[axis]-value)<0.02))
         this.returnNext();
+      if(this.phase==="await-lower" && this.plan && same(pos,{X:this.cutStart.X,Z:this.cutStart.Z,
+          Y:this.plan.bottom,A:this.plan.bottom,B:this.tableAngle})) this.continueCut();
       if(this.phase==="await-cut" && this.plan && same(pos,{X:this.plan.target,Z:this.plan.target,
-          Y:this.plan.bottom,A:this.plan.bottom,B:this.tableAngle})) this.phase="done";
+          Y:this.plan.bottom,A:this.plan.bottom,B:this.tableAngle})) this.liftCut();
+      if(this.phase==="await-lift" && this.plan && same(pos,{X:this.plan.target,Z:this.plan.target,
+          Y:this.origin.Y,A:this.origin.A,B:this.tableAngle})) this.finishCut();
+    }
+    finishCut() {
+      if(this.plan.dry) {this.plan=null;this.phase="zeroed";return;}
+      this.phase="cooling";
+      this.transmit("M05",()=>{this.hot=false;this.plan=null;this.phase="zeroed";});
     }
     lost() {if(this.active) {this.pending=null;this.deferred=null;this.returnSteps=[];this.returnTarget=null;this.paused=false;this.phase="fault";}}
   }

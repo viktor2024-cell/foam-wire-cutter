@@ -16,7 +16,7 @@ test("zero-relative plan goes down Z then inward Y",()=>{
   assert.equal(p.cut,"G01 X100.00 Z100.00 F420.00");
   assert.equal(plan(origin,0,100,7,500,90,true).lower,null);
   for(const args of [[181,100,7,500],[10,446,7,500],[-1,1,7,500],
-    [1,0,7,500],[1,1,15,500],[1,1,7,1001]])
+    [1,-1,7,500],[1,1,15,500],[1,1,7,1001]])
     assert.throws(()=>plan(origin,...args,90,false));
   assert.throws(()=>plan({...origin,A:170},1,1,7,500,90,false));
 });
@@ -47,10 +47,13 @@ test("heated cut and dry run enforce preparation and movement order",()=>{
     const p=plan(corner,50,100,7,500,90,dry);s.prepare(p);
     if(dry) assert.throws(()=>s.heat()); else {assert.throws(()=>s.cut());s.heat();s.ack();}
     s.cut();assert.equal(sent.at(-1),p.lower);s.ack();
+    s.status("Idle",{...corner,Y:p.bottom,A:p.bottom},true);
     assert.equal(sent.at(-1),p.cut);s.ack();
     s.status("Idle",{X:p.target,Z:p.target,Y:p.bottom,A:p.bottom,B:90},true);
-    assert.equal(s.phase,"done");
-    if(!dry){assert.throws(()=>s.end());s.off();s.ack();}
+    assert.equal(sent.at(-1),p.lift);s.ack();
+    s.status("Idle",{X:p.target,Z:p.target,Y:corner.Y,A:corner.A,B:90},true);
+    if(!dry){assert.equal(sent.at(-1),"M05");s.ack();}
+    assert.equal(s.phase,"zeroed");assert.ok(s.origin);
     s.end();assert.equal(s.phase,"idle");
   }
 });
@@ -59,6 +62,13 @@ test("errors and lost connection prevent further movement",()=>{
   s.home();s.ack("error:1");assert.equal(s.phase,"fault");
   assert.deepEqual(failures,["error:1"]);assert.throws(()=>s.zero(origin));
   s.reset();s.home();s.lost();assert.equal(s.phase,"fault");
+});
+test("failed automatic heater start does not begin a cut",()=>{
+  const {s,sent}=ready(),corner={...ALIGNED,B:90};
+  s.zero(corner);s.prepare(plan(corner,10,0,7,500,90,false));
+  s.autoCut(corner);assert.equal(sent.at(-1),"M03 S500.00");
+  const before=sent.length;s.ack("error:1");
+  assert.equal(s.phase,"fault");assert.equal(sent.length,before);
 });
 test("return waits for the vertical move before moving Y and keeps B fixed",()=>{
   const {s,sent}=ready(),pos={X:100,Z:100,Y:100,A:100,B:90};
@@ -85,9 +95,10 @@ test("return from above target moves horizontally before final lowering",()=>{
 test("failed heater-off acknowledgement prevents return movement",()=>{
   const {s,sent}=ready(),corner={...ALIGNED,B:90};
   s.zero(corner);const p=plan(corner,10,10,7,500,90,false);s.prepare(p);
-  s.heat();s.ack();s.cut();s.ack();s.ack();
+  s.heat();s.ack();s.cut();s.ack();
+  s.status("Idle",{...corner,Y:p.bottom,A:p.bottom},true);s.ack();
   const end={X:p.target,Z:p.target,Y:p.bottom,A:p.bottom,B:90};s.status("Idle",end,true);
-  s.returnHome(end);assert.equal(sent.at(-1),"M05");
+  s.ack();s.status("Idle",{...end,Y:corner.Y,A:corner.A},true);assert.equal(sent.at(-1),"M05");
   const count=sent.length;s.ack("error:1");
   assert.equal(s.phase,"fault");assert.equal(sent.length,count);
 });

@@ -66,9 +66,12 @@ test("manual controls send steps only after home, calibration and matching live 
   assert.equal(get("blankHeat").disabled,true); assert.equal(get("blankHeat").className,"heat-on");ack();
   assert.equal(get("blankHeat").className,"heat-on");
   click("blankStart"); assert.equal(c.mach.queue[0].text,"G01 Y181.00 A181.00 F420.00");ack();
+  c.onStatus("<Idle|WPos:245,181,245,181,90>");
   assert.equal(c.mach.queue[0].text,"G01 X145.00 Z145.00 F420.00");ack();
   c.onStatus("<Idle|WPos:145,181,145,181,90>");
-  click("blankHeat"); assert.equal(c.mach.queue[0].text,"M05");
+  assert.equal(c.mach.queue[0].text,"G01 Y231.00 A231.00 F420.00");ack();
+  c.onStatus("<Idle|WPos:145,231,145,231,90>");
+  assert.equal(c.mach.queue[0].text,"M05");
   assert.equal(get("blankHeat").className,"heat-on");ack();
   assert.equal(get("blankHeat").className,"heat-off");
   click("blankEnd"); assert.equal(c.blankSession.phase,"idle");
@@ -132,7 +135,7 @@ test("absolute Z and Y show calibrated position and ignore local zero",()=>{
   c.onStatus("<Idle|WPos:240,236,239,236,90>");
   assert.equal(get("blankAbsY").textContent,"—");assert.equal(get("blankAbsZ").textContent,"236.00");
 });
-test("position from HOME, set zero, cut, then return turns heat off first",()=>{
+test("position from HOME, cut, lift, turn heat off and return",()=>{
   const {c,get,click,ack}=controller();
   click("blankHome");ack();ack();ack();ack();
   c.onStatus("<Idle|WPos:249,238,245,236,-7.3>");
@@ -147,11 +150,13 @@ test("position from HOME, set zero, cut, then return turns heat off first",()=>{
   click("blankZero");assert.equal(c.blankSession.origin.Y,181);setCut(get,c);
   click("blankHeat");ack();click("blankStart");
   assert.equal(c.mach.queue[0].text,"G01 Y131.00 A131.00 F420.00");ack();
+  c.onStatus("<Idle|WPos:145,131,145,131,90>");
   assert.equal(c.mach.queue[0].text,"G01 X45.00 Z45.00 F420.00");ack();
   c.onStatus("<Idle|WPos:45,131,45,131,90>");
-  assert.equal(get("blankReturn").disabled,false);
-  click("blankReturn");assert.equal(c.mach.queue[0].text,"M05");
-  assert.equal(c.blankSession.hot,true);ack();
+  assert.equal(c.mach.queue[0].text,"G01 Y181.00 A181.00 F420.00");ack();
+  c.onStatus("<Idle|WPos:45,181,45,181,90>");
+  assert.equal(c.mach.queue[0].text,"M05");ack();
+  assert.equal(get("blankReturn").disabled,false);click("blankReturn");
   assert.equal(c.blankSession.hot,false);
   assert.equal(c.mach.queue[0].text,"G00 Y231.00 A231.00");ack();
   c.onStatus("<Idle|WPos:45,231,45,231,90>");
@@ -195,9 +200,44 @@ test("dry run sends movements without enabling heat",()=>{
   assert.equal(get("blankMoveTarget").disabled,true);
   click("blankStart");
   assert.equal(c.mach.queue[0].text,"G01 Y186.00 A186.00 F420.00");ack();
+  c.onStatus("<Idle|WPos:245,186,245,186,90>");
   assert.equal(c.mach.queue[0].text,"G01 X145.00 Z145.00 F420.00");ack();
   c.onStatus("<Idle|WPos:145,186,145,186,90>");
-  assert.equal(c.blankSession.phase,"done");assert.equal(c.blankSession.hot,false);
+  assert.equal(c.mach.queue[0].text,"G01 Y236.00 A236.00 F420.00");ack();
+  c.onStatus("<Idle|WPos:145,236,145,236,90>");
+  assert.equal(c.blankSession.phase,"zeroed");assert.equal(c.blankSession.hot,false);
+});
+test("successive cuts keep zero, lift at reached Y and heat automatically",()=>{
+  const {c,get,click,ack}=controller();
+  click("blankHome");ack();ack();ack();ack();
+  c.onStatus("<Idle|WPos:249,238,245,236,-7.3>");
+  click("blankRotate");ack();c.onStatus("<Idle|WPos:249,238,245,236,90>");
+  ack();ack();c.onStatus("<Idle|WPos:245,236,245,236,90>");
+  click("blankZero");
+  get("blankZ").value="10";get("blankY").value="50";c.refreshMachine();
+  click("blankStart");assert.equal(c.mach.queue[0].text,"M03 S500.00");ack();
+  assert.equal(c.mach.queue[0].text,"G01 Y226.00 A226.00 F420.00");ack();
+  assert.equal(c.mach.queue.length,0);
+  c.onStatus("<Idle|WPos:245,226,245,226,90>");
+  assert.equal(c.mach.queue[0].text,"G01 X195.00 Z195.00 F420.00");ack();
+  c.onStatus("<Idle|WPos:195,226,195,226,90>");
+  assert.equal(c.mach.queue[0].text,"G01 Y236.00 A236.00 F420.00");ack();
+  c.onStatus("<Idle|WPos:195,236,195,236,90>");
+  assert.equal(c.mach.queue[0].text,"M05");ack();
+  assert.equal(c.blankSession.phase,"zeroed");assert.equal(c.blankSession.origin.X,245);
+  get("blankZ").value="5";get("blankY").value="0";c.refreshMachine();
+  click("blankStart");assert.equal(c.mach.queue[0].text,"M03 S500.00");ack();
+  assert.equal(c.mach.queue[0].text,"G01 Y231.00 A231.00 F420.00");ack();
+  c.onStatus("<Idle|WPos:195,231,195,231,90>");
+  assert.equal(c.mach.queue[0].text,"G01 X245.00 Z245.00 F420.00");ack();
+  c.onStatus("<Idle|WPos:245,231,245,231,90>");
+  assert.equal(c.mach.queue[0].text,"G01 Y236.00 A236.00 F420.00");ack();
+  c.onStatus("<Idle|WPos:245,236,245,236,90>");
+  assert.equal(c.mach.queue[0].text,"M05");ack();
+  click("blankStart");assert.equal(c.mach.queue[0].text,"M03 S500.00");ack();
+  assert.equal(c.mach.queue[0].text,"G01 Y231.00 A231.00 F420.00");ack();
+  c.onStatus("<Idle|WPos:245,231,245,231,90>");
+  assert.equal(c.mach.queue[0].text,"G01 Y236.00 A236.00 F420.00");
 });
 test("heater state is marked uncertain after a controller alarm",()=>{
   const {c,get,click,ack}=controller();
@@ -228,6 +268,8 @@ test("blank machine panel pauses without sending the next cut until resume",asyn
   assert.equal(get("blankPause").textContent,"Продолжить");
   click("gPause");assert.equal(c.blankSession.paused,false);
   assert.equal(get("blankPause").textContent,"Пауза");
+  assert.equal(c.mach.queue.length,0);
+  c.onStatus("<Idle|WPos:245,186,245,186,90>");
   assert.equal(c.mach.queue[0].text,"G01 X145.00 Z145.00 F420.00");
   await c.mach.tx;
   const realtime=writes.filter(a=>a.length===1).map(a=>a[0]);
