@@ -39,7 +39,8 @@ test("manual controls send steps only after home, calibration and matching live 
   const {c,get,click,ack}=controller();
   assert.equal(get("blankHeat").className,"heat-off");
   assert.equal(get("blankHeat").textContent,"Включить нагрев");
-  assert.equal(get("blankStart").disabled,true);
+  assert.equal(get("blankStart").disabled,false);
+  click("blankStart");assert.match(get("blankMessage").textContent,/ноль/i);
   click("blankHome"); assert.equal(c.mach.queue[0].text,"M05");
   ack(); assert.equal(c.mach.queue[0].text,"$H");
   ack(); assert.equal(c.mach.queue[0].text,"G21 G90 G94");
@@ -87,7 +88,8 @@ test("out-of-travel Z and Y are marked red and block starting",()=>{
   get("blankZ").value="237";get("blankY").value="491";c.refreshMachine();
   assert.equal(get("blankZ").classList["blank-invalid"],true);
   assert.equal(get("blankY").classList["blank-invalid"],true);
-  assert.equal(get("blankStart").disabled,true);
+  assert.equal(get("blankStart").disabled,false);
+  click("blankStart");assert.equal(c.mach.queue.length,0);
   get("blankZ").value="50";get("blankY").value="100";c.refreshMachine();
   assert.equal(get("blankZ").classList["blank-invalid"],false);
   assert.equal(get("blankY").classList["blank-invalid"],false);
@@ -174,7 +176,7 @@ test("machine stop interrupts a manual operation and blocks further movement",()
   assert.ok(c.mach.stopTimer);
   assert.throws(()=>c.blankSession.cut());
 });
-test("laser mode prevents stationary heating",()=>{
+test("laser mode warns without blocking heating",()=>{
   const {c,get,click,ack}=controller();
   click("blankHome"); ack(); ack(); ack(); ack();
   c.onStatus("<Idle|WPos:249,238,245,236,-7.3>");
@@ -182,10 +184,10 @@ test("laser mode prevents stationary heating",()=>{
   ack(); ack(); c.onStatus("<Idle|WPos:245,236,245,236,90>");
   click("blankZero");setCut(get,c);
   c.onLine("$32=1"); c.refreshMachine();
-  assert.equal(get("blankHeat").disabled,true);
+  assert.equal(get("blankHeat").disabled,false);
+  assert.match(get("blankProgress").textContent,/\$32=1/);
   click("blankHeat");
-  assert.equal(c.mach.queue.length,0);
-  assert.match(get("blankMessage").textContent,/\$32=0/);
+  assert.equal(c.mach.queue[0].text,"M03 S500.00");
 });
 test("dry run sends movements without enabling heat",()=>{
   const {c,get,click,ack}=controller();
