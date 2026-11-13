@@ -360,7 +360,7 @@ button.heat-unknown { background: var(--warn); border-color: var(--warn); color:
     </section>
     <section class="blank-card"><h2>5. Управление резом</h2><button id="blankStart" class="primary">Старт</button><button id="blankPause">Пауза</button><button id="blankMachineStop" class="stop">Стоп</button><button id="blankEnd" type="button" disabled>Завершить</button><label class="check"><input type="checkbox" id="blankDry" checked> Холостой прогон без нагрева и пенопласта</label><label class="check"><input type="checkbox" id="blankHoldOff" checked> Гасить струну на паузе</label><div id="blankProg" class="note"></div><div id="blankPosition" class="note"></div><div id="blankMessage" class="note" role="status" aria-live="polite"></div><details><summary>Команды и журнал станка</summary><input id="blankCmd" type="text" placeholder="Команда, например $$" aria-label="Команда для контроллера" spellcheck="false" autocomplete="off"><pre id="blankLog"></pre></details></section>
   </div>
-  <p class="note">Поле между башнями — 370 мм, поперечный ход — 490 мм. Габариты заготовки и свободное место при повороте не проверяются. Программный стоп не заменяет аварийную кнопку станка.</p>
+  <p class="note">После реза струна поднимается к Z=0 на достигнутом Y и нагрев выключается. При автостарте нагрев включается без задержки прогрева. Проверьте путь подъёма: габариты заготовки и столкновения не проверяются. Поле между башнями — 370 мм, поперечный ход — 490 мм. Программный стоп не заменяет аварийную кнопку станка.</p>
 </section>
 
 <section id="panelLayout" class="box" hidden>
@@ -2062,7 +2062,7 @@ function refreshBlank(on,base) {
     zeroed:"Ноль задан. Введите Z и Y для реза.",
     positioned:blankSession.plan?.dry?"Холостой прогон готов: уберите пенопласт.":"Рез подготовлен; можно включить нагрев.",heating:"Включение нагрева…",
     heated:"Команда нагрева принята; проверьте нагрев перед резом.",cutting:"Команда реза отправлена…",
-    "await-cut":"Рез выполняется…",done:blankSession.hot?"Рез завершён; выключите нагрев.":"Холостой прогон завершён.",
+    "await-lower":"Вертикальный рез…","await-cut":"Рез выполняется…",lifting:"Подъём струны к Z=0…","await-lift":"Подъём струны к Z=0…",done:blankSession.hot?"Рез завершён; выключите нагрев.":"Холостой прогон завершён.",
     cooling:"Выключение нагрева…",finished:"Нагрев выключен.",fault:"Остановка или ошибка: проверьте питание и положение станка."};
   $("blankConnect").textContent=on?"Отключить":"Подключить";
   $("blankConnect").disabled=!!job || blankSession.active;
@@ -2088,9 +2088,9 @@ function refreshBlank(on,base) {
   heat.textContent=heatUnknown?(!on || mach.linkLost?"Нагрев: нет связи":p==="fault"?"Нагрев: ошибка":"Нагрев: пауза"):p==="heating"?"Включение нагрева…":blankSession.hot?"Нагрев ВКЛ":"Включить нагрев";
   heat.setAttribute("aria-pressed",String(heatRequested));
   heat.title=heatUnknown?"Состояние нагрева неизвестно":heatRequested?"Нажмите, чтобы выключить нагрев":"Нажмите, чтобы включить нагрев";
-  $("blankStart").disabled=!free || !(p==="heated" || (p==="positioned" && blankSession.plan?.dry) || (p==="zeroed" && candidate?.dry));
+  $("blankStart").disabled=!free || !(p==="heated" || (p==="positioned" && blankSession.plan?.dry) || (p==="zeroed" && candidate && (candidate.dry || blankLaserMode===0)));
   $("blankMoveTarget").disabled=!free || !freeCandidate || p!=="manual" || blankSession.hot;
-  $("blankPause").disabled=!on || (job?!!job.halt:!["cutting","await-cut"].includes(p));
+  $("blankPause").disabled=!on || (job?!!job.halt:!["cutting","await-lower","await-cut","lifting","await-lift"].includes(p));
   $("blankPause").textContent=(job?job.paused:blankSession.paused)?"Продолжить":"Пауза";
   $("blankMachineStop").disabled=!on;
   $("blankEnd").disabled=!(free && !blankSession.hot && ["ready","manual","zeroed","positioned","finished","done"].includes(p)) && !(p==="fault" && !mach.stopTimer);
@@ -2106,7 +2106,7 @@ function refreshBlank(on,base) {
   const modeHint=p==="positioned" && !blankSession.plan?.dry && blankLaserMode===null?" Ожидаются настройки $32 контроллера.":
     p==="positioned" && !blankSession.plan?.dry && blankLaserMode!==0?" Режим $32=1 не поддерживает неподвижный прогрев.":"";
   $("blankProgress").textContent=(labels[p]||"")+modeHint;
-  $("blankProg").textContent=job?$("gProg").textContent:blankSession.paused?"Рез заготовки на паузе":(["cutting","await-cut"].includes(p)?"Выполняется рез заготовки":"");
+  $("blankProg").textContent=job?$("gProg").textContent:blankSession.paused?"Рез заготовки на паузе":(["cutting","await-lower","await-cut","lifting","await-lift"].includes(p)?"Выполняется рез заготовки":"");
   const hasBlankPosition=on && mach.blankPositionValid && blankSession.tableAngle!==null && !["fault","await-home"].includes(p);
   $("blankPosition").textContent=hasBlankPosition ? (blankSession.origin ?
     "От заданного 0: Y "+(blankSession.origin.X-mach.pos.X).toFixed(2)+
@@ -2123,7 +2123,7 @@ function blankValidate() {
   const origin=manual?{...BlankCut.ALIGNED,B:blankSession.tableAngle}:blankSession.origin;
   for(const [id,invalid] of [
     ["blankZ",origin && $("blankZ").value.trim()!=="" && (!Number.isFinite(Number($("blankZ").value)) || Number($("blankZ").value)<0 || Number($("blankZ").value)>origin.Y)],
-    ["blankY",origin && $("blankY").value.trim()!=="" && (!Number.isFinite(Number($("blankY").value)) || (manual?Number($("blankY").value)<0:Number($("blankY").value)<=0) || Number($("blankY").value)>origin.X+245)]
+    ["blankY",origin && $("blankY").value.trim()!=="" && (!Number.isFinite(Number($("blankY").value)) || Number($("blankY").value)<0 || Number($("blankY").value)>origin.X+245)]
   ]) { $(id).classList.toggle("blank-invalid",!!invalid); $(id).setAttribute("aria-invalid",String(!!invalid)); }
   if(manual) {
     if($("blankZ").value.trim()==="" || $("blankY").value.trim()==="") return null;
@@ -2136,6 +2136,12 @@ function requireBlankPosition(expected) {
   if(!mach.hasPos || !mach.blankPositionValid || performance.now()-mach.lastPosAt>1500 ||
       Object.entries(expected).some(([axis,value])=>!Number.isFinite(mach.pos[axis]) || Math.abs(mach.pos[axis]-value)>0.15))
     throw new Error("Текущее положение не подтверждено. Проверьте координаты и выполните хоминг заново.");
+}
+function requireBlankCutPosition(p) {
+  requireBlankPosition({Y:p.origin.Y,A:p.origin.A,B:p.angle});
+  BlankCut.checkPosition(mach.pos);
+  if(!p.lower && Math.abs(mach.pos.X-p.target)<0.15 && Math.abs(mach.pos.Z-p.target)<0.15)
+    throw new Error("Задайте ненулевое перемещение для реза.");
 }
 function blankAction(action) {
   try { action(); showMsg(""); }
@@ -2197,15 +2203,19 @@ $("blankHeat").addEventListener("click",()=>blankAction(()=>{
   if(blankLaserMode!==0) throw new Error("Нагрев недоступен: проверьте режим $32=0.");
   const p=blankSession.phase==="zeroed"?blankPlan():blankSession.plan;
   if(!p) throw new Error("Сначала задайте ноль и допустимые параметры реза.");
-  requireBlankPosition(p.origin);
+  requireBlankCutPosition(p);
   if(blankSession.phase==="zeroed") blankSession.prepare(p); blankSession.heat();
 }));
 function startBlankCut() { blankAction(()=>{
   if(!mach.connected || mach.state!=="Idle" || mach.linkLost || job || mach.queue.length) throw new Error("Контроллер не готов.");
   const p=blankSession.phase==="zeroed"?blankPlan():blankSession.plan;
-  requireBlankPosition(p.origin);
+  requireBlankCutPosition(p);
   if(p.dry && mach.spinOn) throw new Error("Выключите нагрев перед холостым прогоном.");
-  if(blankSession.phase==="zeroed") blankSession.prepare(p); blankSession.cut();
+  if(blankSession.phase==="zeroed") {
+    if(!p.dry && blankLaserMode!==0) throw new Error("Нагрев недоступен: проверьте режим $32=0.");
+    blankSession.prepare(p);
+    if(p.dry) blankSession.cut({...mach.pos}); else blankSession.autoCut({...mach.pos});
+  } else blankSession.cut({...mach.pos});
 }); }
 $("blankStart").addEventListener("click",startBlankCut);
 $("blankMoveTarget").addEventListener("click",()=>blankAction(()=>{
@@ -2236,7 +2246,7 @@ function refreshMachine() {
   chip.className = "state " + (!on ? "off" : base === "Alarm" ? "crit" : base === "Idle" ? "ready" : "on");
   $("gHome").disabled = $("gUnlock").disabled = $("gCmd").disabled = !on || !!job || blankSession.active;
   $("gStart").disabled = !on || !!job || previewOnlyProgram || blankSession.active;
-  $("gPause").disabled = !job && !["cutting","await-cut"].includes(blankSession.phase);
+  $("gPause").disabled = !job && !["cutting","await-lower","await-cut","lifting","await-lift"].includes(blankSession.phase);
   $("gPause").textContent=(job?job.paused:blankSession.paused)?"Продолжить":"Пауза";
   $("gStop").disabled = !on;
   $("gProg").textContent = job ? "Выполнено строк: " + job.acked + " из " + job.lines.length + (job.dry ? " · холостой прогон" : "") : "";
