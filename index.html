@@ -374,7 +374,7 @@ button.heat-unknown { background: var(--warn); border-color: var(--warn); color:
     <label class="btn">Выбрать файлы <input id="layoutFiles" type="file" accept=".gcode,.nc,.ngc,.tap" multiple></label>
     <button id="layoutBuild" class="primary" type="button">Разложить</button>
   </div>
-  <p class="note">Используются только имена файлов. Два наибольших размера — стороны заготовки на листе; меньший размер не влияет на раскладку. Поворот на 90° разрешён. Все заготовки размещаются на листах толщиной 100 мм. При нулевом зазоре ширина реза не учтена.</p>
+  <p class="note">Раскладка подбирается для последовательных прямых резов с предпочтением общих сторон одинаковой длины. Используются два наибольших размера из имени файла; поворот на 90° разрешён. Все заготовки размещаются на листах толщиной 100 мм. Для одного реза между заготовками задайте зазор, равный ширине пропила: при нуле ширина реза не учтена.</p>
   <label for="layoutNames">Имена файлов, по одному в строке</label>
   <textarea id="layoutNames" rows="8" style="display:block;width:100%;font:inherit;margin:8px 0">F1_100-410-250_auto.gcode
 F2_100-330-240_auto.gcode

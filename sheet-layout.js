@@ -13,32 +13,50 @@
       return {id,name,width:dimensions[0],height:dimensions[1],thickness:dimensions[2]};
     });
   }
-  function splitFree(rect, used) {
-    if (used.x >= rect.x+rect.w || used.x+used.w <= rect.x ||
-        used.y >= rect.y+rect.h || used.y+used.h <= rect.y) return [rect];
-    const result=[];
-    if (used.x>rect.x) result.push({x:rect.x,y:rect.y,w:used.x-rect.x,h:rect.h});
-    if (used.x+used.w<rect.x+rect.w) result.push({x:used.x+used.w,y:rect.y,w:rect.x+rect.w-used.x-used.w,h:rect.h});
-    if (used.y>rect.y) result.push({x:rect.x,y:rect.y,w:rect.w,h:used.y-rect.y});
-    if (used.y+used.h<rect.y+rect.h) result.push({x:rect.x,y:used.y+used.h,w:rect.w,h:rect.y+rect.h-used.y-used.h});
-    return result;
+  const close=(a,b)=>Math.abs(a-b)<1e-7;
+  // An equal-height side at the prescribed gap is a shared cut only when
+  // the two ends are aligned as well. Partial contacts are a weaker bonus.
+  function contacts(items,candidate,gap) {
+    let full=0,length=0;
+    for(const a of items){
+      if(close(a.x+a.width+gap,candidate.x)||close(candidate.x+candidate.width+gap,a.x)){
+        const n=Math.max(0,Math.min(a.y+a.height,candidate.y+candidate.height)-Math.max(a.y,candidate.y));
+        length+=n;if(n>0&&close(a.y,candidate.y)&&close(a.height,candidate.height))full++;
+      }
+      if(close(a.y+a.height+gap,candidate.y)||close(candidate.y+candidate.height+gap,a.y)){
+        const n=Math.max(0,Math.min(a.x+a.width,candidate.x+candidate.width)-Math.max(a.x,candidate.x));
+        length+=n;if(n>0&&close(a.x,candidate.x)&&close(a.width,candidate.width))full++;
+      }
+    }
+    return {full,length};
   }
   function place(sheet, item, gap) {
     let best=null;
-    for (const free of sheet.free) for (const rotated of [false,true]) {
+    for (const [index,free] of sheet.free.entries()) for (const rotated of [false,true]) {
       const width=rotated?item.height:item.width, height=rotated?item.width:item.height;
       const w=width+gap,h=height+gap;
       if (w>free.w || h>free.h) continue;
-      const score=[Math.min(free.w-w,free.h-h),Math.max(free.w-w,free.h-h),free.y,free.x];
-      if (!best || score.some((n,i)=>n<best.score[i] && score.slice(0,i).every((v,j)=>v===best.score[j])))
-        best={x:free.x,y:free.y,w,h,width,height,rotated,score};
+      const contact=contacts(sheet.items,{x:free.x,y:free.y,width,height},gap);
+      for(const verticalFirst of [false,true]){
+        // A slice is cut across its entire current free rectangle. The two
+        // remainders never overlap, so every final layout admits straight cuts.
+        const rw=free.w-w,rh=free.h-h;
+        const largest=verticalFirst?Math.max(rw*free.h,w*rh):Math.max(rw*h,free.w*rh);
+        const score=[-contact.full,-contact.length,Math.min(rw,rh),-largest,free.y,free.x];
+        if (!best || score.some((n,i)=>n<best.score[i] && score.slice(0,i).every((v,j)=>v===best.score[j])))
+          best={index,free,x:free.x,y:free.y,w,h,width,height,rotated,verticalFirst,score};
+      }
     }
     if (!best) return false;
-    let next=sheet.free.flatMap(r=>splitFree(r,best));
-    next=next.filter((a,i)=>!next.some((b,j)=>i!==j && a.x>=b.x && a.y>=b.y &&
-      a.x+a.w<=b.x+b.w && a.y+a.h<=b.y+b.h &&
-      (a.x!==b.x || a.y!==b.y || a.w!==b.w || a.h!==b.h || i>j)));
-    sheet.free=next;
+    const f=best.free,rw=f.w-best.w,rh=f.h-best.h;
+    const remainder=best.verticalFirst ? [
+      {x:f.x+best.w,y:f.y,w:rw,h:f.h},
+      {x:f.x,y:f.y+best.h,w:best.w,h:rh}
+    ] : [
+      {x:f.x+best.w,y:f.y,w:rw,h:best.h},
+      {x:f.x,y:f.y+best.h,w:f.w,h:rh}
+    ];
+    sheet.free.splice(best.index,1,...remainder.filter(r=>r.w>1e-7&&r.h>1e-7));
     sheet.items.push({...item,x:best.x,y:best.y,width:best.width,height:best.height,rotated:best.rotated});
     return true;
   }
@@ -47,7 +65,6 @@
       throw new Error("Проверьте размеры листа и зазор.");
     if (items.some(p=>!((p.width<=width && p.height<=height)||(p.height<=width && p.width<=height))))
       throw new Error("Одна из заготовок не помещается на лист даже с поворотом.");
-    const area=items.reduce((s,p)=>s+p.width*p.height,0);
     let seed=0x7a481, best=null;
     for (let attempt=0;attempt<2500;attempt++) {
       const order=items.slice();
@@ -63,10 +80,17 @@
         if (!place(sheet,item,gap)) throw new Error("Не удалось разместить: "+item.name);
         sheets.push(sheet);
       }
-      if (!best || sheets.length<best.length) best=sheets;
-      if (best.length===Math.ceil(area/(width*height))) break;
+      const quality=sheets.reduce((out,s)=>{
+        for(let i=0;i<s.items.length;i++){
+          const c=contacts(s.items.slice(0,i),s.items[i],gap);
+          out.full+=c.full;out.length+=c.length;
+        }return out;
+      },{full:0,length:0});
+      if (!best || sheets.length<best.sheets.length || sheets.length===best.sheets.length &&
+          (quality.full>best.quality.full || quality.full===best.quality.full && quality.length>best.quality.length))
+        best={sheets,quality};
     }
-    return best.map(s=>s.items);
+    return best.sheets.map(s=>s.items);
   }
   const api={parseNames,pack};
   if (typeof module!=="undefined" && module.exports) module.exports=api;
