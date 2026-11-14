@@ -58,13 +58,22 @@ test("invalid filenames and oversized blanks are reported",()=>{
   assert.throws(()=>parseNames("unlabelled.gcode"),/размер/);
   assert.throws(()=>pack(parseNames("big_800-710-10.gcode"),700,1180),/не помещается/);
 });
-test("matching dimensions share complete sides and sheets admit straight cuts",()=>{
+test("example sheets admit straight cuts at zero and 3 mm gap",()=>{
  const input=parseNames(`F1_410-230-100.gcode\nF2_330-240-100.gcode\nW1_310-250-100.gcode\nstab_320-240-100.gcode\nkil_300-240-100.gcode\nW2_310-230-100.gcode\nW3_320-200-100.gcode`);
  for(const gap of [0,3]){
   const sheets=pack(input,700,1180,gap);assert.equal(sheets.length,1);verify(sheets,700,1180,gap);
   assert.ok(guillotine(sheets[0],gap),'cuts must separate the entire remaining rectangle');
-  let matched=0;for(let i=0;i<sheets[0].length;i++)for(const p of sheets[0].slice(i+1))if(fullShared(sheets[0][i],p,gap))matched++;
-  assert.ok(matched>=2,'equal-length sides should align for shared cuts');
+ }
+});
+test("equal sides share a cut when it does not reduce density",()=>{
+ const parts=parseNames('a_300-240-100.gcode\nb_300-240-100.gcode');
+ for(const gap of [0,3]){const s=pack(parts,700,1170,gap);assert.equal(s.length,1);assert.ok(fullShared(s[0][0],s[0][1],gap));}
+});
+test("570 x 1170 example fits on one sheet with compact straight cuts",()=>{
+ const parts=parseNames('F1_410-230-100.gcode\nF2_330-240-100.gcode\nW1_310-250-100.gcode\nstab_320-240-100.gcode\nkil_300-240-100.gcode\nW2_310-230-100.gcode\nW3_320-200-100.gcode');
+ for(const [gap,limit] of [[0,1020],[3,1026]]){
+  const s=pack(parts,570,1170,gap);assert.equal(s.length,1);verify(s,570,1170,gap);
+  assert.ok(guillotine(s[0],gap));assert.equal(Math.max(...s[0].map(p=>p.y+p.height)),limit);
  }
 });
 test("straight-cut layouts remain valid with varied parts and kerf",()=>{

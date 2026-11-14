@@ -368,13 +368,13 @@ button.heat-unknown { background: var(--warn); border-color: var(--warn); color:
 <section id="panelLayout" class="box" hidden>
   <h2>Раскладка заготовок на листе</h2>
   <div class="row">
-    <label>Ширина листа, мм <input id="layoutWidth" type="number" min="1" value="700"></label>
-    <label>Длина листа, мм <input id="layoutHeight" type="number" min="1" value="1180"></label>
+    <label>Ширина листа, мм <input id="layoutWidth" type="number" min="1" value="570"></label>
+    <label>Длина листа, мм <input id="layoutHeight" type="number" min="1" value="1170"></label>
     <label>Зазор, мм <input id="layoutGap" type="number" min="0" value="0"></label>
     <label class="btn">Выбрать файлы <input id="layoutFiles" type="file" accept=".gcode,.nc,.ngc,.tap" multiple></label>
     <button id="layoutBuild" class="primary" type="button">Разложить</button>
   </div>
-  <p class="note">Раскладка подбирается для последовательных прямых резов с предпочтением общих сторон одинаковой длины. Используются два наибольших размера из имени файла; поворот на 90° разрешён. Все заготовки размещаются на листах толщиной 100 мм. Для одного реза между заготовками задайте зазор, равный ширине пропила: при нуле ширина реза не учтена.</p>
+  <p class="note">Раскладка стремится уменьшить число листов и занятую длину, сохраняя возможность последовательных прямых резов; при равной плотности предпочтительны общие стороны. Используются два наибольших размера из имени файла; поворот на 90° разрешён. Все заготовки размещаются на листах толщиной 100 мм. Для одного реза между заготовками задайте зазор, равный ширине пропила: при нуле ширина реза не учтена.</p>
   <label for="layoutNames">Имена файлов, по одному в строке</label>
   <textarea id="layoutNames" rows="8" style="display:block;width:100%;font:inherit;margin:8px 0">F1_100-410-250_auto.gcode
 F2_100-330-240_auto.gcode
