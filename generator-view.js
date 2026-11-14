@@ -559,7 +559,7 @@ const generatorPreview = (() => {
     scene.remove(group);
   }
   function rebuild(preserveDiagnostics = false) {
-    document.getElementById('gnStockFromModel').disabled = !geometry || geometry.diagnosticOnly;
+    document.getElementById('gnStockFromModel').disabled = !geometry;
     document.getElementById('gnAutoPlace').disabled = !geometry || geometry.diagnosticOnly;
     guideWire = null;guideStartMarker=null;
     if (preserveDiagnostics === true) clearStockCloud();
@@ -949,7 +949,15 @@ const generatorPreview = (() => {
       await new Promise(resolve=>setTimeout(resolve,0));
       const rotation=rotations[turn].matrix;
       try{
-        const g=turn===0&&geometry ? geometry : Gen.previewGeometry(stepFile.text,rotation,scale,n('gnTolerance'));
+        let tolerance=n('gnTolerance');
+        let g=turn===0&&geometry ? geometry : Gen.previewGeometry(stepFile.text,rotation,scale,tolerance);
+        if(g.diagnosticOnly && /отклон/i.test(g.previewError||'')){
+          for(let step=Math.floor(tolerance*20+1e-8)+1;step<=12;step++){
+            const candidateTolerance=step/20;
+            const candidate=Gen.previewGeometry(stepFile.text,rotation,scale,candidateTolerance);
+            if(!candidate.diagnosticOnly){g=candidate;tolerance=candidateTolerance;break;}
+          }
+        }
         // Both machine and generator require the span to lie along the wire.
         if(g.axis!==1||g.diagnosticOnly)continue;
         // Reserve a sacrificial strip below models that need a lower-side
@@ -1002,7 +1010,7 @@ const generatorPreview = (() => {
            width/2+Math.abs(modelOffset[1])+n('gnLead')>machine.ParkX+1e-7 ||
            bottom+modelOffset[2]<0 ||
            height+selectedClearance>machine.VerticalTravel+1e-7)continue;
-        results.push({rotation,geometry:g,length,width,height,bottom:modelBottom,clearance:selectedClearance,standard:Boolean(sheet&&Math.abs(length-sheet)<1e-7),turn,
+        results.push({rotation,geometry:g,tolerance,length,width,height,bottom:modelBottom,clearance:selectedClearance,standard:Boolean(sheet&&Math.abs(length-sheet)<1e-7),turn,
           description:rotations[turn].description,area:width*height,minimumHeight,minimumLength});
       }catch(e){/* A candidate may not form valid cutting geometry at this orientation. */}
     }
@@ -1034,7 +1042,7 @@ const generatorPreview = (() => {
       fit.textContent='Не удалось подобрать заготовку: '+error.message;
       return;
     } finally {
-      progress.hidden=true;button.disabled=!geometry || geometry.diagnosticOnly;
+      progress.hidden=true;button.disabled=!geometry;
       button.textContent='По модели с припуском';
     }
     if(initialSignature!==generatorSignature()){
@@ -1048,7 +1056,7 @@ const generatorPreview = (() => {
       fit.textContent='Ни одно положение модели не помещается в рабочую область с заданным нижним Z и безопасным зазором. Уменьшите масштаб или измените установку.';
       return;
     }
-    const best=choices[0],clearanceBefore=n('gnClear'),bottomBefore=n('gnZ');
+    const best=choices[0],clearanceBefore=n('gnClear'),bottomBefore=n('gnZ'),toleranceBefore=n('gnTolerance');
     modelRotation=best.rotation;
     modelZOffset=0;showOffset();
     geometry=best.geometry;
@@ -1056,8 +1064,10 @@ const generatorPreview = (() => {
     document.getElementById('gnW').value=best.width;
     document.getElementById('gnH').value=best.height;
     document.getElementById('gnZ').value=best.bottom;
+    document.getElementById('gnTolerance').value=best.tolerance.toFixed(2);
     document.getElementById('gnClear').value=best.clearance;
     if(best.bottom!==bottomBefore)document.getElementById('gnZ').classList.add('auto-adjusted');
+    if(best.tolerance!==toleranceBefore)document.getElementById('gnTolerance').classList.add('auto-adjusted');
     if(best.clearance!==clearanceBefore)document.getElementById('gnClear').classList.add('auto-adjusted');
     invalidate();rebuild();
     const fit=document.getElementById('gnFit');
@@ -1068,6 +1078,7 @@ const generatorPreview = (() => {
       '), заготовка '+best.length+' × '+best.width+' × '+best.height+' мм.'+
       (best.height+1e-7<best.minimumHeight?' Вертикальный припуск уменьшен до '+((best.height-(best.minimumHeight-20))/2).toFixed(1)+' мм с каждой стороны.':'')+
       (best.bottom>bottomBefore?' Низ модели поднят с '+bottomBefore+' до '+best.bottom+' мм: проход струны через нижний отход.':'')+
+      (best.tolerance>toleranceBefore?' Допуск STEP увеличен с '+toleranceBefore.toFixed(2)+' до '+best.tolerance.toFixed(2)+' мм; проверьте точность детали.':'')+
       (best.clearance<clearanceBefore?' Зазор над заготовкой уменьшен с '+clearanceBefore+' до '+best.clearance+' мм.':'')+
       (best.geometry.slopedPreview&&(best.width<Math.ceil((best.geometry.size[1]+20-1e-7)/5)*5||best.length<Math.ceil((best.geometry.size[0]+10-1e-7)/5)*5)
         ? ' Припуски уменьшены для поворота: вдоль струны '+((best.length-best.geometry.size[0])/2).toFixed(1)+' мм и поперёк '+((best.width-best.geometry.size[1])/2).toFixed(1)+' мм с каждой стороны.' : '');

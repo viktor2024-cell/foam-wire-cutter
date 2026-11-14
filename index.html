@@ -2449,13 +2449,14 @@ const Gen = (() => {
     catch(e) {
       if (!model.edges.size && !auxiliaryCurves.length) throw e;
       if(!model.wireframe&&!auxiliaryCurves.length)try{
+        if(model.spanAxis()[0]===2)model.forceHorizontalSpan=true;
         const found=model.cachedSlopedEndContour();
         built={outer:found.contour,holes:found.holes,secondaryContours:[],axis:found.axis,planeA:found.planeA,planeB:found.planeB};
         const bevels=model.verticalBevels().filter(b=>found.rootFaces.includes(b.face));
         if(bevels.length!==1)throw new StepError("Неоднозначный скос");
         slopedBevelAngle=bevels[0].angle;slopedPreview=true;
-      }catch(_) { built=null; /* keep diagnostic fallback */ }
-      if(!built)previewError=e.message;
+      }catch(fallback) { built=null; if(/отклонение струны/i.test(fallback.message))previewError=fallback.message; }
+      if(!built && !previewError)previewError=e.message;
     }
     const {outer=[], holes=[], secondaryContours=[], axis=1, wireframe=false} = built || {};
     let guideAnalysis = null, guideKinematics = null;
@@ -2879,8 +2880,8 @@ const Gen = (() => {
       // B-spline parameter directions (which can vote for the wrong axis).
       const upMachine=this.rotation.map(row=>row[2]);
       const upRaw=[upMachine[1],-upMachine[0],upMachine[2]];
-      const upAxis=upRaw.findIndex(v=>Math.abs(v)>.999);
-      const candidates=[0,1,2].filter(axis=>axis!==upAxis).map(axis=>{
+      const originalUp=upRaw.findIndex(v=>Math.abs(v)>.999);
+      const candidates=[0,1,2].map(axis=>{
         const values=planes(axis),lo=values[0],hi=values[values.length-1];
         // STEP trimming vertices, not unbounded face control points:
         // a real end cap has at least three distinct vertices at the end.
@@ -2897,10 +2898,17 @@ const Gen = (() => {
         }).length;
         return {axis,lo,hi,caps,score};
       });
-      const capped=candidates.filter(c=>c.caps.every(faces=>faces.length>0));
-      const ranked=capped.length?capped:candidates;
-      ranked.sort((a,b)=>(a.hi-a.lo)-(b.hi-b.lo)||b.score-a.score);
-      const best=ranked[0];
+      const rank=excluded=>{
+        const eligible=candidates.filter(c=>c.axis!==excluded);
+        const capped=eligible.filter(c=>c.caps.every(faces=>faces.length>0));
+        const ranked=capped.length?capped:eligible;
+        ranked.sort((a,b)=>(a.hi-a.lo)-(b.hi-b.lo)||b.score-a.score);
+        return ranked[0];
+      };
+      // Preserve the original orientation heuristic unless it chooses the
+      // machine's vertical axis, which cannot be a horizontal cutting span.
+      let best=rank(originalUp);
+      if(this.forceHorizontalSpan && best?.axis===2)best=rank(2);
       if(!best||!best.score)throw new StepError("Не определено основное направление резки");
       return [best.axis,best.lo,best.hi];
     }
@@ -3060,7 +3068,7 @@ const Gen = (() => {
       return {A:u=>at(0,u),B:u=>at(1,u),t0:0,t1:1,closed:false,breaks:uniqueBreaks,source:faceId,maxDeviation,capFaces:[capAId,capBId]};
     }
     cachedSlopedEndContour() {
-      const key=this.sourceText+'\0'+JSON.stringify([this.rotation,this.scale,this.tolerance]);
+      const key=this.sourceText+'\0'+JSON.stringify([this.rotation,this.scale,this.tolerance,!!this.forceHorizontalSpan]);
       let contour=slopedContourCache.get(key);
       if(!contour){
         contour=this.slopedEndContour();
@@ -4917,6 +4925,7 @@ const Gen = (() => {
     catch(originalError) {
       try {
         model.maxCheckedDeviation=0;
+        if(model.spanAxis()[0]===2)model.forceHorizontalSpan=true;
         slopedEnd=model.cachedSlopedEndContour();
         shape={outer:slopedEnd.contour,holes:slopedEnd.holes,secondaryContours:[],axis:slopedEnd.axis,planeA:slopedEnd.planeA,planeB:slopedEnd.planeB};
       } catch(e) {
