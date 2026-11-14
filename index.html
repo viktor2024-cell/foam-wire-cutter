@@ -5796,14 +5796,17 @@ const Gen = (() => {
       ...operations.map((op,i)=>({type:'PROFILE',angle:op.angle,ids:op.ids.slice(),
         step:i+1,status:'NOT_CERTIFIED_FOR_F4'}))
     ];
-    const stockRemoval=simulateSequentialStockRemoval(operations,origin,stock,{
+    const stockRemoval=o.simulateStockRemoval===false?null:simulateSequentialStockRemoval(operations,origin,stock,{
       kerf:o.kerf,offset,bottomZ:bottom,voxelSize:o.voxelSize,trimOperation
     });
     return {schema:"foam-wire-f4-diagnostic-motion-v1",operations,origin,
       rotation:o.rotation||identityRotation(),scale,offset,stock:stock.slice(),
       bottomZ:bottom,kerf:Number(o.kerf)||0,
       trimAngle,cutOrder,trimOperation,plannedSequence,stockRemoval,
-      approvedForGcode:false,notes:"Моделирование последовательного удаления материала выполнено на объёмной сетке. Сохранность STEP-детали и безопасные режущие входы ещё не сертифицированы. Не станочный код."};
+      approvedForGcode:false,notes:(stockRemoval?
+        "Моделирование последовательного удаления материала выполнено на объёмной сетке. ":
+        "Объёмная симуляция не выполнялась. ")+
+        "Сохранность STEP-детали и безопасные режущие входы ещё не сертифицированы. Не станочный код."};
   }
   // Operator-directed F4 postprocessor. User-supplied guides and starts
   // control cutting; unresolved stock-surface and lead checks are WARNINGS.
@@ -5820,7 +5823,7 @@ const Gen = (() => {
     const offset=o.offset||[0,0,0];
     if(!Array.isArray(offset)||offset.length!==3||!offset.every(Number.isFinite))
       throw new StepError("Некорректное смещение заготовки F4");
-    const report=manualGuideDiagnostics(text,pairs,{...o,voxelSize:o.voxelSize||6});
+    const report=manualGuideDiagnostics(text,pairs,{...o,simulateStockRemoval:false});
     const cfg={...CONFIG,TravelClearance:o.clearance,FeedRateCut:o.feed,
       WireMinPower:o.minS,WireMaxPower:o.maxS};
     const p=new Program(cfg,!!o.powerComp,1);
@@ -5833,8 +5836,11 @@ const Gen = (() => {
     const eol=EOL, warnings=[
       "F4: геометрия направляющих определена оператором; сохранность STEP-тела не подтверждена",
       "Начало и окончание каждого реза требуют выбранного оператором технологического входа/выхода",
-      "Между B0/B90 поворот стола разрешён только после фактического освобождения струны от материала"
+      "Между B0/B90 поворот стола разрешён только после фактического освобождения струны от материала",
+      "Объёмная симуляция выполняется отдельно кнопкой «Смоделировать удаление материала»"
     ];
+    if(o.trim!==false&&!report.trimOperation)
+      warnings.push("Торцевание B"+report.trimAngle+" пропущено: по выбранной оси нет положительного припуска");
     let program="; *** F4 OPERATOR-DIRECTED G-CODE ***"+eol+
       "; WARNING: UNVERIFIED LEADS AND PRESERVED SOLID - REVIEW BEFORE MACHINING"+eol+
       // The simulator's L is its Y extent, W its X extent.
@@ -5895,6 +5901,10 @@ const Gen = (() => {
           " выходит за физические ходы кареток");
       program+="; *** F4 B"+op.angle+" GUIDES #"+op.ids.join("/#")+
         " START="+(op.startU??0).toFixed(4)+" ***"+eol;
+      for(const warning of op.warnings){
+        warnings.push("B"+op.angle+" #"+op.ids.join("/#")+": "+warning);
+        program+="; WARNING: "+warning+eol;
+      }
       program+=setAngle(op.angle);
       // At the first point the wire is off. Operator-designed guide start
       // determines the actual entry; no implicit lead is invented.
@@ -5904,11 +5914,6 @@ const Gen = (() => {
       for(let i=1;i<op.samples.length;i++){program+=move("cut",op.samples[i]);count++;}
       program+="M05"+eol+
         "; USER MUST CONFIRM CLEARANCE BEFORE FOLLOWING ROTATION / EXIT"+eol;
-      const bad=op.sequentialStock?.entry?.filter(c=>c.occupiedVoxelHits>0)||[];
-      if(bad.length)warnings.push("B"+op.angle+": пересечения входа с оставшимся материалом; "+
-        "проверьте точку и подход");
-      if(op.alignmentNeedsReview)warnings.push("B"+op.angle+": различия парных профилей RMS="+
-        op.correspondence.shapeRms.toFixed(2)+" мм");
     }
     // Do not add an implicit rapid retract: the cutting wire may still be
     // embedded in foam when the final profile finishes.

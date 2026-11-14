@@ -1788,6 +1788,79 @@ test('operator-directed F4 outputs actual G-code with two tower coordinates and 
   /выходит за физические ходы|превышает расстояние между башнями|Превышен лимит/);
 });
 
+function manualGuideFixture() {
+ const profiles=[
+  [[-20,-30,0],[20,-30,10]],
+  [[20,30,10],[-20,30,0]],
+  [[-40,-20,0],[-40,20,10]],
+  [[40,20,10],[40,-20,0]]
+ ];
+ const entities=profiles.flatMap((points,index)=>{
+  const pointId=920001+index*2,curveId=930001+index;
+  return [
+   ...points.map((point,endpoint)=>`#${pointId+endpoint} = CARTESIAN_POINT('',(${point.join(',')}));`),
+   `#${curveId} = B_SPLINE_CURVE_WITH_KNOTS ('guide',1,(#${pointId},#${pointId+1}),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);`
+  ];
+ });
+ return "ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n"+entities.join('\n')+
+  "\n#940001 = GEOMETRIC_CURVE_SET ('guides',(#930001,#930002,#930003,#930004));\nENDSEC;\nEND-ISO-10303-21;";
+}
+
+test('F4 code review is independent of the voxel limit and retains entry and exit warnings',()=>{
+ const step=manualGuideFixture(),pairs=[[930001,930002],[930003,930004]];
+ const config=options({stock:[100,200,70],bottomZ:10,trim:false,voxelSize:1});
+ assert.throws(()=>gen.manualGuideDiagnostics(step,pairs,config),/Превышен лимит объёмной сетки/);
+ const result=gen.buildF4Program(step,pairs,config);
+ assert.equal(result.diagnostic.stockRemoval,null);
+ assert.match(result.diagnostic.notes,/Объёмная симуляция не выполнялась/);
+ for(const operation of result.diagnostic.operations){
+  assert.equal(operation.sequentialStock,undefined);
+  assert.equal(operation.correspondence.reverse,true);
+  const first=operation.samples[0],last=operation.samples.at(-1);
+  assert.equal(first.profileA[2],first.profileB[2]);
+  assert.equal(last.profileA[2],last.profileB[2]);
+  assert.equal(first.left[1],first.right[1]);
+  assert.equal(last.left[1],last.right[1]);
+  for(const kind of ['Вход:','Выход:']){
+   assert.ok(result.warnings.some(warning=>warning.startsWith(operation.operation+' #')&&warning.includes(kind)));
+   assert.ok(result.program.includes('; WARNING: '+operation.warnings.find(warning=>warning.startsWith(kind))));
+  }
+ }
+ assert.throws(()=>gen.buildF4Program(step,pairs,{...config,offset:[0,250,0]}),
+  /поперечный ход|физические ходы|превышает расстояние между башнями/);
+ const diagnostic=gen.manualGuideDiagnostics(step,pairs,{...config,voxelSize:8});
+ assert.ok(diagnostic.stockRemoval.initialVoxels>0);
+ assert.ok(diagnostic.operations.every(operation=>operation.sequentialStock));
+});
+
+test('F4 generated movements follow both cut orders and both trimming angles',()=>{
+ const step=manualGuideFixture(),pairs=[[930001,930002],[930003,930004]];
+ for(const order of ['B0_B90','B90_B0'])for(const trimAngle of [0,90]){
+  const config=options({stock:[100,200,70],bottomZ:10,cutOrder:order,trim:true,trimAngle});
+  const result=gen.buildF4Program(step,pairs,config);
+  const angles=order==='B0_B90'?[0,90]:[90,0];
+  const markers=angles.map(angle=>result.program.indexOf('; *** F4 B'+angle+' GUIDES'));
+  const trimMarker=result.program.indexOf('; *** TRIM B'+trimAngle+' ***');
+  assert.ok(trimMarker>=0&&markers[0]>trimMarker);
+  assert.ok(markers[1]>markers[0]);
+  const moves=sim.parseGcode(result.program).moves.filter(move=>move.type==='G1');
+  assert.equal(moves[0].to.B,trimAngle);
+  const markerLines=markers.map(marker=>result.program.slice(0,marker).split('\n').length-1);
+  for(let index=0;index<angles.length;index++){
+   const cuts=moves.filter(move=>move.line>markerLines[index]&&
+    (index===1||move.line<markerLines[1]));
+   assert.equal(cuts.length,128);
+   assert.ok(cuts.every(move=>move.to.B===angles[index]));
+  }
+ }
+ for(const trimAngle of [0,90]){
+  const result=gen.buildF4Program(step,pairs,options({stock:[61,81,70],bottomZ:10,trim:true,trimAngle}));
+  assert.equal(result.diagnostic.trimOperation,null);
+  assert.ok(result.warnings.some(warning=>warning.includes('Торцевание B'+trimAngle+' пропущено')));
+  assert.doesNotMatch(result.program,/; \*\*\* TRIM B/);
+ }
+});
+
 test('external F2 open-bottom slot is cut as U, never diagonally closed',{skip:!process.env.F2_SLOT_STEP},()=>{
  const step=fs.readFileSync(process.env.F2_SLOT_STEP,'utf8');
  const o=options({stock:[50,325,240],bottomZ:0,clearance:10,trim:false,powerComp:false,cutOrder:'B90_B0',trimAngle:90});

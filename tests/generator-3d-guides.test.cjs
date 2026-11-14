@@ -181,3 +181,21 @@ test('automatic placement button uses actual solver and keeps operator controls'
  assert.match(source,/modelOffset=best\.offset\.slice\(\)/);
  assert.match(source,/showOffset\(\)/);
 });
+
+test('entry check skips volume simulation and reports warnings without prohibiting code review',()=>{
+ const start=source.indexOf("  document.getElementById('gnGuideEntryExit').addEventListener");
+ const end=source.indexOf("  document.getElementById('gnCutOrder').addEventListener",start);
+ const result={textContent:'',className:''};
+ let handler,volumeRequested;
+ const context=vm.createContext({
+  document:{getElementById:()=>({addEventListener:(_event,callback)=>{handler=callback}})},
+  getGuideDiagnostic:simulate=>{volumeRequested=simulate;return {}},
+  guideEntryResult:result,guideEntrySummary:()=> 'Вход: нужна прорезь\nВыход: нужна прорезь'});
+ vm.runInContext(source.slice(start,end),context);
+ handler();
+ assert.equal(volumeRequested,false);
+ assert.match(result.textContent,/Вход: нужна прорезь/);
+ assert.match(result.textContent,/Выход: нужна прорезь/);
+ assert.match(result.textContent,/не блокируют создание G-code/);
+ assert.match(result.textContent,/Запуск станка проверяется отдельно/);
+});
