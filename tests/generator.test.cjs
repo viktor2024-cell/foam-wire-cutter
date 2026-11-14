@@ -361,7 +361,7 @@ test('sloped end contour and final trim are generated from synthetic topology',(
  };
  const base=bevelMove(program),shifted=bevelMove(moved.program),radians=base.angle*Math.PI/180;
  assert.ok(Math.abs((shifted.x-base.x)-(-5*Math.sin(radians)+5*Math.cos(radians)))<.03);
- assert.ok(Math.abs((shifted.z-base.z)-5)<.02);
+ assert.ok(Math.abs(shifted.z-base.z)<.02, 'bevel ends at fixed height above table');
  const reversed=gen.buildProgram(step,'synthetic-bevel.stp',{...o,offset:[-5,5,5],invB:true});
  const trimStart=p=>{
    const block=p.split('*** TRIM BLOCK')[1];
@@ -709,7 +709,7 @@ test('pair checkbox controls Create G-code, not only the stock preview',()=>{
  assert.equal(get('gnTopEntry').checked,false,'side entry clears top entry');
 });
 test('pair G-code explicitly contains two profiles and a two-piece mode header',()=>{
- const r=build(options({pair:true,stock:[50,140,93]}));
+ const r=build(options({pair:true,stock:[50,140,110]}));
  assert.match(r.program,/CUT MODE=PAIR PIECES=2/);
  assert.equal((r.program.match(/PROFILE [12]\/2:/g)||[]).length,2);
  assert.ok(r.program.indexOf('PROFILE 1/2: UPPER')<r.program.indexOf('PROFILE 2/2: LOWER'));
@@ -718,7 +718,7 @@ test('pair G-code explicitly contains two profiles and a two-piece mode header',
  assert.equal((build().program.match(/PROFILE [12]\/2:/g)||[]).length,0);
 });
 test('pair uses one central web and a fixed upper margin',()=>{
- const small=options({pair:true,stock:[50,140,93]});
+ const small=options({pair:true,stock:[50,140,102]});
  const r=build(small);
  assert.match(r.program,/pair: upper reflected over gap/);
  assert.doesNotMatch(r.program,/GAP ENTRY/); // synthetic profile has no holes
@@ -728,7 +728,7 @@ test('pair uses one central web and a fixed upper margin',()=>{
  const p=sim.parseGcode(r.program),machine={...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false};
  const check=sim.analyse(p,machine);
  assert.equal(check.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(check.warns));
- assert.throws(()=>build(options({pair:true,stock:[50,140,92]})),/Пара не помещается.*93\.0/);
+ assert.throws(()=>build(options({pair:true,stock:[50,140,101]})),/Пара не помещается.*102\.0/);
 });
 test('external W1: mirror pair at 65 mm stock height is machinable',{skip:!process.env.W1_STEP},()=>{
  const text=fs.readFileSync(process.env.W1_STEP,'utf8');
@@ -792,7 +792,7 @@ test('auto stock retains the preferred clearance whenever reduced allowances suf
   n:id=>({gnScale:100,gnKerf:1,gnZ:10,gnClear:15,gnLead:5,gnTolerance:.1})[id],setTimeout};
  const choices=await vm.runInNewContext(source.slice(begin,end)+';autoStockOptions()',state);
  assert.ok(choices.length);
- assert.equal(choices[0].height,225);
+ assert.equal(choices[0].height,235);
  assert.equal(choices[0].clearance,15);
 });
 test('F2 auto stock reduces allowances and clearance when the default setup exceeds vertical travel',{skip:!process.env.F2_AUTO_STEP},async()=>{
@@ -869,11 +869,11 @@ test('safe entry adapts to rotation around wire axis on multi-hole profiles',()=
  const stock=[50,165,165];
  for(const file of ['wireframe-two-holes.stp','wireframe-three-holes.stp']){
   const text=fs.readFileSync(path.join(__dirname,'fixtures',file),'utf8');
-  for(const [angle,side] of [[-1,'LEFT'],[0,'BOTTOM'],[1,'RIGHT']]){
+  for(const [angle,side] of [[-1,'LEFT'],[0,'LEFT|RIGHT'],[1,'RIGHT']]){
    const rotation=angle===0?gen.identityRotation():gen.rotateModel(gen.identityRotation(),0,angle);
    const result=gen.buildProgram(text,file,options({stock,bottomZ:10,clearance:20,
      rotation,trim:false}));
-   assert.match(result.program,new RegExp('SAFE ENTRY SIDE: '+side));
+   assert.match(result.program,new RegExp('SAFE ENTRY SIDE: (?:'+side+')'));
    const p=sim.parseGcode(result.program);
    const check=sim.analyse(p,{...p.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
    assert.equal(check.warns.filter(w=>w.level==='crit').length,0,
@@ -927,7 +927,7 @@ test('curve-only STEP reconstructs matched end sections and emits G-code safely'
  assert.equal(built.outer.length,6);
  assert.equal(built.holes.length,1);
  assert.equal(built.holes[0].entry.length,2);
- const opts=options({stock:[50,130,100],bottomZ:10,clearance:20});
+ const opts=options({stock:[50,130,100],bottomZ:15,clearance:20});
  const r=gen.buildProgram(text,'wireframe-profile.stp',opts);
  assert.match(r.program,/STEP GEOMETRY=CURVES_ONLY/);
  assert.match(r.program,/WIREFRAME ROUTE PLANNER: 1 HOLE/);
@@ -955,7 +955,7 @@ test('split coedges yield the complete trimmed rectangular profile',()=>{
 });
 test('no trimming: no B90, stock metadata agrees with simulator X=W Y=L',()=>{
  const r=build();assert.doesNotMatch(r.program,/TRIM BLOCK|Rotation B90|^G00 B90/m);
- assert.match(r.program,/STOCK L=140 W=50 H=60 Z0=10/);
+ assert.match(r.program,/STOCK L=140 W=50 H=60 Z0=0/);
  const angles=[...r.program.matchAll(/^G00 B([\d.-]+)/gm)].map(m=>+m[1]);assert.ok(angles.length);assert.ok(angles.every(a=>a===0));
  // All commanded destination coordinates, including approach, exit and park.
  for(const line of r.program.split('\n').filter(l=>/^G0[01] /.test(l))){
@@ -1008,7 +1008,7 @@ test('right-side entry stays outside stock on rapids and needs no overhead heigh
    'checked trim must not block right entry when no trim allowance exists');
  assert.throws(()=>build({sideEntry:true,pair:true}),/Боковой вход/);
  assert.throws(()=>build({sideEntry:true,stock:[50,480,60]}),/коридора/);
- assert.throws(()=>build({sideEntry:true,stock:[50,140,250],bottomZ:10}),/Верх заготовки/);
+ assert.doesNotThrow(()=>build({sideEntry:true,stock:[50,140,250],bottomZ:10}));
 });
 test('external F1: 400×240×50, right-side path at B0 fits confirmed machine',{skip:!process.env.F1_STEP},()=>{
  const text=fs.readFileSync(process.env.F1_STEP,'utf8');
@@ -1176,9 +1176,9 @@ test('external F2: upper branch first and exit through entry slit',{skip:!proces
 });
 
 test('pair preview uses the same height and gap as generated toolpaths',()=>{
- const geometry=gen.previewGeometry(fixture), placement=gen.previewPair(geometry,100,10,1);
- const result=build(options({pair:true,stock:[50,140,100],bottomZ:10,kerf:1}));
- assert.ok(placement.minimumHeight<=100);
+ const geometry=gen.previewGeometry(fixture), placement=gen.previewPair(geometry,110,10,1);
+ const result=build(options({pair:true,stock:[50,140,110],bottomZ:10,kerf:1}));
+ assert.ok(placement.minimumHeight<=110);
  assert.ok(placement.zUpper>placement.zLower);
  assert.match(result.program,/PROFILE 1\/2: UPPER MIRRORED PIECE/);
  assert.throws(()=>build(options({pair:true,stock:[50,140,placement.minimumHeight-.1],bottomZ:10,kerf:1})),/Пара не помещается/);
@@ -1189,13 +1189,13 @@ test('pair upper body stays 5 mm below stock top for different kerfs and stock h
  for(const kerf of [0.5,1,2]) for(const height of [100,110]) {
   const bottom=10, placement=gen.previewPair(geometry,height,bottom,kerf);
   const upperBodyTop=placement.zUpper-(minZ-geometry.center[2]);
-  assert.ok(Math.abs(bottom+height-upperBodyTop-5)<1e-8);
+  assert.ok(Math.abs(height-upperBodyTop-5)<1e-8);
  }
 });
 
 
 test('pair enters from opposite sides and exits upwards for both pieces',()=>{
- const r=build({pair:true,stock:[50,140,100]});
+ const r=build({pair:true,stock:[50,140,110]});
  const upper=r.program.split('; *** PROFILE 1/2: UPPER MIRRORED PIECE ***')[1].split('; *** PROFILE 2/2: LOWER ORIGINAL PIECE ***')[0];
  const lower=r.program.split('; *** PROFILE 2/2: LOWER ORIGINAL PIECE ***')[1];
  checkProfileOverlap(upper,1,false);checkProfileOverlap(lower,1,false);
@@ -1336,7 +1336,7 @@ test('F1-1 automatic positioning finds feasible shift on real STEP', {skip:!proc
 });
 
 test('automatic placement rejects a stock setup without the vertical travel margin',()=>{
- const opts=options({stock:[80,160,240],bottomZ:0,clearance:10,trim:false,
+ const opts=options({stock:[80,160,245],bottomZ:0,clearance:10,trim:false,
    rotation:gen.identityRotation(),powerComp:false});
  assert.throws(()=>gen.autoPlace(fixture,'synthetic.stp',opts),
    /Не найдено смещение|фиксированный ход выходит за пределы станка/);
@@ -1357,8 +1357,8 @@ test('model height offset must fit the stock and unsupported pair modes are reje
 
 test('stock and model translate together inside machine envelope',()=>{
  const base=build({stock:[80,160,100],bottomZ:10,trim:false}), shifted=build({stock:[80,160,100],bottomZ:10,trim:false,offset:[0,5,5]});
- assert.match(shifted.program,/STOCK\+MODEL OFFSET X=0 Y=5 Z=5 mm/);
- assert.match(shifted.program,/OX=0 OY=5 OZ=5/);
+ assert.match(shifted.program,/STOCK XY \/ MODEL Z OFFSET X=0 Y=5 Z=5 mm/);
+ assert.match(shifted.program,/OX=0 OY=5 OZ=0/);
  const contour=r=>sim.parseGcode(r.program.split('corner entry, upper first')[1]).moves.filter(m=>m.type==='G1').slice(0,12);
  const a=contour(base),b=contour(shifted);assert.equal(a.length,b.length);
  for(let i=0;i<a.length;i++)for(const axis of ['X','Y','Z','A'])assert.ok(Math.abs(b[i].to[axis]-a[i].to[axis]-5)<.03,axis);
@@ -1740,12 +1740,12 @@ test('operator-directed F4 outputs actual G-code with two tower coordinates and 
  assert.ok(p.points>0);
  // Stock and guide profiles are translated in the same machine frame.
  const moved=gen.buildF4Program(step,[[910005,910006]],{...base,offset:[0,7,3]});
- assert.match(moved.program,/STOCK L=200 W=100 H=70 Z0=10 OX=0 OY=7 OZ=3/);
+ assert.match(moved.program,/STOCK L=200 W=100 H=70 Z0=0 OX=0 OY=7 OZ=0/);
  const parsedStock=sim.parseGcode(moved.program).stock;
  assert.equal(parsedStock.W,base.stock[0]);
  assert.equal(parsedStock.L,base.stock[1]);
  assert.equal(parsedStock.OY,7);
- assert.equal(parsedStock.OZ,3);
+ assert.equal(parsedStock.OZ,0);
  const getCut=r=>sim.parseGcode(r.program).moves.find(m=>m.type==='G1');
  const before=getCut(p),after=getCut(moved);
  assert.ok(before && after);
@@ -1753,7 +1753,7 @@ test('operator-directed F4 outputs actual G-code with two tower coordinates and 
    assert.ok(Math.abs(after.to[axis]-before.to[axis]-delta)<.03,
      axis+' failed to follow stock translation');
  assert.throws(()=>gen.buildF4Program(step,[[910005,910006]],{...base,offset:[0,0,-20]}),
-   /вертикальный ход/);
+   /не помещается по высоте/);
  assert.throws(()=>gen.buildF4Program(step,[[910005,910006]],{...base,offset:[0,150,0]}),
    /поперечный ход/);
  // Trimming coordinates must follow the same offset at either table angle.
@@ -1768,7 +1768,7 @@ test('operator-directed F4 outputs actual G-code with two tower coordinates and 
    const first=r=>sim.parseGcode(r.program).moves.find(m=>m.type==='G1');
    const a=first(t0),b=first(t1);
    assert.ok(a&&b,'expected a trimming cut at B'+angle);
-   for(const [axis,delta] of [['X',dy],['Y',3],['Z',dy],['A',3]])
+   for(const [axis,delta] of [['X',dy],['Y',0],['Z',dy],['A',0]])
      assert.ok(Math.abs(b.to[axis]-a.to[axis]-delta)<.03,
        'trim B'+angle+' axis '+axis);
  }
@@ -2123,7 +2123,7 @@ test('frame marks outline the part with four 3 mm slits before trimming and cutt
  for(let i=0;i<4;i++){
   assert.ok(Math.abs(downs[i].Y-downs[i].A)<1e-9&&Math.abs(downs[i].X-downs[i].Z)<1e-9,'slit is a plain plunge');
   assert.ok(Math.abs(ups[i].Y-downs[i].Y-2-3)<.01,'3 mm below the stock top (Z=60), returns 2 mm above it');
-  assert.ok(Math.abs(downs[i].Y-57)<.01);
+  assert.ok(Math.abs(downs[i].Y-47)<.01);
  }
  // chord edges at B0, span edges at B90: part 212.924 x 305 with kerf/2 outside on each side
  assert.deepEqual(downs.map(d=>Math.abs(d.X)).map(v=>+v.toFixed(2)),[106.96,106.96,153,153]);
@@ -2137,7 +2137,7 @@ test('frame marks outline the part with four 3 mm slits before trimming and cutt
  const pairDowns=pair.block.filter(l=>/^G01 X/.test(l)).map(xyza).filter((_,i)=>i%2===0);
  assert.match(pair.block[0],/both pieces/);
  assert.deepEqual(pairDowns.map(d=>Math.abs(d.X)).map(v=>+v.toFixed(2)),[106.96,106.96,153,153]);
- assert.ok(Math.abs(pairDowns[0].Y-(10+100-3))<.01,'depth counted from the top of the taller stock');
+ assert.ok(Math.abs(pairDowns[0].Y-(100-3))<.01,'depth counted from the top of the taller stock');
 });
 test('frame marks refuse a stock that cannot turn to B90',()=>{
  const stab=fs.readFileSync(path.join(__dirname,'fixtures/stab-groove.stp'),'latin1');
@@ -2150,8 +2150,8 @@ test('frame marks use an overhead position even when side-entry parking is below
  const report=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(report.warns.filter(warning=>warning.level==='crit').length,0,JSON.stringify(report.warns));
  const block=result.program.split('FRAME MARKS')[1];
- assert.match(block,/G00 X[^\n]*Y245\.00[^\n]*A245\.00/);
- assert.throws(()=>gen.buildProgram(fixture,'split-profile.stp',{...config,clearance:11}),/Разметка габарита/);
+ assert.match(block,/G00 X[^\n]*Y235\.00[^\n]*A235\.00/);
+ assert.throws(()=>gen.buildProgram(fixture,'split-profile.stp',{...config,clearance:21}),/Разметка габарита/);
 });
 
 test('stab pair groove leads descend at both corners and clear both retained STEP profiles',()=>{
@@ -2174,7 +2174,7 @@ test('stab pair groove leads descend at both corners and clear both retained STE
   return Math.min(pointDistance(start,edgeA,edgeB),pointDistance(end,edgeA,edgeB),
    pointDistance(edgeA,start,end),pointDistance(edgeB,start,end));
  };
- for(const height of [52,70]){
+ for(const height of [65,70]){
   const config=options({stock:[305,220,height],bottomZ:10,clearance:15,kerf:1,
    pair:true,topEntry:false,trim:false,powerComp:false});
   const result=gen.buildProgram(step,'stab.stp',config);

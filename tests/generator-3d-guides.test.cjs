@@ -163,13 +163,15 @@ test('native 3D start controls and normalized hit coordinate feed diagnostic mot
  assert.match(source,/guideStarts:\{\.\.\.guideStarts\}/);
 });
 
-test('preview stock, edge outline and local axes share the model displacement',()=>{
+test('preview stock and axes stay on table when model moves vertically',()=>{
  const foam=source.match(/foam\.position\.set\(([^;]+)\);/);
  assert.ok(foam,'foam must use an explicit translated position');
- for(const axis of ['modelOffset[0]','modelOffset[1]','modelOffset[2]'])
+ for(const axis of ['modelOffset[0]','modelOffset[1]'])
    assert.ok(foam[1].includes(axis),axis+' missing in stock position');
+ assert.ok(!foam[1].includes('modelOffset[2]'));
+ assert.match(foam[1],/stock\[2\]\/2/);
  assert.match(source,/edge\.position\.copy\(foam\.position\)/);
- assert.match(source,/axes\.position\.set\(modelOffset\[0\]-stock\[0\]\/2,modelOffset\[1\]-stock\[1\]\/2,bottom\+modelOffset\[2\]\)/);
+ assert.match(source,/axes\.position\.set\(modelOffset\[0\]-stock\[0\]\/2,modelOffset\[1\]-stock\[1\]\/2,0\)/);
 });
 
 test('automatic placement button uses actual solver and keeps operator controls',()=>{

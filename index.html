@@ -264,7 +264,7 @@ button.heat-unknown { background: var(--warn); border-color: var(--warn); color:
       <label>Масштаб, % <input id="gnScale" type="number" min="0.01" step="1" value="100" style="width:85px"></label>
     </div>
     <div class="row" id="gnMove" aria-label="Перемещение модели">
-      <span>Переместить заготовку и модель, шаг 5 мм:</span>
+      <span>Переместить: X/Y — заготовку и модель, Z — модель; шаг 5 мм:</span>
       <button data-axis="0" data-step="-1" aria-label="Переместить модель по X на минус 5 мм"><span style="color:#ff0000">X</span> −</button>
       <button data-axis="0" data-step="1" aria-label="Переместить модель по X на плюс 5 мм"><span style="color:#ff0000">X</span> +</button>
       <button data-axis="1" data-step="-1" aria-label="Переместить модель по Y на минус 5 мм"><span style="color:#00ff00">Y</span> −</button>
@@ -292,7 +292,7 @@ button.heat-unknown { background: var(--warn); border-color: var(--warn); color:
       <label>Вдоль струны<input id="gnL" type="number" min="0" step="10" value="340"></label>
       <label>Поперёк струны<input id="gnW" type="number" min="0" step="10" value="230"></label>
       <label>Высота<input id="gnH" type="number" min="0" step="10" value="50"></label>
-      <label>Низ Z<input id="gnZ" type="number" step="1" value="10"></label>
+      <label>Низ модели Z<input id="gnZ" type="number" min="0" step="1" value="10"></label>
     </div>
     <div class="note">Размеры заданы при столе 0°. Для листа 340×230×50 мм на ребре введите 50, 340, 230 мм соответственно. При отключении торцевания профиль режется при столе 0°.</div>
   </section>
@@ -311,6 +311,7 @@ button.heat-unknown { background: var(--warn); border-color: var(--warn); color:
       <label>Скорость мм/с<input id="gnFeed" type="number" step="0.5" value="7"></label>
       <label>Мощность S<input id="gnMinS" type="number" step="10" value="500"></label>
       <label>Макс. S<input id="gnMaxS" type="number" step="10" value="1000"></label>
+      <label>Высота торцевания от стола, мм<input id="gnTrimZ" type="number" min="0" step="0.5" value="1"></label>
       <label>Толщина реза<input id="gnKerf" type="number" step="0.1" value="1"></label>
       <label>Допуск отклонения от STEP, мм<input id="gnTolerance" type="number" min="0" step="0.01" value="0.1"></label>
     </div>
@@ -2506,7 +2507,7 @@ const Gen = (() => {
     const closedShell=built&&outer.length===1&&outer[0][0].closed&&!holes.length
       ? {rail:rails[0],capAxis:axis===0?1:axis===1?0:2} : null;
     return {rails,edgeLines,openSlotCount:slotFaceIds.size?secondaryContours.filter(op=>op.kind==='openBottomSlot').length:0,
-      diagnosticShell,diagnosticFaces,closedShell,bevelCandidates,slopedPreview,slopedBevelAngle,outerCount:outer.length,previewError,diagnosticOnly:!!previewError,
+      diagnosticShell,diagnosticFaces,closedShell,bevelCandidates,slopedPreview,slopedBevelAngle,outerCount:outer.length,holesCount:holes.length,previewError,diagnosticOnly:!!previewError,
       axis, sampled, wireframe:!!wireframe, auxiliaryCurves, guideAnalysis,
       guideKinematics, secondaryCount:secondaryContours.length,
       center:low.map((v,k)=>(v+high[k])/2),
@@ -2516,10 +2517,9 @@ const Gen = (() => {
   function pairPlacement(zsA, zsB, zc, span, stockHeight, bottomZ, kerf) {
     const low = Math.min(...zsA,...zsB)-zc-kerf/2;
     const topA = Math.max(...zsA)-zc+kerf/2, topB = Math.max(...zsB)-zc+kerf/2;
-    const outerMargin=kerf/2, upperMargin=5, minGap=5+kerf;
-    const minimumHeight=Math.max(2*(Math.max(...zsA,...zsB)-Math.min(...zsA,...zsB))+minGap,
-      -2*low+topA+topB+minGap+outerMargin+upperMargin-kerf/2);
-    const zLower=bottomZ+outerMargin-low,zUpper=bottomZ+stockHeight-upperMargin+low+kerf/2;
+    const upperMargin=5, minGap=5;
+    const minimumHeight=bottomZ+upperMargin-2*low+topA+topB+minGap;
+    const zLower=bottomZ-low-kerf/2,zUpper=stockHeight-upperMargin+low+kerf/2;
     const gapMid=(zLower+zUpper)/2, tilt=(topA-topB)/2*CONFIG.FieldWidth/span;
     return {minimumHeight,zLower,zUpper,gap:[gapMid-tilt,gapMid+tilt], gapAfterKerf:zUpper-zLower-topA-topB-kerf};
   }
@@ -4235,7 +4235,6 @@ const Gen = (() => {
                                       stockWidth, leadMargin, bottomZ, side) {
     if(holes.length<1 || holes.some(h=>!h.entry?.length))
       throw new StepError("Автомаршрут: отверстия должны иметь отдельные входные щели STEP");
-    if(bottomZ<2)throw new StepError("Автомаршрут: низ заготовки должен быть не ниже Z=2");
     if(holes.length>16)throw new StepError("Автомаршрут: больше 16 отверстий; требуется разбиение на операции");
     const underZ=bottomZ-1, planeA=holes[0][0][0].A(0)[1],planeB=holes[0][0][0].B(0)[1];
     const contours=holes.map((hole,i)=>{
@@ -4320,6 +4319,27 @@ const Gen = (() => {
     const rows=Math.min(20,Math.max(2,Math.ceil((topZ-baseZ)/gridSpacing)));
     for(let j=0;j<=rows;j++)for(let i=0;i<=columns;i++)
       addNode(minX-10+(maxX-minX+20)*i/columns,baseZ+(topZ-baseZ)*j/rows);
+    // With the stock on the table, reach a bottom-opening cavity through
+    // sacrificial foam above the table rather than below the stock. Visibility
+    // and kerf checks still apply to every connection and to the entry line.
+    if(bottomZ<2){
+      const floor=Math.max(1,kerf/2+.5);
+      for(let i=0;i<=columns;i++){
+        const x=minX-10+(maxX-minX+20)*i/columns;
+        const za=floor-layout.machine([x,planeA,0])[2];
+        const zb=floor-layout.machine([x+delta[0],planeB,0])[2];
+        const pair=[[x,planeA,za],[x+delta[0],planeB,zb]];
+        if(freePoint(pair)&&!nodes.some(node=>metric(node.pair,pair)<3))nodes.push({pair,role:'free'});
+      }
+      // Connect that low corridor to the ordinary cavity grid; the hole
+      // roots may lie much higher than the open lower end of the profile.
+      for(let i=0;i<=6;i++){
+        const x=minX-10+(maxX-minX+20)*i/6;
+        const low=floor-layout.machine([x,planeA,0])[2];
+        const count=Math.max(0,Math.min(16,Math.ceil((baseZ-low)/7)));
+        for(let j=1;j<count;j++)addNode(x,low+(baseZ-low)*j/count);
+      }
+    }
     if(nodes.length>280)throw new StepError("Автомаршрут: слишком сложная карта доступности");
     const adjacency=nodes.map(()=>[]);
     for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){
@@ -4382,7 +4402,7 @@ const Gen = (() => {
     }
     entryCandidates.sort((a,b)=>a.score-b.score);
     if(!entryCandidates.length)
-      throw new StepError("Автомаршрут: нет безопасного входа сверху, снизу или с боков через область отхода; резка заблокирована");
+      throw new StepError("Автомаршрут: нет безопасного входа сверху или с боков через область отхода; проверьте установку и траекторию");
     const entry=entryCandidates[0],seed=entry.i;
     const routes=[seed,...Array.from({length:holes.length},(_,i)=>i)].map(shortest);
     const indexOf=k=>k===holes.length?0:k+1;
@@ -4915,7 +4935,7 @@ const Gen = (() => {
     if(!Number.isFinite(modelZOffset))throw new StepError("Недопустимое положение модели по высоте");
     if(Math.abs(modelZOffset)>1e-9 && (o.pair || o.mirror || model.wireframe || secondaryContours.length || (holes.length&&!slopedEnd)))
       throw new StepError("Размещение модели выше центра доступно только для одиночной детали без неподдерживаемых отверстий или дополнительных резов");
-    if(Math.abs(modelZOffset)+(part.z1-part.z0)/2>stockHeight/2+1e-6)
+    if(!cfg.PlacementProbe && !o.pair && (o.bottomZ+modelZOffset+(o.offset?.[2]||0)<-1e-6 || o.bottomZ+modelZOffset+(o.offset?.[2]||0)+(part.z1-part.z0)>stockHeight+1e-6))
       throw new StepError("Модель не помещается по высоте внутри заготовки");
     if (part.x1 - part.x0 > stockWidth || part.z1 - part.z0 > stockHeight || part.span > stockLength) {
       throw new Error("Деталь " + part.span.toFixed(1) + " x " + (part.x1 - part.x0).toFixed(1) + " x " + (part.z1 - part.z0).toFixed(1) +
@@ -4932,7 +4952,7 @@ const Gen = (() => {
       throw new StepError("Смещение пока доступно для одиночной детали без дополнительных направлений и STEP только с кривыми");
     // Model and stock now translate together: fit is independent of offset.
     // Check the translated stock against the physical machine separately.
-    const stockBottom=o.bottomZ+offset[2];
+    const stockBottom=0;
     const requiredStockTop=stockBottom+stockHeight+(o.sideEntry?0:o.clearance);
     if(!cfg.PlacementProbe && (stockBottom<0||requiredStockTop>cfg.VerticalTravel||
        stockLength/2+Math.abs(offset[0])>cfg.FieldWidth/2||
@@ -4955,11 +4975,15 @@ const Gen = (() => {
     // --- Торцевание до размера детали по размаху (стол 0: размах вдоль струны)
     // B90 cuts the two ends along stockLength; B0 trims the lateral
     // stockWidth sides. These are distinct geometric operations.
+    const trimZ=o.trim===false?0:(o.trimZ===undefined?1:o.trimZ);
+    if(!Number.isFinite(trimZ)||trimZ<0||trimZ>=stockHeight)throw new StepError("Высота торцевания должна быть не ниже стола и ниже верха заготовки");
+    if(o.trim!==false && trimZ===0)warnings.push("Торцевание на Z=0 достигает поверхности стола: проверьте установку перед запуском");
+    else if(o.trim!==false && trimZ<kerf/2)warnings.push("Торцевание ближе к столу, чем половина толщины реза: проверьте зазор струны и стола");
     const trimDimension=trimAngle===90?stockLength:stockWidth;
     const finishedDimension=trimAngle===90?part.span:part.x1-part.x0;
     const trim = { Length: trimDimension, Width: trimAngle===90?stockWidth:stockLength,
-      Height: stockHeight, TrimEnds: (trimDimension-finishedDimension)/2-kerf/2,
-      BottomZ:o.bottomZ+offset[2], RetractOffset:o.retract, Angle:trimAngle,
+      Height: stockHeight-trimZ, TrimEnds: (trimDimension-finishedDimension)/2-kerf/2,
+      BottomZ:trimZ, RetractOffset:o.retract, Angle:trimAngle,
       CenterOffset:trimAngle===90?(o.invB?-offset[0]:offset[0]):offset[1] };
     const hasTrim = o.trim !== false && trim.TrimEnds > 0;
     // The selected angle swaps which stock dimension lies along the wire.
@@ -4994,17 +5018,17 @@ const Gen = (() => {
     if(model.tolerance>.1) warnings.push("Допуск поверхности "+model.tolerance.toFixed(2)+" мм; выборочная оценка до "+model.maxCheckedDeviation.toFixed(2)+" мм до компенсации реза");
     let program = "; FM_step2gcode: " + fileName + (o.pair ? " (pair: upper reflected over gap, turned 180)" : o.mirror ? " (mirror)" : "") + EOL;
     program += "; STEP TOLERANCE=" + model.tolerance.toFixed(3) + " mm; sampled upper estimate=" + model.maxCheckedDeviation.toFixed(3) + " mm" + EOL;
-    program += "; STOCK+MODEL OFFSET X="+fmtG(offset[0])+" Y="+fmtG(offset[1])+" Z="+fmtG(offset[2])+" mm"+EOL;
-    program += "; MODEL Z OFFSET FROM STOCK CENTER="+fmtG(modelZOffset)+" mm"+EOL;
+    program += "; STOCK XY / MODEL Z OFFSET X="+fmtG(offset[0])+" Y="+fmtG(offset[1])+" Z="+fmtG(offset[2])+" mm"+EOL;
+    program += "; MODEL BOTTOM Z="+fmtG(o.bottomZ+offset[2]+modelZOffset)+" mm"+EOL;
     program += "; CUT MODE=" + (o.pair ? "PAIR PIECES=2" : o.mirror ? "MIRROR PIECES=1" : "SINGLE PIECES=1") + EOL;
     program += "; TRIM B="+trimAngle+" ENABLED="+(hasTrim?1:0)+"; ORDER="+cutOrder+EOL;
     if(model.wireframe)program+="; STEP GEOMETRY=CURVES_ONLY; reconstructed ruled interpolation, original surfaces unavailable"+EOL;
-    program += "; STOCK L=" + fmtG(stockWidth) + " W=" + fmtG(stockLength) + " H=" + fmtG(stockHeight) + " Z0=" + fmtG(o.bottomZ) +
-      " OX="+fmtG(offset[0])+" OY="+fmtG(offset[1])+" OZ="+fmtG(offset[2])+EOL;
+    program += "; STOCK L=" + fmtG(stockWidth) + " W=" + fmtG(stockLength) + " H=" + fmtG(stockHeight) + " Z0=0" +
+      " OX="+fmtG(offset[0])+" OY="+fmtG(offset[1])+" OZ=0"+EOL;
     program += "; CUT F=" + fmtG(cfg.FeedRateCut) + " mm/s S=" + fmtG(cfg.WireMinPower) + ".." + fmtG(cfg.WireMaxPower) + " kerf=" + fmtG(kerf) + EOL;
     const prog = new Program(cfg, o.powerComp, 5);
     program += startBlock(cfg, prog);
-    const allTowers = [], safe = sideEntry ? cfg.ParkZ : o.bottomZ + offset[2] + stockHeight + cfg.TravelClearance;
+    const allTowers = [], safe = sideEntry ? cfg.ParkZ : stockHeight + cfg.TravelClearance;
     let profileTowers = null;
     // - Сначала отводим каретки в безопасную позицию; торцевание выполняется при столе 90°
     program += ";" + EOL + "; - Safe position before cutting" + EOL + prog.travel("move", cfg.ParkX, safe, cfg.ParkX, safe);
@@ -5015,7 +5039,7 @@ const Gen = (() => {
         throw new StepError("Разметка габарита B90: ширина заготовки " + stockWidth.toFixed(1) + " мм вдоль струны не помещается между башнями");
       if (!cfg.PlacementProbe && cfg.ParkX - cornerRadius < RadialMargin)
         throw new StepError("Разметка габарита: нет безопасного места для поворота заготовки на B90; отключите разметку или уменьшите заготовку");
-      const markTop=o.bottomZ+offset[2]+stockHeight;
+      const markTop=stockHeight;
       const markSafe=markTop+Math.max(2,o.clearance);
       if(stockHeight<3 || markSafe>cfg.VerticalTravel)
         throw new StepError("Разметка габарита: нужны толщина заготовки не менее 3 мм и свободный ход над ней; отключите разметку или измените размеры");
@@ -5041,9 +5065,9 @@ const Gen = (() => {
 
           // This cut enters via the lower sacrificial stock and follows the
           // two side walls with a roof crossing. It never closes diagonally.
-          const zMid=o.bottomZ+stockHeight/2,
+          const zMid=o.bottomZ+(part.z1-part.z0)/2+offset[2]+modelZOffset,
             zPartBottom=part.z0-zc+zMid,
-            zFloor=Math.max(o.bottomZ+1,zPartBottom-Math.max(2,kerf+1)),
+            zFloor=Math.max(1,zPartBottom-Math.max(2,kerf+1)),
             zRoof=op.zRoof-zc+zMid-kerf/2,
             yLo=op.yLo-yc+kerf/2,yHi=op.yHi-yc-kerf/2,
             outside=stockLength/2+o.leadMargin;
@@ -5080,7 +5104,7 @@ const Gen = (() => {
         throw new StepError("При повороте для второго реза заготовка задевает парковочный коридор (радиус "+radius90.toFixed(1)+" мм)");
       if(stockWidth>cfg.FieldWidth-2)
         throw new StepError("Ширина заготовки "+stockWidth+" мм не помещается между башнями после поворота стола");
-      const zMid=o.bottomZ+stockHeight/2+offset[2];
+      const zMid=o.bottomZ+(part.z1-part.z0)/2+offset[2]+modelZOffset;
       for(const op of secondaryContours) {
         if(op.kind==='openBottomSlot')continue; // final pass, after the outer profile
         const [dx,dy]=op.dir;
@@ -5105,7 +5129,7 @@ const Gen = (() => {
             throw new StepError("Грань #"+face.source+": образующая не совпадает с направлением струны при B="+angle.toFixed(2));
         }
         const layout={machine:p=>[p[1],p[0],p[2]-zc+zMid],
-          towers:makeLayout(-1,1,1,zMid).towers};
+          towers:makeLayout(-1,1,1,o.bottomZ+(part.z1-part.z0)/2).towers};
         const commandAngle=o.invB?-angle:angle;
         if(!cfg.PlacementProbe&&stockAlongWireAtAngle(stockLength,stockWidth,offset,angle)>(cfg.FieldWidth-2)/2+1e-7)
           throw new StepError("При дополнительном резе заготовка не помещается между башнями");
@@ -5120,7 +5144,7 @@ const Gen = (() => {
     const addHole = (hole, layout, gap, fromBelow) => {
       const [block,towers] = model.wireframe && hole.entry
         ? wireframeSlitHoleBlock(safe,prog,hole,layout,axis,kerf,warnings,sag,maxStep,
-                                 stockWidth,o.leadMargin,o.bottomZ,o.side)
+                                 stockWidth,o.leadMargin,stockBottom,o.side)
         : sideEntry ? rightSideHoleBlock(prog,hole,layout,axis,kerf,warnings,sag,maxStep,stockWidth,o.leadMargin,offset[1])
           : holeBlock(safe,prog,hole,layout,axis,kerf,warnings,sag,maxStep,gap,fromBelow);
       program += block; allTowers.push(...towers);
@@ -5152,11 +5176,11 @@ const Gen = (() => {
       program += ";" + EOL + "; *** PROFILE 2/2: LOWER ORIGINAL PIECE ***" + EOL;
       addProfile(lower, o.side);
     } else {
-      const layout = makeLayout(o.mirror ? 1 : -1, 1, 1, o.bottomZ + stockHeight / 2);   // - зеркало: корень и конец меняются башнями
+      const layout = makeLayout(o.mirror ? 1 : -1, 1, 1, o.bottomZ + (part.z1-part.z0) / 2);   // - зеркало: корень и конец меняются башнями
       if (model.wireframe && holes.length>=1) {
         const [block,towers]=wireframeRoutePlannerBlock(
           safe,prog,holes,outer,layout,axis,kerf,warnings,sag,maxStep,
-          stockWidth,o.leadMargin,o.bottomZ,o.side);
+          stockWidth,o.leadMargin,stockBottom,o.side);
         program+=block;allTowers.push(...towers);
       } else for (const hole of holes) addHole(hole, layout, null, false);
       if(sideEntry&&holes.length)warnings.push("Отверстие: правая технологическая прорезь от кромки заготовки через сохраняемую деталь; возврат по той же прорези. Проверьте положение в 3D.");
@@ -5218,8 +5242,8 @@ const Gen = (() => {
       program+=";"+EOL+"; *** FINAL BEVEL: STEP face #"+bevel.face+" B="+fix2(commandedAngle)+" ***"+EOL;
       program+=prog.travel("move",cfg.ParkX,safe,cfg.ParkX,safe)+rotate(cfg,commandedAngle);
       program+=prog.travel("move",cut,safe,cut,safe);
-      program+=prog.travel("cut",cut,stockBottom,cut,stockBottom);
-      program+=prog.travel("cut",exit,stockBottom,exit,stockBottom);
+      program+=prog.travel("cut",cut,1,cut,1);
+      program+=prog.travel("cut",exit,1,exit,1);
       program+=prog.travel("cut",exit,safe,exit,safe);
       program+=prog.travel("move",cfg.ParkX,safe,cfg.ParkX,safe)+rotate(cfg,0);
     }
@@ -5255,13 +5279,13 @@ const Gen = (() => {
     if(o.manualGuidePairs?.length)
       throw new StepError("Авторазмещение ручных пар F4 пока не поддерживается");
     const step=1,base={...o,offset:[0,0,0]};
-    const probes=[];let bevelPlacement=null;
+    const probes=[];let bevelPlacement=null,probePart=null;
     for(let k=0;k<4;k++){
       const offset=k===0?[0,0,0]:[0,0,0].map((v,i)=>i===k-1?step:v);
       placementProbeDepth++;
       try{
         const result=buildProgram(text,fileName,{...base,offset});
-        probes.push(result.probeTargets);if(k===0)bevelPlacement=result.bevelPlacement;
+        probes.push(result.probeTargets);if(k===0){bevelPlacement=result.bevelPlacement;probePart=result.part;}
       } finally{placementProbeDepth--;}
     }
     const n=probes[0].length;
@@ -5281,7 +5305,7 @@ const Gen = (() => {
       for(let k=0;k<4;k++){
         const value=probes[0][i][k];
         const a=[1,2,3].map(j=>(probes[j][i][k]-value)/step);
-        const margin=k%2 ? verticalReserve : reserve;
+        const margin=k%2 ? (Math.abs(a[2])<1e-9?Math.min(verticalReserve,Math.max(0,value),Math.max(0,hi[k]-value)):verticalReserve) : reserve;
         add(a,hi[k]-margin-value);
         add(a.map(v=>-v),value-lo[k]-margin);
       }
@@ -5291,12 +5315,10 @@ const Gen = (() => {
     const yLimit=CONFIG.HorizontalTravel/2-W/2;
     add([1,0,0],xLimit); add([-1,0,0],xLimit);
     add([0,1,0],yLimit); add([0,-1,0],yLimit);
-    add([0,0,1],CONFIG.VerticalTravel-(bottom+H+clear));
-    add([0,0,-1],bottom);
-    if(o.grounded){
-      add([0,0,1],CONFIG.VerticalTravel-bottom-H-clear);
-      add([0,0,-1],0);
-    }
+    if(H+clear>CONFIG.VerticalTravel)throw new StepError("Заготовка с зазором не помещается по высоте");
+    const modelShift=o.modelZOffset||0, modelHeight=probePart.z1-probePart.z0;
+    add([0,0,1],H-bottom-modelShift-modelHeight);
+    add([0,0,-1],bottom+modelShift);
     if(o.keepHeight){add([0,0,1],0);add([0,0,-1],0);}
     if(o.preferNegativeX)add([1,0,0],-5);
     // When the table actually rotates to B90, X and Y stock spans exchange.
@@ -5355,7 +5377,7 @@ const Gen = (() => {
     }
     xy.sort((first,second)=>first.distance-second.distance);
     for(const candidate of xy){
-      let minZ=o.grounded||o.keepHeight?0:-bottom,maxZ=o.keepHeight?0:CONFIG.VerticalTravel-(bottom+H+clear),feasible=true;
+      let minZ=o.keepHeight?0:-bottom-modelShift,maxZ=o.keepHeight?0:H-bottom-modelShift-modelHeight,feasible=true;
       for(const {a,b} of constraints){
         const remaining=b-a[0]*candidate.x-a[1]*candidate.y;
         if(Math.abs(a[2])<1e-12){
@@ -5383,12 +5405,11 @@ const Gen = (() => {
   }
   function groundPlacement(text,fileName,o,placement) {
     const lift=placement.offset[2];
-    if(lift < 0) throw new StepError("Для установки заготовки на стол требуется другое размещение без отрицательного подъёма");
-    const stock=[o.stock[0],o.stock[1],o.stock[2]+lift];
-    const offset=[placement.offset[0],placement.offset[1],0];
-    const modelZOffset=(o.modelZOffset||0)+lift/2;
+    const stock=o.stock.slice();
+    const offset=placement.offset.slice();
+    const modelZOffset=o.modelZOffset||0;
     if(!Number.isFinite(modelZOffset)||!Number.isFinite(stock[2])||o.bottomZ<0||
-       o.bottomZ+stock[2]+(o.sideEntry?0:o.clearance)>CONFIG.VerticalTravel)
+       stock[2]+(o.sideEntry?0:o.clearance)>CONFIG.VerticalTravel)
       throw new StepError("Скорректированная заготовка выходит за пределы станка");
     return {stock,offset,modelZOffset,lift,rotation:placement.rotation,displacement:placement.displacement};
   }
@@ -5531,7 +5552,7 @@ const Gen = (() => {
       throw new StepError("Некорректные размеры заготовки для объёмного моделирования");
     const nx=sizes.map(n=>Math.ceil(n/voxel)), total=nx.reduce((a,b)=>a*b,1);
     if(total>400000)throw new StepError("Превышен лимит объёмной сетки 400000 ячеек: увеличьте шаг");
-    const lo=[origin[0]-sizes[0]/2,origin[1]-sizes[1]/2,origin[2]-sizes[2]/2];
+    const lo=[origin[0]-sizes[0]/2,origin[1]-sizes[1]/2,origin[2]-(o.modelHeight??stock[2])/2-(Number(o.bottomZ)||0)-offset[2]];
     const cell=sizes.map((v,k)=>v/nx[k]), [sx,sy,sz]=nx;
     const occupancy=new Uint8Array(total).fill(1);
     const index=(x,y,z)=>(z*sy+y)*sx+x;
@@ -5547,7 +5568,7 @@ const Gen = (() => {
         const half=(trimOp.finishedDimension+(Number(o.kerf)||0))/2;
         for(let z=0;z<sz;z++)for(let y=0;y<sy;y++)for(let x=0;x<sx;x++){
           const idx=index(x,y,z),coord=point(x,y,z)[axis];
-          if(Math.abs(coord-origin[axis])>half){
+          if(Math.abs(coord-origin[axis])>half && point(x,y,z)[2]-origin[2]+(Number(o.bottomZ)||0)+(o.modelHeight??stock[2])/2+offset[2]>=(o.trimZ??1)){
             occupancy[idx]=0;trimmedVoxels++;
           }
         }
@@ -5612,7 +5633,7 @@ const Gen = (() => {
     const towerToModel=(op,pos)=>{
       const along=op.angle===0?1:0,cross=along===1?0:1;
       const crossBase=CONFIG.HorizontalTravel/2+(along===1?offset[1]:offset[0]);
-      const zBase=(Number(o.bottomZ)||0)+stock[2]/2+offset[2];
+      const zBase=(Number(o.bottomZ)||0)+(o.modelHeight??stock[2])/2+offset[2];
       const alongShift=op.angle===0?offset[0]:-offset[1];
       return [-1,1].map((sign,i)=>{
         const p=origin.slice();
@@ -5699,8 +5720,11 @@ const Gen = (() => {
     const model=new Model(text,o.rotation||identityRotation(),scale,o.tolerance===undefined?.1:o.tolerance);
     const curves=new Map(model.auxiliaryCurves().map(c=>[c.id,c]));
     const all=[...model.edges.values()].flat().concat([...curves.values()].flatMap(c=>c.points));
+    const modelHeight=Math.max(...all.map(p=>p[2]))-Math.min(...all.map(p=>p[2]));
     const origin=[0,1,2].map(k=>(Math.min(...all.map(p=>p[k]))+Math.max(...all.map(p=>p[k])))/2);
     const stock=o.stock||[100,300,100],bottom=o.bottomZ||0;
+    if(bottom+offset[2]<-1e-6 || bottom+offset[2]+modelHeight>stock[2]+1e-6)
+      throw new StepError("Модель не помещается по высоте внутри заготовки над столом");
     const towersDistance=CONFIG.FieldWidth;
     const nSamples=o.samples||128;
     if(!Number.isInteger(nSamples)||nSamples<16||nSamples>1024)throw new StepError("Неверное число отсчётов");
@@ -5725,7 +5749,7 @@ const Gen = (() => {
       const userStart=o.guideStarts?.[key]??0;
       const {correspondence,mapA,mapB,startU,reverseA}=resolveGuideStart(a,b,userStart);
       const samples=[], bounds=[Infinity,-Infinity,Infinity,-Infinity], axisName=axis===1?"B0":"B90";
-      const zBase=bottom+stock[2]/2+offset[2];
+      const zBase=bottom+modelHeight/2+offset[2];
       const crossBase=CONFIG.HorizontalTravel/2+
         (axis===1?offset[1]:offset[0]);
       // The stock is translated as one body and rotates about the table centre.
@@ -5747,12 +5771,12 @@ const Gen = (() => {
         bounds[2]>=0&&bounds[3]<=CONFIG.VerticalTravel;
       const clearance=Math.max(0,Number(o.clearance)||0);
       const insideWithClearance=insideEnvelope&&bounds[3]+clearance<=CONFIG.VerticalTravel;
-      const insideStockHeight=bounds[2]>=bottom+offset[2]-1e-6&&
-        bounds[3]<=bottom+offset[2]+stock[2]+1e-6;
+      const insideStockHeight=bounds[2]>=-1e-6&&
+        bounds[3]<=stock[2]+1e-6;
       const stockCrossWidth=axis===1?stock[1]:stock[0];
       const entryExit=inspectGuideEntryExit(samples,[
         crossBase-stockCrossWidth/2,crossBase+stockCrossWidth/2,
-        bottom+offset[2],bottom+offset[2]+stock[2]
+        0,stock[2]
       ],{clearance,margin:Math.max(2,Number(o.kerf)||0),field:CONFIG.HorizontalTravel,
         vertical:CONFIG.VerticalTravel});
       operations.push({ids:ids.slice(),angle:axis===1?0:90,operation:axisName,closed:a.closed,
@@ -5799,7 +5823,7 @@ const Gen = (() => {
         step:i+1,status:'NOT_CERTIFIED_FOR_F4'}))
     ];
     const stockRemoval=simulateSequentialStockRemoval(operations,origin,stock,{
-      kerf:o.kerf,offset,bottomZ:bottom,voxelSize:o.voxelSize,trimOperation
+      kerf:o.kerf,offset,bottomZ:bottom,modelHeight,trimZ:o.trimZ,voxelSize:o.voxelSize,trimOperation
     });
     return {schema:"foam-wire-f4-diagnostic-motion-v1",operations,origin,
       rotation:o.rotation||identityRotation(),scale,offset,stock:stock.slice(),
@@ -5827,7 +5851,9 @@ const Gen = (() => {
       WireMinPower:o.minS,WireMaxPower:o.maxS};
     const p=new Program(cfg,!!o.powerComp,1);
     const midpoint=cfg.HorizontalTravel/2;
-    const stockZ=o.bottomZ+offset[2];
+    const stockZ=0;
+    const trimZ=o.trim===false?0:(o.trimZ===undefined?1:o.trimZ);
+    if(!Number.isFinite(trimZ)||trimZ<0||trimZ>=o.stock[2])throw new StepError("Высота торцевания должна быть не ниже стола и ниже верха заготовки");
     if(stockZ<0||stockZ+o.stock[2]+o.clearance>cfg.VerticalTravel)
       throw new StepError("Смещённая заготовка выходит за вертикальный ход станка");
     const move=(kind,s)=>p.travel(kind,s.left[0]-midpoint,s.left[1],
@@ -5840,8 +5866,8 @@ const Gen = (() => {
     let program="; *** F4 OPERATOR-DIRECTED G-CODE ***"+eol+
       "; WARNING: UNVERIFIED LEADS AND PRESERVED SOLID - REVIEW BEFORE MACHINING"+eol+
       // The simulator's L is its Y extent, W its X extent.
-      "; STOCK L="+o.stock[1]+" W="+o.stock[0]+" H="+o.stock[2]+" Z0="+o.bottomZ+
-        " OX="+offset[0]+" OY="+offset[1]+" OZ="+offset[2]+eol+
+      "; STOCK L="+o.stock[1]+" W="+o.stock[0]+" H="+o.stock[2]+" Z0=0"+
+        " OX="+offset[0]+" OY="+offset[1]+" OZ=0"+eol+
       "; CUT ORDER="+report.cutOrder+" TRIM="+(report.trimOperation?"B"+report.trimAngle:"OFF")+eol+
       "$H"+eol+"G21 G90 G94"+eol+
       "G92 "+travelPosition(cfg.HomingX1,cfg.HomingZ1,cfg.HomingX2,cfg.HomingZ2)+
@@ -5859,8 +5885,8 @@ const Gen = (() => {
       const trim=report.trimOperation;
       const dim=trim.angle===90?o.stock[0]:o.stock[1];
       const along=trim.angle===90?o.stock[1]:o.stock[0];
-      const task={Length:dim,Width:along,Height:o.stock[2],TrimEnds:trim.trimAllowance,
-        BottomZ:stockZ,RetractOffset:o.retract,Angle:trim.angle,
+      const task={Length:dim,Width:along,Height:o.stock[2]-trimZ,TrimEnds:trim.trimAllowance,
+        BottomZ:trimZ,RetractOffset:o.retract,Angle:trim.angle,
         CenterOffset:trim.angle===90?offset[0]:offset[1]};
       const check=checkTrim(cfg,task,true);
       if(check.length)throw new StepError("Торцевание B"+trim.angle+": "+check.join("; "));
@@ -5879,7 +5905,8 @@ const Gen = (() => {
         program+=p.travel("cut",outer,safe,outer,safe);
         program+="M05"+eol;
       }
-      warnings.push("Торцевание и отвод после него следует проверить в симуляторе");
+      warnings.push(trimZ===0?"Торцевание на Z=0 достигает поверхности стола: проверьте установку перед запуском":"Торцевание и отвод после него следует проверить в симуляторе");
+      if(trimZ>0 && trimZ<o.kerf/2)warnings.push("Торцевание ближе к столу, чем половина толщины реза: проверьте зазор струны и стола");
     }
     let count=0;
     for(const op of report.operations){
@@ -5917,7 +5944,7 @@ const Gen = (() => {
     program+="; END AT LAST GUIDE POINT - WIRE OFF; NO AUTOMATIC RETRACT"+eol+
       "M05"+eol;
     return {program,warnings,diagnostic:report,points:count,
-      part:{span:o.stock[0],x0:0,x1:o.stock[1],z0:o.bottomZ,z1:o.bottomZ+o.stock[2]},
+      part:{span:o.stock[0],x0:0,x1:o.stock[1],z0:0,z1:o.stock[2]},
       holes:0,power:[o.minS,o.maxS,p.changes],operatorDirected:true};
   }
   // Review-only path encoding for the existing 3D G-code simulator.
@@ -5930,8 +5957,8 @@ const Gen = (() => {
       '; *** SIMULATION ONLY / F4 UNVERIFIED / DO NOT SEND TO MACHINE ***',
       '; No homing, no verified lead-in/out, no machine-safe output.',
       '; STOCK L='+f(o.stock[1])+' W='+f(o.stock[0])+
-        ' H='+f(o.stock[2])+' Z0='+f(o.bottomZ)+
-        ' OX='+f(o.offset?.[0]||0)+' OY='+f(o.offset?.[1]||0)+' OZ='+f(o.offset?.[2]||0),
+        ' H='+f(o.stock[2])+' Z0=0'+
+        ' OX='+f(o.offset?.[0]||0)+' OY='+f(o.offset?.[1]||0)+' OZ=0',
       '; CUT ORDER='+diagnostic.cutOrder+'; TRIM B='+diagnostic.trimAngle,
       '; *** VIRTUAL CUTTING PATH - NOT A MACHINE PROGRAM ***',
       'G21 G90 G94'
@@ -6051,7 +6078,7 @@ function generate(mode) {   // - mode: "normal", "mirror" или "pair" (зер�
       guideStarts: generatorPreview.getGuideStarts(),
       rotation: modelRotation, offset: [...modelOffset], modelZOffset, scale: n("gnScale") / 100, tolerance: n("gnTolerance"),
       stock: [n("gnL"), n("gnW"), n("gnH")], bottomZ: n("gnZ"), kerf: n("gnKerf"), feed: n("gnFeed"), minS: n("gnMinS"), maxS: n("gnMaxS"),
-      clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trim: $("gnTrim").checked,
+      clearance: n("gnClear"), retract: n("gnRetract"), leadMargin: n("gnLead"), trimZ:n("gnTrimZ"), trim: $("gnTrim").checked,
       trimAngle:n("gnTrimAngle"), cutOrder:$("gnCutOrder").value, invB:$("invB").checked, sideEntry: $("gnSideEntry").checked, topEntry: $("gnTopEntry").checked, frameMarks: $("gnFrameMarks").checked, side: $("gnSide").value === "-" ? -1 : 1, powerComp: $("gnComp").checked, mirror: mode === "mirror", pair: mode === "pair"
   };
   // Keep PR #16 stock dimensions in automatic and F4 filenames.
