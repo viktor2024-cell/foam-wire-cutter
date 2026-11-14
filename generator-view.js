@@ -785,7 +785,14 @@ const generatorPreview = (() => {
     const button=e.target.closest('button[data-axis]'); if (!button || !stepFile) return;
     modelRotation=Gen.rotateModel(modelRotation,Number(button.dataset.axis),Number(button.dataset.turn)); load();
   });
-  document.getElementById('gnResetRotation').addEventListener('click',()=>{modelRotation=Gen.identityRotation();load();});
+  document.getElementById('gnResetRotation').addEventListener('click',()=>{modelRotation=modelMirrored?Gen.mirrorXZ(Gen.identityRotation()):Gen.identityRotation();load();});
+  document.getElementById('gnMirror').addEventListener('click',()=>{
+    if(!stepFile)return;
+    modelRotation=Gen.mirrorXZ(modelRotation);
+    modelMirrored=!modelMirrored;
+    document.getElementById('gnMirror').setAttribute('aria-pressed',String(modelMirrored));
+    load();
+  });
   const showOffset=()=>{document.getElementById('gnOffset').textContent=modelOffset.map((v,k)=>'XYZ'[k]+' '+(v>0?'+':'')+v).join(' · ')+' мм'+(modelZOffset?' · модель относительно центра Z '+(modelZOffset>0?'+':'')+modelZOffset+' мм':'');};
   document.getElementById('gnMove').addEventListener('click',e=>{
     const button=e.target.closest('button[data-axis]');if(!button||!stepFile)return;

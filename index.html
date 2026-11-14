@@ -156,7 +156,8 @@ pre.code .ln { color: var(--muted); display: inline-block; min-width: 4.5ch; }
 #gnRotate > span:first-child, #gnMove > span:first-child { flex: 0 0 280px; }
 #gnRotate > button[data-axis], #gnMove > button[data-axis] { flex: 0 0 48px; }
 #gnView { height: 420px; min-height: 260px; position: relative; border-radius: 8px; overflow: hidden; background: var(--view); }
-#gnView .gn-file { position: absolute; top: 8px; left: 8px; z-index: 2; max-width: calc(100% - 16px); padding: 5px; border-radius: 6px; background: var(--panel); }
+#gnView .gn-file { position: absolute; top: 8px; left: 8px; z-index: 2; max-width: calc(100% - 16px); padding: 5px; border-radius: 6px; background: var(--panel); flex-direction: column; align-items: flex-start; }
+#gnMirror[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
 #gnView canvas { display: block; width: 100%; height: 100%; }
 #gnPlacementProgress, #gnStockProgress { margin-top: 6px; }
 #gnPlacementProgress progress, #gnStockProgress progress { width: 100%; accent-color: var(--wire); }
@@ -229,8 +230,9 @@ button.heat-unknown { background: var(--warn); border-color: var(--warn); color:
     </div>
     <div id="gnView" aria-label="Модель, заготовка и рабочая область станка">
       <div class="mline gn-file">
-        <label class="btn" for="gnInput">Открыть STEP<input type="file" id="gnInput" accept=".stp,.step"></label>
-        <span class="file-name" id="gnFile">файл не выбран</span>
+        <div class="mline"><label class="btn" for="gnInput">Открыть STEP<input type="file" id="gnInput" accept=".stp,.step"></label>
+        <span class="file-name" id="gnFile">файл не выбран</span></div>
+        <button id="gnMirror" type="button" disabled aria-pressed="false" title="Отразить модель относительно плоскости XZ">Зеркало XZ</button>
       </div>
     </div>
     <div class="row gn-manual" aria-label="Диагностическая траектория струны" hidden>
@@ -331,7 +333,6 @@ button.heat-unknown { background: var(--warn); border-color: var(--warn); color:
     <div class="note" id="gnOrderExplanation">При двух направлениях порядок относится к главным контурам; технологические отверстия и входы проверяются отдельно.</div>
     <div class="row">
       <button id="gnGo" class="primary" disabled>Создать G-code</button>
-      <button id="gnMirror" class="gn-auto" disabled>Зеркало</button>
       <button id="gnPair" class="gn-auto" disabled>Пара: зеркало над обычной</button>
       <label class="gn-auto"><input id="gnStockPair" type="checkbox"> Режим ПАРА — предпросмотр и G-code для двух деталей</label>
     </div>
@@ -2275,6 +2276,7 @@ const Gen = (() => {
   const EOL = "\r\n";
 
   const identityRotation = () => [[1,0,0],[0,1,0],[0,0,1]];
+  const mirrorXZ = rotation => rotation.map((row,i)=>row.map(value=>i===1?-value:value));
   function rotateModel(rotation, axis, turn) {
     const r = identityRotation(), i = (axis + 1) % 3, j = (axis + 2) % 3;
     r[i][i] = r[j][j] = 0; r[i][j] = -turn; r[j][i] = turn;
@@ -5963,13 +5965,14 @@ const Gen = (() => {
       warnings:['F4 review only: machine output, copy and export disabled',
         'Start and exit cutting leads, kerf side, safe B rotation and preserved STEP solid are NOT validated']};
   }
-  return { buildProgram, autoPlace, groundPlacement, stockRotationEnvelope, stockAlongWireAtAngle, buildF4Program, buildF4VisualPreview, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, resolveGuideStart, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
+  return { buildProgram, mirrorXZ, autoPlace, groundPlacement, stockRotationEnvelope, stockAlongWireAtAngle, buildF4Program, buildF4VisualPreview, manualGuideDiagnostics, simulateSequentialStockRemoval, inspectGuideEntryExit, resolveGuideStart, matchGuideCurves, CONFIG, previewGeometry, previewPair, identityRotation, rotateModel };
 })();
 
 // ---------------------------------------------------------------------------------------------
 //  Вкладки и экран генератора
 // ---------------------------------------------------------------------------------------------
 let modelRotation = Gen.identityRotation();
+let modelMirrored = false;
 let modelOffset = [0,0,0];
 let modelZOffset = 0;
 let stepFile = null;        // - открытый STEP: { name, text }
@@ -6002,7 +6005,7 @@ function openStep(file, handle = null) {
   rd.onload = () => {
     for(const id of ['gnTolerance','gnZ','gnClear'])$(id).classList.remove('auto-adjusted');
     stepFile = { name: file.name, text: String(rd.result), handle };
-    modelRotation = Gen.identityRotation(); modelOffset = [0,0,0]; modelZOffset = 0; $("gnOffset").textContent="X 0 · Y 0 · Z 0 мм"; $("gnScale").value = 100; $("gnTolerance").value = "0.1";
+    modelRotation = Gen.identityRotation(); modelMirrored=false; $("gnMirror").setAttribute("aria-pressed","false"); modelOffset = [0,0,0]; modelZOffset = 0; $("gnOffset").textContent="X 0 · Y 0 · Z 0 мм"; $("gnScale").value = 100; $("gnTolerance").value = "0.1";
     $("gnFile").textContent = file.name;
     // Prefer an overhead lead for a plain single closed contour (stab-type
     // parts), but not for F1's bore, F2's auxiliary cuts or F4 guide pairs.
@@ -6148,7 +6151,6 @@ $("gnSideEntry").addEventListener("change", () => {
   refreshGenerateMode();
 });
 $("gnGo").addEventListener("click", () => generate(selectedGenerateMode()));
-$("gnMirror").addEventListener("click", () => generate("mirror"));
 $("gnPair").addEventListener("click", () => {
   $("gnStockPair").checked = true;
   refreshGenerateMode();
