@@ -2507,7 +2507,7 @@ const Gen = (() => {
     const closedShell=built&&outer.length===1&&outer[0][0].closed&&!holes.length
       ? {rail:rails[0],capAxis:axis===0?1:axis===1?0:2} : null;
     return {rails,edgeLines,openSlotCount:slotFaceIds.size?secondaryContours.filter(op=>op.kind==='openBottomSlot').length:0,
-      diagnosticShell,diagnosticFaces,closedShell,bevelCandidates,slopedPreview,slopedBevelAngle,outerCount:outer.length,previewError,diagnosticOnly:!!previewError,
+      diagnosticShell,diagnosticFaces,closedShell,bevelCandidates,slopedPreview,slopedBevelAngle,outerCount:outer.length,holesCount:holes.length,previewError,diagnosticOnly:!!previewError,
       axis, sampled, wireframe:!!wireframe, auxiliaryCurves, guideAnalysis,
       guideKinematics, secondaryCount:secondaryContours.length,
       center:low.map((v,k)=>(v+high[k])/2),

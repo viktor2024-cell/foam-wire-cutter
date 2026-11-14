@@ -71,3 +71,21 @@ test('manual guides use model bottom while simulator stock starts at zero',()=>{
  assert.match(r.program,/\*\*\* TRIM B90/);
  assert.match(r.program,/G01 X[^\n]* Y4\.00 Z[^\n]* A4\.00/);
 });
+
+test('automatic stock reserves foam below lower-entry models and leaves ordinary models unchanged',async()=>{
+ const view=fs.readFileSync(path.join(__dirname,'../generator-view.js'),'utf8');
+ const begin=view.indexOf('  async function autoStockOptions(');
+ const end=view.indexOf("  document.getElementById('gnStockFromModel').addEventListener",begin);
+ const run=async geometry=>{
+  const state={Gen:{...gen,previewGeometry:()=>geometry},stepFile:{text:fixture},
+   modelRotation:gen.identityRotation(),modelOffset:[0,0,0],geometry,machine:gen.CONFIG,
+   document:{getElementById:()=>({checked:false})},
+   n:id=>({gnScale:100,gnKerf:1,gnZ:0,gnClear:15,gnLead:5,gnTolerance:.1})[id],setTimeout};
+  return vm.runInNewContext(view.slice(begin,end)+';autoStockOptions()',state);
+ };
+ const common={axis:1,diagnosticOnly:false,secondaryCount:0,size:[40,100,30],slopedPreview:false};
+ const lower=await run({...common,wireframe:true,holesCount:2});
+ assert.ok(lower.length);assert.equal(lower[0].bottom,5);assert.ok(lower[0].height>=35);
+ const slot=await run({...common,openSlotCount:1});assert.equal(slot[0].bottom,5);
+ const normal=await run(common);assert.equal(normal[0].bottom,0);
+});

@@ -952,7 +952,11 @@ const generatorPreview = (() => {
         const g=turn===0&&geometry ? geometry : Gen.previewGeometry(stepFile.text,rotation,scale,n('gnTolerance'));
         // Both machine and generator require the span to lie along the wire.
         if(g.axis!==1||g.diagnosticOnly)continue;
-        const required=paired ? Gen.previewPair(g,0,bottom,kerf).minimumHeight : bottom+g.size[2];
+        // Reserve a sacrificial strip below models that need a lower-side
+        // entrance. The router still checks the actual path against the part.
+        const needsLowerWaste=(g.wireframe && g.holesCount>0) || g.openSlotCount>0;
+        const modelBottom=needsLowerWaste ? Math.max(bottom,Math.ceil(Math.max(5,kerf+2)*2)/2) : bottom;
+        const required=paired ? Gen.previewPair(g,0,modelBottom,kerf).minimumHeight : modelBottom+g.size[2];
         const minimumHeight=required+(paired?0:10); // Stock and model move together; preserve 10 mm margins.
         // Standard 20/50/100 mm is the foam SHEET THICKNESS ALONG
         // THE WIRE (gnL / stock X), not the upright Z dimension.
@@ -998,7 +1002,7 @@ const generatorPreview = (() => {
            width/2+Math.abs(modelOffset[1])+n('gnLead')>machine.ParkX+1e-7 ||
            bottom+modelOffset[2]<0 ||
            height+selectedClearance>machine.VerticalTravel+1e-7)continue;
-        results.push({rotation,geometry:g,length,width,height,clearance:selectedClearance,standard:Boolean(sheet&&Math.abs(length-sheet)<1e-7),turn,
+        results.push({rotation,geometry:g,length,width,height,bottom:modelBottom,clearance:selectedClearance,standard:Boolean(sheet&&Math.abs(length-sheet)<1e-7),turn,
           description:rotations[turn].description,area:width*height,minimumHeight,minimumLength});
       }catch(e){/* A candidate may not form valid cutting geometry at this orientation. */}
     }
@@ -1044,14 +1048,16 @@ const generatorPreview = (() => {
       fit.textContent='Ни одно положение модели не помещается в рабочую область с заданным нижним Z и безопасным зазором. Уменьшите масштаб или измените установку.';
       return;
     }
-    const best=choices[0],clearanceBefore=n('gnClear');
+    const best=choices[0],clearanceBefore=n('gnClear'),bottomBefore=n('gnZ');
     modelRotation=best.rotation;
     modelZOffset=0;showOffset();
     geometry=best.geometry;
     document.getElementById('gnL').value=best.length;
     document.getElementById('gnW').value=best.width;
     document.getElementById('gnH').value=best.height;
+    document.getElementById('gnZ').value=best.bottom;
     document.getElementById('gnClear').value=best.clearance;
+    if(best.bottom!==bottomBefore)document.getElementById('gnZ').classList.add('auto-adjusted');
     if(best.clearance!==clearanceBefore)document.getElementById('gnClear').classList.add('auto-adjusted');
     invalidate();rebuild();
     const fit=document.getElementById('gnFit');
@@ -1061,6 +1067,7 @@ const generatorPreview = (() => {
       best.length+' мм ('+(best.standard?'стандартная':'нестандартная')+
       '), заготовка '+best.length+' × '+best.width+' × '+best.height+' мм.'+
       (best.height+1e-7<best.minimumHeight?' Вертикальный припуск уменьшен до '+((best.height-(best.minimumHeight-20))/2).toFixed(1)+' мм с каждой стороны.':'')+
+      (best.bottom>bottomBefore?' Низ модели поднят с '+bottomBefore+' до '+best.bottom+' мм: проход струны через нижний отход.':'')+
       (best.clearance<clearanceBefore?' Зазор над заготовкой уменьшен с '+clearanceBefore+' до '+best.clearance+' мм.':'')+
       (best.geometry.slopedPreview&&(best.width<Math.ceil((best.geometry.size[1]+20-1e-7)/5)*5||best.length<Math.ceil((best.geometry.size[0]+10-1e-7)/5)*5)
         ? ' Припуски уменьшены для поворота: вдоль струны '+((best.length-best.geometry.size[0])/2).toFixed(1)+' мм и поперёк '+((best.width-best.geometry.size[1])/2).toFixed(1)+' мм с каждой стороны.' : '');
