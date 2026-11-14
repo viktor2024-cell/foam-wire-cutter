@@ -138,7 +138,7 @@ const generatorPreview = (() => {
   const guideToScene = p => new THREE.Vector3(
     -p[1]-geometry.center[0]+modelOffset[0],
     p[0]-geometry.center[1]+modelOffset[1],
-    p[2]-geometry.center[2]+(n('gnZ')+n('gnH')/2)+modelOffset[2]+modelZOffset
+    p[2]-geometry.center[2]+n('gnZ')+geometry.size[2]/2+modelOffset[2]+modelZOffset
   );
   function updateGuideMotion() {
     guideProgressText.textContent = guideProgress.value + '%';
@@ -215,7 +215,7 @@ const generatorPreview = (() => {
     return Gen.manualGuideDiagnostics(stepFile.text,savedGuidePairs,{
       rotation:modelRotation,offset:[...modelOffset],scale:n('gnScale')/100,
       tolerance:n('gnTolerance'),stock:[n('gnL'),n('gnW'),n('gnH')],
-      bottomZ:n('gnZ'),clearance:n('gnClear'),kerf:n('gnKerf'),
+      bottomZ:n('gnZ'),clearance:n('gnClear'),kerf:n('gnKerf'),trimZ:n('gnTrimZ'),
       trim:document.getElementById('gnTrim').checked,
       trimAngle:n('gnTrimAngle'),cutOrder:document.getElementById('gnCutOrder').value,
       guideStarts:{...guideStarts},samples:128
@@ -581,12 +581,12 @@ const generatorPreview = (() => {
     const foam = new THREE.Mesh(box, new THREE.MeshBasicMaterial({color: 0x4499cc, transparent:true, opacity:.12, depthWrite:false}));
     // Keep the stock and model in the same preview coordinate frame.
     // The model and auxiliary guides below already use modelOffset.
-    foam.position.set(modelOffset[0],modelOffset[1],bottom + stock[2]/2 + modelOffset[2]);
+    foam.position.set(modelOffset[0],modelOffset[1],stock[2]/2);
     group.add(foam);
     const edge = new THREE.LineSegments(new THREE.EdgesGeometry(box), new THREE.LineBasicMaterial({color:0x4499cc}));
     edge.position.copy(foam.position); group.add(edge);
     const axes = new THREE.AxesHelper(Math.max(...stock)*.35);
-    axes.position.set(modelOffset[0]-stock[0]/2,modelOffset[1]-stock[1]/2,bottom+modelOffset[2]);
+    axes.position.set(modelOffset[0]-stock[0]/2,modelOffset[1]-stock[1]/2,0);
     group.add(axes);
     if (geometry) {
       const paired = !manualActive && document.getElementById('gnStockPair').checked;
@@ -596,11 +596,10 @@ const generatorPreview = (() => {
       catch(e) { fit.className='note crit';fit.textContent=e.message;aim();return; }
       const requiredZ=paired ? placement.minimumHeight : geometry.size[2];
       const stockFits=geometry.size[0]<=stock[0]+.001 &&
-        geometry.size[1]<=stock[1]+.001 && requiredZ+2*Math.abs(modelZOffset)<=stock[2]+.001;
+        geometry.size[1]<=stock[1]+.001 && (paired ? requiredZ<=stock[2]+.001 : bottom+modelOffset[2]+modelZOffset>=-.001 && bottom+modelOffset[2]+modelZOffset+requiredZ<=stock[2]+.001);
       const stockInMachine=stock[0]/2+Math.abs(modelOffset[0])<=machine.FieldWidth/2+.001 &&
         stock[1]/2+Math.abs(modelOffset[1])<=machine.HorizontalTravel/2+.001 &&
-        bottom+modelOffset[2]>=0 &&
-        bottom+modelOffset[2]+stock[2]<=machine.VerticalTravel+.001;
+        stock[2]<=machine.VerticalTravel+.001;
       // A blank may fit at B0 but exceed the 370 mm tower spacing at
       // the STEP bevel angle. Use the same physical projection as G-code.
       const bevelAngle=geometry.slopedPreview&&Number.isFinite(geometry.slopedBevelAngle)?
@@ -617,7 +616,7 @@ const generatorPreview = (() => {
       const copies=paired ? [
         {sign:[1,1,1],z:placement.zLower,color:0xe87722},
         {sign:[-1,-1,-1],z:placement.zUpper,color:0x22a8a0}
-      ] : [{sign:[1,1,1],z:bottom+stock[2]/2,color:0xe87722}];
+      ] : [{sign:[1,1,1],z:bottom+geometry.size[2]/2,color:0xe87722}];
       for (const copy of copies) {
         const vertices=[],lines=[];
         const point=p=>p.map((v,k)=>copy.sign[k]*(v-geometry.center[k])+(k===2?copy.z+modelZOffset:0)+modelOffset[k]);
@@ -676,7 +675,7 @@ const generatorPreview = (() => {
         // yet resolved. Show the real model edges behind selectable guides.
         const coords=[];
         for(const ends of geometry.edgeLines) for(const p of ends)
-          coords.push(...p.map((v,k)=>v-geometry.center[k]+(k===2?bottom+stock[2]/2+modelZOffset:0)+modelOffset[k]));
+          coords.push(...p.map((v,k)=>v-geometry.center[k]+(k===2?bottom+geometry.size[2]/2+modelZOffset:0)+modelOffset[k]));
         const boundary=new THREE.BufferGeometry();
         boundary.setAttribute('position',new THREE.Float32BufferAttribute(coords,3));
         group.add(new THREE.LineSegments(boundary,
@@ -685,7 +684,7 @@ const generatorPreview = (() => {
       if(geometry.auxiliaryCurves?.length) {
         for(const curve of geometry.auxiliaryCurves) {
           const points=curve.points.map(p=>[-p[1],p[0],p[2]]);
-          const coords=points.flatMap(p=>p.map((v,k)=>v-geometry.center[k]+(k===2?bottom+stock[2]/2+modelZOffset:0)+modelOffset[k]));
+          const coords=points.flatMap(p=>p.map((v,k)=>v-geometry.center[k]+(k===2?bottom+geometry.size[2]/2+modelZOffset:0)+modelOffset[k]));
           const path=new THREE.BufferGeometry();
           path.setAttribute('position',new THREE.Float32BufferAttribute(coords,3));
           const line = new THREE.Line(path,new THREE.LineBasicMaterial({
@@ -796,7 +795,11 @@ const generatorPreview = (() => {
   const showOffset=()=>{document.getElementById('gnOffset').textContent=modelOffset.map((v,k)=>'XYZ'[k]+' '+(v>0?'+':'')+v).join(' · ')+' мм'+(modelZOffset?' · модель относительно центра Z '+(modelZOffset>0?'+':'')+modelZOffset+' мм':'');};
   document.getElementById('gnMove').addEventListener('click',e=>{
     const button=e.target.closest('button[data-axis]');if(!button||!stepFile)return;
-    modelOffset[Number(button.dataset.axis)]+=5*Number(button.dataset.step);showOffset();invalidate();rebuild();
+    const axis=Number(button.dataset.axis),delta=5*Number(button.dataset.step);
+    if(axis===2){
+      const low=document.getElementById('gnZ');low.value=n('gnZ')+delta;low.classList.remove('auto-adjusted');
+    }else modelOffset[axis]+=delta;
+    showOffset();invalidate();rebuild();
   });
   document.getElementById('gnResetOffset').addEventListener('click',()=>{modelOffset=[0,0,0];modelZOffset=0;showOffset();invalidate();rebuild();});
 
@@ -816,7 +819,7 @@ const generatorPreview = (() => {
       rotation:modelRotation,modelZOffset,scale:n('gnScale')/100,tolerance:n('gnTolerance'),
       stock:[n('gnL'),n('gnW'),n('gnH')],bottomZ:n('gnZ'),
       kerf:n('gnKerf'),feed:n('gnFeed'),minS:n('gnMinS'),maxS:n('gnMaxS'),
-      clearance:n('gnClear'),retract:n('gnRetract'),leadMargin:n('gnLead'),
+      clearance:n('gnClear'),retract:n('gnRetract'),leadMargin:n('gnLead'),trimZ:n('gnTrimZ'),
       trim:document.getElementById('gnTrim').checked,
       trimAngle:n('gnTrimAngle'),cutOrder:document.getElementById('gnCutOrder').value,
       invB:document.getElementById('invB').checked,sideEntry:document.getElementById('gnSideEntry').checked,
@@ -852,7 +855,7 @@ const generatorPreview = (() => {
       const stages=[
         {keepHeight:true,preferNegativeX:true,label:'сдвиг по −X без изменения заготовки'},
         {keepHeight:true,preferNegativeX:false,label:'без изменения заготовки'},
-        {keepHeight:false,preferNegativeX:false,label:'с увеличением высоты заготовки'}
+        {keepHeight:false,preferNegativeX:false,label:'с перемещением модели по высоте'}
       ];
       for(const stage of stages){
       for(const item of rotations){
@@ -895,6 +898,10 @@ const generatorPreview = (() => {
       modelRotation=best.rotation;
       modelOffset=best.offset.slice();
       modelZOffset=best.modelZOffset;
+      if(modelOffset[2]){
+        const low=document.getElementById('gnZ');low.value=n('gnZ')+modelOffset[2];
+        low.classList.add('auto-adjusted');modelOffset[2]=0;
+      }
       document.getElementById('gnH').value=best.stock[2];
       showOffset();
       load();
@@ -945,8 +952,8 @@ const generatorPreview = (() => {
         const g=turn===0&&geometry ? geometry : Gen.previewGeometry(stepFile.text,rotation,scale,n('gnTolerance'));
         // Both machine and generator require the span to lie along the wire.
         if(g.axis!==1||g.diagnosticOnly)continue;
-        const required=paired ? Gen.previewPair(g,0,0,kerf).minimumHeight : g.size[2];
-        const minimumHeight=required+20; // Stock and model move together; preserve 10 mm margins.
+        const required=paired ? Gen.previewPair(g,0,bottom,kerf).minimumHeight : bottom+g.size[2];
+        const minimumHeight=required+(paired?0:10); // Stock and model move together; preserve 10 mm margins.
         // Standard 20/50/100 mm is the foam SHEET THICKNESS ALONG
         // THE WIRE (gnL / stock X), not the upright Z dimension.
         // Keep 5 mm on each wire-side end; vertical and transverse
@@ -955,8 +962,8 @@ const generatorPreview = (() => {
         const sheet=[20,50,100].find(t=>t+1e-7>=minimumLength);
         let length=sheet||round5(minimumLength);
         let height=round5(minimumHeight),selectedClearance=clearance;
-        const availableHeight=gap=>Math.floor((machine.VerticalTravel-bottom-modelOffset[2]-gap+1e-7)/5)*5;
-        const minimumReducedHeight=round5(required+2*Math.max(3,kerf/2+.1));
+        const availableHeight=gap=>Math.floor((machine.VerticalTravel-gap+1e-7)/5)*5;
+        const minimumReducedHeight=round5(required);
         if(height>availableHeight(selectedClearance)){
           if(minimumReducedHeight>availableHeight(selectedClearance)&&selectedClearance>5)
             selectedClearance=5;
@@ -990,7 +997,7 @@ const generatorPreview = (() => {
            width/2+Math.abs(modelOffset[1])>machine.HorizontalTravel/2+1e-7 ||
            width/2+Math.abs(modelOffset[1])+n('gnLead')>machine.ParkX+1e-7 ||
            bottom+modelOffset[2]<0 ||
-           bottom+modelOffset[2]+height+selectedClearance>machine.VerticalTravel+1e-7)continue;
+           height+selectedClearance>machine.VerticalTravel+1e-7)continue;
         results.push({rotation,geometry:g,length,width,height,clearance:selectedClearance,standard:Boolean(sheet&&Math.abs(length-sheet)<1e-7),turn,
           description:rotations[turn].description,area:width*height,minimumHeight,minimumLength});
       }catch(e){/* A candidate may not form valid cutting geometry at this orientation. */}
@@ -1074,6 +1081,7 @@ const generatorPreview = (() => {
   document.getElementById('gnStockPair')?.addEventListener('change',rebuild);
   document.getElementById('gnKerf').addEventListener('input',()=>{invalidate();rebuild();});
   document.getElementById('gnTrim').addEventListener('change',()=>{invalidate();rebuild();});
+  document.getElementById('gnTrimZ').addEventListener('input',invalidate);
   guideFeedback();
   return {load,rebuild,chooseGuide,confirmGuidePair,setManualActive(active){
     manualActive=active; pointerDown=rightPointerDown=null; guideDot.style.display='none';
