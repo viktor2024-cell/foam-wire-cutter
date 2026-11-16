@@ -608,7 +608,7 @@ const generatorPreview = (() => {
         2*Gen.stockAlongWireAtAngle(stock[0],stock[1],modelOffset,bevelAngle);
       const bevelRoom=machine.FieldWidth-2;
       const bevelFits=bevelProjection===null||bevelProjection<=bevelRoom+1e-6;
-      const fits=stockFits&&stockInMachine&&bevelFits;
+      const fits=stockFits&&stockInMachine;
       const shifted=modelOffset.some(v=>v!==0);
       const manualGuides=geometry.auxiliaryCurves?.length>0;
       const unsupported=shifted && !manualGuides && (paired || geometry.secondaryCount>0 || geometry.wireframe);
@@ -698,7 +698,7 @@ const generatorPreview = (() => {
         }
       }
       fit.textContent=(paired?'Пара: ':'Модель: ')+geometry.size.map(v=>v.toFixed(2)).join(' × ')+
-        ' мм. '+(unsupported?'Смещение этой комбинации операций пока не поддерживается. ':fits?'Помещается. ':!stockFits?'Модель не помещается в заготовку. ':!stockInMachine?'Заготовка выходит за ход станка в B0. ':'Заготовка не помещается между башнями при скосе. ')+(paired?'Минимальная высота: '+requiredZ.toFixed(1)+' мм. ':'')+
+        ' мм. '+(unsupported?'Смещение этой комбинации операций пока не поддерживается. ':fits?'Помещается. ':!stockFits?'Модель не помещается в заготовку. ':'Заготовка выходит за ход станка в B0. ')+(paired?'Минимальная высота: '+requiredZ.toFixed(1)+' мм. ':'')+
         (geometry.diagnosticOnly?'Направление реза не подтверждено.':geometry.axis===1?'Размах вдоль струны.':'Для генерации поверните размах вдоль струны.')+
         (geometry.auxiliaryCurves?.length?' Найдены '+geometry.auxiliaryCurves.length+
           ' вспомогательные кривые (розовые), пар направляющих: '+
@@ -710,7 +710,7 @@ const generatorPreview = (() => {
       if(!bevelFits)fit.textContent+=' При B'+bevelAngle.toFixed(2)+
         '° проекция '+bevelProjection.toFixed(1)+' мм, доступно '+bevelRoom.toFixed(1)+
         ' мм (превышение '+(bevelProjection-bevelRoom).toFixed(1)+
-        ' мм). Нажмите «По модели с припуском» или уменьшите размеры заготовки L/W.';
+        ' мм). Углы могут выступать за башни. Проверьте фактические габариты башен и зазор при повороте и движении струны.';
       if (geometry.previewError) fit.textContent += ' Траектория не определена: ' +
         geometry.previewError + (geometry.auxiliaryCurves?.length
           ? '. Для ручной привязки выберите две кривые и нажмите Enter.'
@@ -726,6 +726,7 @@ const generatorPreview = (() => {
       if(geometry.previewError && geometry.bevelCandidates?.length)
         fit.textContent+=' Возможные наклонные торцы: '+geometry.bevelCandidates.map(b=>'грань #'+b.face+' (B'+(document.getElementById('invB').checked?-b.angle:b.angle).toFixed(1)+'°)').join(', ')+'. Это анализ, не траектория реза.';
       if(!fits||unsupported||trimConflict||geometry.axis!==1||geometry.auxiliaryCurves?.length||geometry.previewError) fit.className='note crit';
+      else if(!bevelFits)fit.className='note warn';
     } else {
       fit.textContent = error || 'Откройте STEP для проверки размещения.';
       if (error) fit.className = 'note crit';
@@ -989,13 +990,9 @@ const generatorPreview = (() => {
           // Prefer the normal margins, then reduce excess only as necessary.
           // Leave at least half the kerf on each side of the model.
           const minLength=round5(g.size[0]+kerf),minWidth=round5(g.size[1]+kerf);
-          const sweepAngles=[g.slopedBevelAngle];
-          if(document.getElementById('gnTrim').checked&&n('gnTrimAngle')===90)
-            sweepAngles.push(document.getElementById('invB').checked?-90:90);
           let chosen=null;
           for(let l=length;l>=minLength-1e-7&&!chosen;l-=5){
             for(let w=width;w>=minWidth-1e-7;w-=5){
-              if(sweepAngles.some(a=>Gen.stockAlongWireAtAngle(l,w,modelOffset,a)>(machine.FieldWidth-2)/2+1e-7))continue;
               const radius=Math.hypot(l/2+Math.abs(modelOffset[0]),w/2+Math.abs(modelOffset[1]));
               if(radius>machine.ParkX-2+1e-7)continue;
               if(document.getElementById('gnTrim').checked&&n('gnTrimAngle')===90&&w/2+Math.abs(modelOffset[1])>machine.FieldWidth/2+1e-7)continue;

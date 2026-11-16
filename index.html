@@ -175,6 +175,7 @@ button.heat-unknown { background: var(--warn); border-color: var(--warn); color:
 .mline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .mline button { padding: 5px 10px; font-size: 13px; }
 .note.crit { color: var(--crit); font-weight: 600; }
+.note.warn { color: var(--warn); font-weight: 600; }
 #gCmd { width: 100%; padding: 4px 6px; font-family: var(--font-num); font-size: 13px; }
 #gLog { margin: 0; font-family: var(--font-num); font-size: 11.5px; line-height: 1.45; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9em; overflow: auto; }
 
@@ -1190,6 +1191,8 @@ function parseGcode(text) {
     if (tm && !stock) stock = { L: +tm[1], W: +tm[2], H: +tm[3] };
     const cm = raw.match(/;\s*(\*\*\*.*?\*\*\*|\*\*\*.*|- .*)/);
     if (cm) sections.push({ line: i, t, text: cm[1].replace(/\*/g, "").trim() });
+    const bevelWarning=raw.match(/;\s*WARNING: BEVEL STOCK PROTRUDES PAST TOWER SPAN B=(-?[\d.]+) PROJECTED=([\d.]+) AVAILABLE=([\d.]+)/i);
+    if(bevelWarning)events.push({type:"bevelClearance",line:i,t,angle:+bevelWarning[1],projected:+bevelWarning[2],available:+bevelWarning[3]});
     const code = raw.replace(/\(.*?\)/g, "").replace(/;.*$/, "").trim().toUpperCase();
     lineTime[i] = t;
     if (!code || code.startsWith("$")) continue;
@@ -1330,6 +1333,10 @@ function analyse(p, s) {
 
   // - События в пенопласте: смена мощности, остановки, выключение
   for (const e of p.events) {
+    if(e.type==="bevelClearance"){
+      add("warn",e.t,e.line,"При B"+e.angle.toFixed(2)+"° проекция заготовки "+e.projected.toFixed(1)+" мм, доступно с запасом "+e.available.toFixed(1)+" мм. Углы могут выступать за башни; проверьте фактический зазор при повороте и движении струны.");
+      continue;
+    }
     const inside = wireInStock(posAt(e.t), s);
     if (!inside) continue;
     if (e.type === "power" && !s.laser) add("warn", e.t, e.line, "Смена мощности S" + e.from.toFixed(0) + "→" + e.to.toFixed(0) + " в пенопласте: при $32=0 станок остановится");
@@ -5315,10 +5322,13 @@ const Gen = (() => {
         const suggestion=Number.isFinite(maxWidth)&&maxWidth>=part.x1-part.x0+kerf?
           " При той же длине уменьшите ширину W до "+maxWidth.toFixed(1)+
           " мм или меньше"+(roundedWidth>0?" (например "+roundedWidth+" мм)":"")+".":"";
-        throw new StepError("При резе скоса заготовка не помещается между башнями: B"+failedAngle.toFixed(2)+"° проекция заготовки вдоль струны "+
-          projected.toFixed(1)+" мм превышает доступные "+available.toFixed(1)+" мм на "+
-          (projected-available).toFixed(1)+" мм."+suggestion+
-          " Либо используйте «По модели с припуском» для подбора размеров.");
+        const warning="При B"+failedAngle.toFixed(2)+"° проекция заготовки вдоль струны "+
+          projected.toFixed(1)+" мм превышает расстояние с запасом "+available.toFixed(1)+" мм на "+
+          (projected-available).toFixed(1)+" мм; углы могут выступать за башни. "+
+          "Проверьте фактические габариты башен и зазор при повороте и движении струны."+suggestion;
+        warnings.push(warning);
+        program+="; WARNING: BEVEL STOCK PROTRUDES PAST TOWER SPAN B="+fmtG(failedAngle)+
+          " PROJECTED="+fmtG(projected)+" AVAILABLE="+fmtG(available)+" mm; VERIFY PHYSICAL CLEARANCE"+EOL;
       }
       if(!cfg.PlacementProbe && cfg.ParkX-cornerRadius<RadialMargin)
         throw new StepError("Нет безопасного места для поворота смещённой заготовки к скосу");
@@ -5429,11 +5439,6 @@ const Gen = (() => {
     if(bevelPlacement){
       if(o.grounded&&bottom<5-1e-7)
         throw new StepError("Для реза скоса с запасом по Z установите низ заготовки не ниже 5 мм");
-      for(const physicalAngle of bevelPlacement.angles){
-        const t=physicalAngle*Math.PI/180,cs=Math.cos(t),sn=Math.sin(t);
-        const room=(CONFIG.FieldWidth-2-L*Math.abs(cs)-W*Math.abs(sn))/2;
-        add([cs,-sn,0],room);add([-cs,sn,0],room);
-      }
       // A conservative inscribed polygon guarantees every stock corner
       // stays clear of the parked wire during the table rotation.
       const radius=(CONFIG.ParkX-2)*Math.cos(Math.PI/32);

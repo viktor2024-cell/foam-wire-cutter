@@ -532,7 +532,8 @@ test('kil2 G-code trims, cuts the main contour, then removes the bevel',{skip:!p
  assert.equal(result.smoothSurface,null,'a single-sweep model cannot depict a final bevel');
  const parsed=sim.parseGcode(program),report=sim.analyse(parsed,{...parsed.stock,FW:370,HT:490,VT:250,angle:45,invB:false,laser:false});
  assert.equal(report.warns.filter(w=>w.level==='crit').length,0,JSON.stringify(report.warns));
- assert.throws(()=>gen.buildProgram(step,'kil2.stp',options({...o,stock:[250,320,55]})),/не помещается между башнями/);
+ const protruding=gen.buildProgram(step,'kil2.stp',options({...o,stock:[250,320,55]}));
+ assert.ok(protruding.warnings.some(w=>/углы могут выступать за башни/i.test(w)));
  const wider=gen.buildProgram(step,'kil2.stp',options({...o,stock:[235,290,55]}));
  assert.match(wider.program,/FINAL BEVEL/,'parked rotation can exceed the tower span without side walls');
  const shifted=gen.buildProgram(step,'kil2.stp',options({...o,offset:[-5,0,5]}));
@@ -837,8 +838,7 @@ test('kil2 automatic stock and placement include the rotated bevel',{skip:!proce
  const best=choices[0],rad=geometry.slopedBevelAngle*Math.PI/180;
  assert.ok(best.width>=geometry.size[1]+1-1e-5);
  assert.ok(best.length>=geometry.size[0]+1-1e-5);
- assert.ok(gen.stockAlongWireAtAngle(best.length,best.width,[0,0,0],geometry.slopedBevelAngle)<=(gen.CONFIG.FieldWidth-2)/2+1e-6);
- assert.ok(best.width<Math.ceil((geometry.size[1]+20)/5)*5,'reduce excess foam only as required for the rotation');
+ assert.ok(Math.hypot(best.length/2,best.width/2)<=gen.CONFIG.ParkX-2+1e-6,'parked rotation clearance remains mandatory');
  const o=options({stock:[best.length,best.width,best.height],bottomZ:10,tolerance:.6,trim:true,trimAngle:90,retract:5,
    grounded:true,keepHeight:true,preferNegativeX:true});
  const placement=gen.autoPlace(text,'kil2.stp',o);
@@ -1939,8 +1939,9 @@ test('external kil STEP: measured bevel overrun gives feasible stock suggestion'
  assert.equal(view.diagnosticOnly,false);
  assert.equal(view.slopedPreview,true);
  assert.ok(Math.abs(view.slopedBevelAngle-66.0681)<.05);
- assert.throws(()=>gen.buildProgram(step,'kil.stp',option),
-   /B66\.07°.*371\.6 мм.*368\.0 мм.*3\.6 мм.*295 мм/);
+ const protruding=gen.buildProgram(step,'kil.stp',option);
+ assert.ok(protruding.warnings.some(w=>/B66\.07°.*371\.6 мм.*368\.0 мм.*3\.6 мм/i.test(w)));
+ assert.match(protruding.program,/WARNING: BEVEL STOCK PROTRUDES PAST TOWER SPAN/);
  const rightSize={...option,stock:[240,295,40]};
  const result=gen.buildProgram(step,'kil.stp',rightSize);
  assert.match(result.program,/FINAL BEVEL: STEP face/);
