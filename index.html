@@ -4186,6 +4186,76 @@ const Gen = (() => {
     }
     return points;
   }
+  // Compare the actual two-ended wire positions, not just the circles seen
+  // at one end. Nearest polyline segments allow different STEP seams,
+  // directions and parameterizations. This strict geometric threshold is
+  // independent of the operator's STEP approximation tolerance.
+  function coincidentWireContours(first,second,epsilon=0.01) {
+    const points=chain=>sampleSequence(chain.map(([face,forward])=>faceSegment(face,forward)),0.001,0.25)
+      .map(([a,b])=>[...a,...b]);
+    const a=points(first),b=points(second),limit=epsilon*epsilon;
+    if(a.length<4||b.length<4)return false;
+    const near=(point,line)=>{
+      for(let i=1;i<line.length;i++){
+        const p=line[i-1],q=line[i],delta=q.map((v,k)=>v-p[k]);
+        const den=delta.reduce((sum,v)=>sum+v*v,0);
+        const t=den?Math.max(0,Math.min(1,delta.reduce((sum,v,k)=>sum+(point[k]-p[k])*v,0)/den)):0;
+        let d=0;for(let k=0;k<point.length;k++)d+=(point[k]-p[k]-t*delta[k])**2;
+        if(d<=limit)return true;
+      }
+      return false;
+    };
+    return a.every(p=>near(p,b))&&b.every(p=>near(p,a));
+  }
+  function sharedBodyContours(model,holes) {
+    const ownerByFace=new Map();
+    for(const [id,solid] of model.entities){
+      if(!isTyped(solid)||solid.name!=='MANIFOLD_SOLID_BREP')continue;
+      const shell=model.get(solid.args[1]);
+      if(shell?.name!=='CLOSED_SHELL')continue;
+      for(const ref of shell.args[1]){
+        const owners=ownerByFace.get(ref.id)||new Set();owners.add(id);ownerByFace.set(ref.id,owners);
+      }
+    }
+    const owners=chain=>{
+      const edges=new Set(chain.flatMap(([f])=>f.boundaryEdgeIds||[]));
+      const found=new Set();
+      for(const face of model.facesRaw)if(face.edgeIds.some(id=>edges.has(id)))
+        for(const owner of ownerByFace.get(face.fid)||[])found.add(owner);
+      return found.size===1?[...found][0]:null;
+    };
+    const unique=[],bodies=[],shared=[];
+    for(const hole of holes){
+      const body=owners(hole);
+      const match=body===null?-1:unique.findIndex((other,i)=>bodies[i]!==null&&bodies[i]!==body&&coincidentWireContours(other,hole));
+      if(match<0){unique.push(hole);bodies.push(body);}
+      else shared.push({kept:match,body});
+    }
+    return {holes:unique,shared};
+  }
+  // Cut enclosed features before releasing the surrounding inserted body.
+  // Test containment at both ends and intermediate wire stations; if it is
+  // ambiguous, keep the original operation order.
+  function contourInside(inner,outer) {
+    const points=chain=>sampleSequence(chain.map(([f,fw])=>faceSegment(f,fw)),0.005,0.5);
+    const inside=points(inner),outside=points(outer);
+    if(inside.length<4||outside.length<4)return false;
+    for(const t of [0,.25,.5,.75,1]){
+      const cross=pair=>[pair[0][0]*(1-t)+pair[1][0]*t,pair[0][2]*(1-t)+pair[1][2]*t];
+      const polygon=outside.map(cross);
+      for(const pair of inside){
+        const p=cross(pair);let hit=false;
+        for(let i=0,j=polygon.length-1;i<polygon.length;j=i++){
+          const a=polygon[i],b=polygon[j],dx=b[0]-a[0],dz=b[1]-a[1];
+          const den=dx*dx+dz*dz,u=den?Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dz)/den)):0;
+          if((p[0]-a[0]-u*dx)**2+(p[1]-a[1]-u*dz)**2<.02**2)return false;
+          if((a[1]>p[1])!==(b[1]>p[1])&&p[0]<(b[0]-a[0])*(p[1]-a[1])/(b[1]-a[1])+a[0])hit=!hit;
+        }
+        if(!hit)return false;
+      }
+    }
+    return true;
+  }
   function prepareContour(segments, axis, kerf, materialInside, notes) {
     if (kerf <= 0) return segments;
     const [result, contourNotes] = offsetSegments(segments, axis, kerf / 2, materialInside);
@@ -4507,10 +4577,11 @@ const Gen = (() => {
     return [g,allTowers];
   }
 
-  function holeBlock(safe, prog, contour, layout, axis, kerf, notes, sag, maxStep, gap = null, fromBelow = false) {
+  function holeBlock(safe, prog, contour, layout, axis, kerf, notes, sag, maxStep, gap = null, fromBelow = false, sharedCenterline = false) {
     // An internal contour can consist of many ruled faces, not just one
     // closed B-spline surface. Preserve the topology and traversal direction.
-    const segments = prepareContour(contour.map(([face,forward])=>faceSegment(face,forward)), axis, kerf, false, notes);
+    const raw=contour.map(([face,forward])=>faceSegment(face,forward));
+    const segments = sharedCenterline ? raw : prepareContour(raw, axis, kerf, false, notes);
     // - Старт: точка, в которой контур наивысший на станке (при входе снизу - наинизший)
     let best = [0, 0], bestZ = -1e18;
     segments.forEach((seg, k) => {
@@ -4523,6 +4594,7 @@ const Gen = (() => {
     const towers = sampleSequence(startSequence(segments, best[0], best[1]), sag, maxStep).map(([a, b]) => layout.towers(a, b));
     const [[yl, zl], [yr, zr]] = towers[0];
     let g = ";" + EOL + "; *** HOLE: " + towers.length + " points, kerf " + kerf.toFixed(2) + " ***" + EOL;
+    if(sharedCenterline)g+="; SHARED BODY BOUNDARY: CUT ON NOMINAL CENTERLINE"+EOL;
     const [levelL, levelR] = gap === null ? [safe, safe] : gap;
     g += prog.travel(gap === null ? "move" : "cut", yl, levelL, yr, levelR);
     g += prog.travel("cut", yl, zl, yr, zr);               // - по щели до контура
@@ -4533,8 +4605,9 @@ const Gen = (() => {
   // For one closed hole, enter from the right stock edge through a single
   // intentional slit in the retained foam, retracing exactly the same slit
   // after the hole. All G00 destinations stay outside the right stock edge.
-  function rightSideHoleBlock(prog, contour, layout, axis, kerf, notes, sag, maxStep, stockWidth, margin, stockCenter=0) {
-    const segments=prepareContour(contour.map(([face,forward])=>faceSegment(face,forward)),axis,kerf,false,notes);
+  function rightSideHoleBlock(prog, contour, layout, axis, kerf, notes, sag, maxStep, stockWidth, margin, stockCenter=0, sharedCenterline=false) {
+    const raw=contour.map(([face,forward])=>faceSegment(face,forward));
+    const segments=sharedCenterline?raw:prepareContour(raw,axis,kerf,false,notes);
     const yOut=stockCenter+stockWidth/2+margin;
     let best=null;
     for(let k=0;k<segments.length;k++)for(let j=0;j<=512;j++){
@@ -4552,6 +4625,7 @@ const Gen = (() => {
     if(Math.max(yl,yr)>=yOut-.1)
       throw new StepError("Правый вход к отверстию: нет внешнего коридора");
     let g=";"+EOL+"; *** RIGHT-SIDE HOLE ENTRY AND RETURN VIA THE SAME SLIT ***"+EOL;
+    if(sharedCenterline)g+="; SHARED BODY BOUNDARY: CUT ON NOMINAL CENTERLINE"+EOL;
     g+="; TECHNICAL SLIT THROUGH RETAINED MATERIAL: CHECK ITS POSITION IN 3D"+EOL;
     g+=prog.travel("move",yOut,zl,yOut,zr);
     g+=prog.travel("cut",yl,zl,yr,zr);
@@ -4933,7 +5007,22 @@ const Gen = (() => {
         throw originalError;
       }
     }
-    const { outer, holes, secondaryContours, axis, planeA, planeB } = shape;
+    const { outer, secondaryContours, axis, planeA, planeB } = shape;
+    // Keep separate features unless complete two-ended trajectories coincide
+    // and belong unambiguously to different STEP solids.
+    const matched=model.wireframe?{holes:shape.holes,shared:[]}:sharedBodyContours(model,shape.holes);
+    const holes=matched.holes.slice();
+    const sharedHoles=new Set(matched.shared.map(item=>holes[item.kept]));
+    for(const outerHole of sharedHoles){
+      for(const innerHole of holes.slice()){
+        const outerIndex=holes.indexOf(outerHole),innerIndex=holes.indexOf(innerHole);
+        if(innerHole!==outerHole&&innerIndex>outerIndex&&contourInside(innerHole,outerHole)){
+          holes.splice(innerIndex,1);holes.splice(outerIndex,0,innerHole);
+        }
+      }
+    }
+    if(matched.shared.length)warnings.push("Совпадающие границы разных тел: "+matched.shared.length+
+      "; общий контур режется один раз по номинальной границе. Половина пропила с каждой стороны — проверьте размеры и посадку деталей.");
     if (axis !== 1) throw new StepError("Поверните модель: размах должен идти вдоль струны (сейчас ось модели " + "XYZ"[axis] + ")");
 
     // - Габарит детали по направляющим
@@ -5154,8 +5243,8 @@ const Gen = (() => {
       const [block,towers] = model.wireframe && hole.entry
         ? wireframeSlitHoleBlock(safe,prog,hole,layout,axis,kerf,warnings,sag,maxStep,
                                  stockWidth,o.leadMargin,stockBottom,o.side)
-        : sideEntry ? rightSideHoleBlock(prog,hole,layout,axis,kerf,warnings,sag,maxStep,stockWidth,o.leadMargin,offset[1])
-          : holeBlock(safe,prog,hole,layout,axis,kerf,warnings,sag,maxStep,gap,fromBelow);
+        : sideEntry ? rightSideHoleBlock(prog,hole,layout,axis,kerf,warnings,sag,maxStep,stockWidth,o.leadMargin,offset[1],sharedHoles.has(hole))
+          : holeBlock(safe,prog,hole,layout,axis,kerf,warnings,sag,maxStep,gap,fromBelow,sharedHoles.has(hole));
       program += block; allTowers.push(...towers);
     };
     const addProfile = (layout, side) => {
