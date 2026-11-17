@@ -428,8 +428,9 @@ W3_330-220-100_pair_auto.gcode</textarea>
         <button id="gHome">Хоминг</button>
         <button id="gUnlock">Разблокировать</button>
       </div>
-      <label class="check"><input type="checkbox" id="gDry" checked> Холостой прогон, без струны</label>
-      <label class="check"><input type="checkbox" id="gHoldOff" checked> Гасить струну на паузе</label>
+      <label class="check"><input type="checkbox" id="gDry"> Холостой прогон, без струны</label>
+      <label class="check"><input type="checkbox" id="gHoldOff"> Гасить струну на паузе</label>
+      <p class="note">В программах генератора нагрев включается после HOME и работает до окончания резки, без ожидания прогрева. В лазерном режиме контроллер может выключать нагрев на G0.</p>
       <div class="row">
         <button id="gStart" class="primary">Старт</button>
         <button id="gPause">Пауза</button>
@@ -1586,7 +1587,7 @@ function showWarnings() {
 //  Температура струны: пропорциональный пересчёт всех S в программе
 // ---------------------------------------------------------------------------------------------
 let original = null;        // - исходная программа: { text, name, base }
-let currentText = "", currentName = "", generationStamp = null;
+let currentText = "", currentName = "", generationStamp = null, heatingProblem = "";
 let previewOnlyProgram=false; // old virtual-preview jobs remain unexportable
 let operatorDirectedProgram=false; // F4 program from operator-confirmed profiles
 function requireMachinableProgram() {
@@ -1710,8 +1711,46 @@ $("tReset").addEventListener("click", () => { if (!original || original.base ===
 $("tSave").addEventListener("click", saveProgram);
 $("tCopy").addEventListener("click", copyProgram);
 
+// Bring ordinary G-code with standalone spindle commands into the same
+// heating order as newly generated programs, so preview and streaming agree.
+function prepareContinuousHeat(text) {
+  const newline=text.includes('\r\n')?'\r\n':'\n', lines=text.split(/\r?\n/);
+  const code=line=>line.replace(/\(.*?\)/g,'').replace(/;.*$/,'').trim().toUpperCase();
+  const homes=lines.map((line,i)=>({i,code:code(line)})).filter(x=>/^\$H\s*$/.test(x.code));
+  const home=homes.length===1?homes[0].i:-1;
+  if(homes.length>1)return {text,changed:false,problem:'В программе несколько HOME: проверьте команды нагрева вручную.'};
+  if(home<0)return {text,changed:false,problem:'В программе нет HOME: проверьте порядок нагрева вручную.'};
+  if(!/^\s*;\s*(?:FM_step2gcode|\*\*\* F4)\b/im.test(text))
+    return {text,changed:false,problem:'Внешняя программа: проверьте порядок нагрева вручную.'};
+  if(lines.some((line,i)=>i<home&&/\bM0?[34]\b/.test(code(line))))
+    return {text,changed:false,problem:'Нагрев задан до HOME: проверьте программу вручную.'};
+  const firstHeat=lines.findIndex((line,i)=>i>home && /^M0?3\s*S\s*(?:\d*\.)?\d+\s*$/.test(code(line)) && Number(code(line).match(/S\s*([\d.]+)/)[1])>0);
+  const cuts=lines.map((line,i)=>({i,code:code(line)})).filter(x=>/^G0?1(?=\s|[XYZAB]|$)/.test(x.code)&&/[XYZA]\s*-?\d/.test(x.code));
+  if(firstHeat<0||!cuts.length||cuts[0].i<=home)return {text,changed:false,problem:'Не найдена однозначная команда M03 с мощностью и режущее движение: проверьте нагрев в программе.'};
+  const lastCut=cuts.at(-1).i;
+  // Do not change composite spindle commands we cannot preserve safely.
+  if(lines.some((line,i)=>i>home&&i<=lastCut&&
+      (/\bM0?5\b/.test(code(line))&&!/^M0?5\s*$/.test(code(line)) || /\bM0?4\b|\bS\s*0(?:\.0*)?(?=\s|$)/.test(code(line)))))
+    return {text,changed:false,problem:'Составные команды нагрева требуют ручной проверки порядка M03/M05.'};
+  const firstMove=lines.findIndex((line,i)=>i>home && /^G0?[01](?=\s|[XYZAB]|$)/.test(code(line)) && /[XYZAB]\s*-?\d/.test(code(line)));
+  if(firstMove<0)return {text,changed:false};
+  const finalOff=lines.findIndex((line,i)=>i>lastCut&&/^M0?5\s*$/.test(code(line)));
+  const out=[];
+  for(let i=0;i<lines.length;i++){
+    if(i===firstMove && firstHeat>firstMove)out.push(lines[firstHeat]);
+    if(i===firstHeat && firstHeat>firstMove)continue;
+    if(i>home&&i<=lastCut&&/^M0?5\s*$/.test(code(lines[i])))continue;
+    out.push(lines[i]);
+    if(i===lastCut&&finalOff<0)out.push('M05');
+  }
+  const prepared=out.join(newline);
+  return {text:prepared,changed:prepared!==text,problem:null};
+}
 function loadProgram(text, name, opts = {}) {
   if (job) { showMsg("Во время реза программу менять нельзя.", true); return; }
+  const heating=opts.previewOnly || (opts.keepOriginal && previewOnlyProgram) ? {text,changed:false} : prepareContinuousHeat(text);
+  heatingProblem=heating.problem || "";
+  text=heating.text;
   previewOnlyProgram=opts.keepOriginal?previewOnlyProgram:!!opts.previewOnly;
   if(!opts.keepOriginal)operatorDirectedProgram=!!opts.operatorDirected;
   const parsed = parseGcode(text);
@@ -1726,7 +1765,7 @@ function loadProgram(text, name, opts = {}) {
   if (!opts.keepOriginal) {
     original = { text, name, base: programBaseS(parsed) };
     if (original.base !== null) { $("tVal").value = $("tRange").value = Math.round(original.base); }
-    $("tNote").textContent = "";
+    $("tNote").textContent = heating.problem || (heating.changed ? "Нагрев в программе: после HOME до окончания резки." : "");
   }
   updateTempInfo();
   $("fileName").textContent = (previewOnlyProgram?"ТОЛЬКО ПРОСМОТР · ":"")+name;
@@ -2046,7 +2085,11 @@ function startJob() {
   if (crit) { showMsg("Запуск заблокирован: критических ошибок траектории " + crit + ".", true); return; }
   job = { lines, dry, idx: 0, acked: 0, ackLine: -1, ackMove: -1, moveIdx: 0, syncWait: false, halt: false, paused: false, holdOff: false, doneAt: 0 };
   simTime = 0; playing = false; $("play").textContent = "Пуск";
-  showMsg(""); log("Старт: " + currentName + (dry ? ", холостой прогон" : ""));
+  const modeKnown=typeof blankLaserMode!=='undefined'?blankLaserMode:null;
+  const modeWarning=!dry && (modeKnown===1 || $("laser").checked) ? "Лазерный режим может выключать нагрев на G0. Проверьте настройки контроллера." :
+    !dry && modeKnown===null ? "Режим контроллера неизвестен: проверьте, что нагрев не отключается на G0." : "";
+  showMsg([!dry ? heatingProblem : "",modeWarning].filter(Boolean).join(" "));
+  log("Старт: " + currentName + (dry ? ", холостой прогон" : ""));
   refreshMachine(); pump();
 }
 function togglePause() {
@@ -4116,8 +4159,8 @@ const Gen = (() => {
   function startBlock(cfg, prog) {
     return "; *** START BLOCK ***" + EOL + "$H" + EOL + "G21 G90 G94" + EOL +
       "G92 " + travelPosition(cfg.HomingX1, cfg.HomingZ1, cfg.HomingX2, cfg.HomingZ2) + " B" + fix2(cfg.HomingR1) + EOL +
-      prog.travel("move", cfg.ParkX, cfg.ParkZ, cfg.ParkX, cfg.ParkZ) + rotate(cfg, cfg.ParkR1) +
-      "M03 S" + cfg.WireMinPower.toFixed(2) + EOL;
+      "M03 S" + cfg.WireMinPower.toFixed(2) + EOL +
+      prog.travel("move", cfg.ParkX, cfg.ParkZ, cfg.ParkX, cfg.ParkZ) + rotate(cfg, cfg.ParkR1);
   }
   function endBlock(cfg, prog) {
     return ";" + EOL + "; *** END BLOCK ***" + EOL + "M05" + EOL +
@@ -5975,14 +6018,14 @@ const Gen = (() => {
       "$H"+eol+"G21 G90 G94"+eol+
       "G92 "+travelPosition(cfg.HomingX1,cfg.HomingZ1,cfg.HomingX2,cfg.HomingZ2)+
         " B"+fix2(cfg.HomingR1)+eol+
-      p.travel("move",cfg.ParkX,cfg.ParkZ,cfg.ParkX,cfg.ParkZ)+rotate(cfg,cfg.ParkR1)+
-      "M05"+eol;
+      "M03 S"+fix2(o.minS)+eol+
+      p.travel("move",cfg.ParkX,cfg.ParkZ,cfg.ParkX,cfg.ParkZ)+rotate(cfg,cfg.ParkR1);
     let currentAngle=cfg.ParkR1;
     const park=()=>p.travel("move",cfg.ParkX,cfg.ParkZ,cfg.ParkX,cfg.ParkZ);
     const setAngle=angle=>{
       if(currentAngle===angle)return "";
       currentAngle=angle;
-      return "M05"+eol+park()+rotate(cfg,angle);
+      return park()+rotate(cfg,angle);
     };
     if(report.trimOperation){
       const trim=report.trimOperation;
@@ -6000,13 +6043,12 @@ const Gen = (() => {
       for(const localY of [-half,half]){
         const y=localY+task.CenterOffset;
         const outer=y+(localY<=0?-task.RetractOffset:task.RetractOffset);
-        program+="; TRIM AT "+fix2(y)+" B"+trim.angle+eol+"M05"+eol;
+        program+="; TRIM AT "+fix2(y)+" B"+trim.angle+eol;
         program+=p.travel("move",y,safe,y,safe);
         program+="M03 S"+fix2(o.minS)+eol;
         program+=p.travel("cut",y,task.BottomZ,y,task.BottomZ);
         program+=p.travel("cut",outer,task.BottomZ,outer,task.BottomZ);
         program+=p.travel("cut",outer,safe,outer,safe);
-        program+="M05"+eol;
       }
       warnings.push(trimZ===0?"Торцевание на Z=0 достигает поверхности стола: проверьте установку перед запуском":"Торцевание и отвод после него следует проверить в симуляторе");
       if(trimZ>0 && trimZ<o.kerf/2)warnings.push("Торцевание ближе к столу, чем половина толщины реза: проверьте зазор струны и стола");
@@ -6028,14 +6070,13 @@ const Gen = (() => {
       program+="; *** F4 B"+op.angle+" GUIDES #"+op.ids.join("/#")+
         " START="+(op.startU??0).toFixed(4)+" ***"+eol;
       program+=setAngle(op.angle);
-      // At the first point the wire is off. Operator-designed guide start
+      // The wire stays on from HOME. Operator-designed guide start
       // determines the actual entry; no implicit lead is invented.
       program+="; POSITION AT USER-SELECTED START - CHECK APPROACH"+eol;
       program+=move("move",op.samples[0]);
       program+="M03 S"+fix2(o.minS)+eol;
       for(let i=1;i<op.samples.length;i++){program+=move("cut",op.samples[i]);count++;}
-      program+="M05"+eol+
-        "; USER MUST CONFIRM CLEARANCE BEFORE FOLLOWING ROTATION / EXIT"+eol;
+      program+="; VERIFY CLEARANCE BEFORE FOLLOWING ROTATION / EXIT"+eol;
       const bad=op.sequentialStock?.entry?.filter(c=>c.occupiedVoxelHits>0)||[];
       if(bad.length)warnings.push("B"+op.angle+": пересечения входа с оставшимся материалом; "+
         "проверьте точку и подход");

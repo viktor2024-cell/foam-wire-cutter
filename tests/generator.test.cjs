@@ -1731,6 +1731,12 @@ test('operator-directed F4 outputs actual G-code with two tower coordinates and 
    scale:1,tolerance:.1,trim:false,trimAngle:0,cutOrder:'B0_B90',
    guideStarts:{'910005:910006':1},powerComp:false};
  const p=gen.buildF4Program(step,[[910005,910006]],base);
+ const commands=p.program.split(/\r?\n/).map(s=>s.trim());
+ const home=commands.indexOf('$H'), heat=commands.findIndex(s=>/^M03 S/.test(s));
+ const move=commands.findIndex(s=>/^G00 /.test(s)), lastCut=commands.findLastIndex(s=>/^G01 /.test(s));
+ assert.ok(home>=0 && home<heat && heat<move);
+ assert.equal(commands.filter(s=>s==='M05').length,1);
+ assert.ok(commands.indexOf('M05')>lastCut);
  assert.match(p.program,/G92 X/);
  assert.match(p.program,/GUIDES #910005\/#910006 START=1.0000/);
  assert.match(p.program,/G00 B0.00/);
