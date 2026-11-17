@@ -12,8 +12,10 @@
     const title=document.createElement("h3");
     title.textContent="Лист "+(index+1)+" · "+width+" × "+height+" мм";
     section.appendChild(title);
-    const svg=svgNode("svg",{viewBox:`0 0 ${width} ${height}`,role:"img",
-      "aria-label":`Раскладка на листе ${index+1}`,style:"display:block;width:min(100%, 700px);max-height:85vh;background:#f5f5f0;border:1px solid #777"});
+    const svg=svgNode("svg",{viewBox:`0 0 ${width} ${height}`,width,height,role:"img",
+      "aria-label":`Раскладка на листе ${index+1}`,style:`display:block;width:min(100%, 700px, ${85*width/height}vh);height:auto`});
+    // Paint only the sheet itself: any SVG viewport letterboxing is not foam.
+    svg.appendChild(svgNode("rect",{x:0,y:0,width,height,fill:"#f5f5f0"}));
     items.forEach((item,i)=>{
       svg.appendChild(svgNode("rect",{x:item.x,y:item.y,width:item.width,height:item.height,
         fill:`hsl(${(i*53+195)%360} 52% 76%)`,stroke:"#303840","stroke-width":2}));
@@ -25,6 +27,9 @@
       b.textContent=`${item.width} × ${item.height} мм`; label.appendChild(b);
       svg.appendChild(label);
     });
+    // Draw above parts so a blank touching an edge cannot hide the outline.
+    svg.appendChild(svgNode("rect",{x:0,y:0,width,height,fill:"none",stroke:"#303840",
+      "stroke-width":3,"vector-effect":"non-scaling-stroke","pointer-events":"none"}));
     section.appendChild(svg);
     const list=document.createElement("ul");
     items.forEach(item=>{
